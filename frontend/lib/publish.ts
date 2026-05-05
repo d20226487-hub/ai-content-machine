@@ -1,0 +1,90 @@
+import { api } from "@/lib/api";
+
+export type JobStatus = "queued" | "posting" | "posted" | "failed";
+export type SourceKind = "single" | "bulk_cell";
+
+export interface PublishJob {
+  id: number;
+  created_at: string;
+  finished_at: string | null;
+  domain_id: number | null;
+  domain_name: string | null;
+  source_kind: SourceKind;
+  source_ref: Record<string, unknown> | null;
+  status: JobStatus;
+  language: string | null;
+  cms_post_id: string | null;
+  cms_post_url: string | null;
+  error: string | null;
+  warnings: string[] | null;
+  profile_name: string | null;
+  created_by_id: number | null;
+}
+
+export interface PublishJobDetail extends PublishJob {
+  payload_sent: Record<string, unknown> | null;
+  response_json: Record<string, unknown> | null;
+}
+
+export interface PublishJobListResponse {
+  items: PublishJob[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface PublishSinglePayload {
+  domain_id: number;
+  fields: Record<string, unknown>;
+  language?: string | null;
+  profile_name?: string | null;
+  source_ref?: Record<string, unknown> | null;
+}
+
+export function publishSingle(payload: PublishSinglePayload) {
+  return api<PublishJobDetail>("/publish/single", { method: "POST", body: payload });
+}
+
+export function listPublishJobs(opts: {
+  page?: number;
+  page_size?: number;
+  status?: JobStatus;
+  domain_id?: number;
+  run_id?: number;
+  generation_id?: number;
+} = {}) {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(opts)) {
+    if (v === undefined || v === null) continue;
+    const s = String(v);
+    if (!s) continue;
+    p.set(k, s);
+  }
+  const qs = p.toString();
+  return api<PublishJobListResponse>(`/publish/jobs${qs ? `?${qs}` : ""}`);
+}
+
+export function getPublishJob(id: number) {
+  return api<PublishJobDetail>(`/publish/jobs/${id}`);
+}
+
+export interface PublishDefaults {
+  requests_per_minute: number;
+  max_concurrency: number;
+  inter_request_delay_ms: number;
+  retry_max_attempts: number;
+  backoff_base_ms: number;
+  backoff_jitter_ms: number;
+  respect_retry_after: boolean;
+}
+
+export function getPublishDefaults() {
+  return api<PublishDefaults>("/publish/defaults");
+}
+
+export function setPublishDefaults(payload: PublishDefaults) {
+  return api<PublishDefaults>("/publish/defaults", {
+    method: "PUT",
+    body: payload,
+  });
+}

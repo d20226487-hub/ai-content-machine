@@ -1,0 +1,22 @@
+node_modules
+.next
+.env
+.env.*
+!.env.example
+
+# IDE / VCS
+.git
+.gitignore
+.idea
+.vscode
+*.swp
+
+# Build / cache artifacts
+out
+coverage
+*.tsbuildinfo
+.eslintcache
+
+# Local
+*.log
+.DS_Store

@@ -1,0 +1,236 @@
+"""Custom CMS client.
+
+Phase 1 supports two auth schemes:
+  - bearer:           Authorization: Bearer {credentials}
+  - api_key_header:   credentials JSON {"header": "X-API-Key", "value": "..."}
+
+test_connection() v1: HEAD against base_url. Per-domain `test_endpoint_path`
+override is reserved for a future iteration.
+
+publish_post (Phase 2): substitute {{placeholders}} in body_template with
+the supplied field values, POST to base_url + endpoint_path, parse response
+ID and URL using the configured dot-paths.
+"""
+from __future__ import annotations
+
+import json
+import re
+import time
+from typing import Any
+
+import httpx
+
+from app.cms.base import CmsClient, PublishResult, TestResult
+from app.core.ssrf import SafeAsyncTransport, UnsafeUrlError, validate_public_url
+
+_PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][\w\.\- ]*?)\s*\}\}")
+
+
+class CustomCmsClient(CmsClient):
+    cms_type = "custom"
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        credentials: str | None,
+        auth_type: str,
+        custom_config: dict | None = None,
+    ) -> None:
+        super().__init__(base_url=base_url, credentials=credentials)
+        self.auth_type = auth_type
+        self.custom_config = custom_config or {}
+
+    def _auth_header(self) -> dict[str, str]:
+        if not self.credentials:
+            return {}
+        if self.auth_type == "bearer":
+            return {"Authorization": f"Bearer {self.credentials}"}
+        if self.auth_type == "api_key_header":
+            try:
+                parsed = json.loads(self.credentials)
+                header = str(parsed.get("header") or "")
+                value = str(parsed.get("value") or "")
+            except (ValueError, TypeError):
+                return {}
+            if not header or not value:
+                return {}
+            return {header: value}
+        return {}
+
+    async def test_connection(self) -> TestResult:
+        test_path = (self.custom_config or {}).get("test_endpoint_path") or ""
+        url = f"{self.base_url}{test_path}" if test_path else self.base_url
+        start = time.perf_counter()
+        try:
+            validate_public_url(url)
+            async with httpx.AsyncClient(
+                timeout=15.0, follow_redirects=True, transport=SafeAsyncTransport()
+            ) as client:
+                # HEAD when no test path configured; otherwise GET.
+                if test_path:
+                    resp = await client.get(url, headers=self._auth_header())
+                else:
+                    resp = await client.head(url, headers=self._auth_header())
+            elapsed = int((time.perf_counter() - start) * 1000)
+            if resp.status_code < 400:
+                return TestResult(
+                    ok=True,
+                    status_code=resp.status_code,
+                    detail=f"Reachable (HTTP {resp.status_code}).",
+                    elapsed_ms=elapsed,
+                )
+            return TestResult(
+                ok=False,
+                status_code=resp.status_code,
+                detail=f"HTTP {resp.status_code} from {url}.",
+                elapsed_ms=elapsed,
+            )
+        except UnsafeUrlError as e:
+            elapsed = int((time.perf_counter() - start) * 1000)
+            return TestResult(
+                ok=False,
+                status_code=None,
+                detail=f"URL rejected: {e}",
+                elapsed_ms=elapsed,
+            )
+        except httpx.HTTPError as e:
+            elapsed = int((time.perf_counter() - start) * 1000)
+            return TestResult(
+                ok=False,
+                status_code=None,
+                detail=f"Network error: {e}",
+                elapsed_ms=elapsed,
+            )
+
+    async def publish_post(
+        self,
+        *,
+        fields: dict[str, Any],
+        language: str | None = None,
+        profile_name: str | None = None,  # ignored for Custom CMS
+    ) -> PublishResult:
+        cfg = self.custom_config or {}
+        endpoint_path = cfg.get("endpoint_path") or ""
+        body_template = cfg.get("body_template") or {}
+
+        # Bake the placeholder substitution map. `language` is exposed as
+        # {{language}} so the template can route on it.
+        values = dict(fields)
+        if language is not None and "language" not in values:
+            values["language"] = language
+
+        body = _substitute(body_template, values)
+
+        url = f"{self.base_url}{endpoint_path}"
+        headers = {**self._auth_header(), "Content-Type": "application/json"}
+
+        try:
+            validate_public_url(url)
+            async with httpx.AsyncClient(
+                timeout=30.0, transport=SafeAsyncTransport()
+            ) as client:
+                resp = await client.post(url, json=body, headers=headers)
+        except UnsafeUrlError as e:
+            return PublishResult(
+                ok=False,
+                status_code=None,
+                payload_sent=body,
+                response_json=None,
+                cms_post_id=None,
+                cms_post_url=None,
+                error=f"URL rejected: {e}",
+            )
+        except httpx.HTTPError as e:
+            return PublishResult(
+                ok=False,
+                status_code=None,
+                payload_sent=body,
+                response_json=None,
+                cms_post_id=None,
+                cms_post_url=None,
+                error=f"Network error: {e}",
+            )
+
+        try:
+            resp_json = resp.json() if resp.content else None
+        except ValueError:
+            resp_json = None
+
+        if 200 <= resp.status_code < 300:
+            id_path = cfg.get("response_id_path") or ""
+            url_path = cfg.get("response_url_path") or ""
+            cms_id = _dig(resp_json, id_path) if isinstance(resp_json, (dict, list)) else None
+            cms_url = _dig(resp_json, url_path) if isinstance(resp_json, (dict, list)) else None
+            return PublishResult(
+                ok=True,
+                status_code=resp.status_code,
+                payload_sent=body,
+                response_json=resp_json if isinstance(resp_json, dict) else None,
+                cms_post_id=str(cms_id) if cms_id is not None else None,
+                cms_post_url=str(cms_url) if cms_url is not None else None,
+                error=None,
+            )
+
+        msg = ""
+        if isinstance(resp_json, dict):
+            msg = str(resp_json.get("message") or resp_json.get("error") or "")
+        if not msg:
+            msg = (resp.text or "")[:300]
+        return PublishResult(
+            ok=False,
+            status_code=resp.status_code,
+            payload_sent=body,
+            response_json=resp_json if isinstance(resp_json, dict) else None,
+            cms_post_id=None,
+            cms_post_url=None,
+            error=f"HTTP {resp.status_code}: {msg}",
+        )
+
+
+def _substitute(node: Any, values: dict[str, Any]) -> Any:
+    """Recursively replace {{key}} placeholders inside a JSON-shaped tree.
+
+    A scalar string consisting of exactly one placeholder is replaced with
+    the typed value (so numbers/bools/objects survive). Strings containing
+    other text get string interpolation.
+    """
+    if isinstance(node, str):
+        match = _PLACEHOLDER.fullmatch(node.strip())
+        if match:
+            key = match.group(1).strip()
+            return values.get(key, node)
+
+        def repl(m: re.Match[str]) -> str:
+            key = m.group(1).strip()
+            v = values.get(key)
+            return "" if v is None else str(v)
+
+        return _PLACEHOLDER.sub(repl, node)
+
+    if isinstance(node, list):
+        return [_substitute(x, values) for x in node]
+
+    if isinstance(node, dict):
+        return {k: _substitute(v, values) for k, v in node.items()}
+
+    return node
+
+
+def _dig(data: Any, dotted: str) -> Any:
+    if not dotted:
+        return None
+    cur: Any = data
+    for part in dotted.split("."):
+        if isinstance(cur, dict):
+            cur = cur.get(part)
+        elif isinstance(cur, list):
+            try:
+                cur = cur[int(part)]
+            except (ValueError, IndexError):
+                return None
+        else:
+            return None
+        if cur is None:
+            return None
+    return cur

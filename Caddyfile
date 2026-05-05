@@ -1,0 +1,89 @@
+# Caddyfile for AI Content Machine — production reverse proxy + TLS.
+#
+# Two routes per virtual host:
+#   /api/*  → strip prefix → forward to FastAPI (api:8000)
+#   /       → forward to Next.js standalone server (web:3000)
+#
+# Same-origin model: the browser only ever talks to ${ACM_HOSTNAME}, so there
+# is no CORS preflight to manage. The api container's CORS_ORIGINS is now
+# effectively unused unless someone hits it from a different origin.
+#
+# TLS modes (decided automatically by Caddy based on ACM_HOSTNAME):
+#   * ACM_HOSTNAME=localhost (default)
+#       Caddy uses its built-in local CA → self-signed cert. Browsers WILL warn
+#       unless you trust the Caddy CA on each developer's machine. Fine for
+#       smoke tests; not for daily users.
+#   * ACM_HOSTNAME=acm.example.com  (publicly reachable + DNS resolves)
+#       Caddy auto-fetches a Let's Encrypt cert. ACME HTTP-01 challenge needs
+#       port 80 reachable from the public internet.
+#   * Internal-only host where Let's Encrypt can't reach (e.g. on a VPN):
+#       Add `tls internal` inside the site block in your local copy of this
+#       file, OR set ACM_TLS_INTERNAL=true and uncomment the `import` below.
+{
+    # Email used for ACME registration. Required for Let's Encrypt at scale.
+    email {$ACM_LETSENCRYPT_EMAIL}
+    # Hide the Server header.
+    servers {
+        protocols h1 h2 h3
+    }
+}
+
+{$ACM_HOSTNAME:localhost} {
+    # Compression. zstd is preferred when the client supports it.
+    encode zstd gzip
+
+    # 50 MiB cap on a single request body. CSV imports are well under this;
+    # protects against accidental giant uploads.
+    request_body {
+        max_size 50MB
+    }
+
+    # Strip the /api prefix and forward to FastAPI.
+    # `handle_path` is the prefix-stripping variant of `handle`.
+    handle_path /api/* {
+        reverse_proxy api:8000 {
+            header_up X-Real-IP {client_ip}
+            header_up X-Forwarded-For {client_ip}
+            header_up X-Forwarded-Proto {scheme}
+            # Keep idle keepalive long enough that streaming generation paths
+            # don't get cut, but short enough that wedged backends recycle.
+            transport http {
+                read_timeout 120s
+                write_timeout 120s
+                dial_timeout 5s
+            }
+        }
+    }
+
+    # Everything else: the Next.js production server.
+    handle {
+        reverse_proxy web:3000 {
+            header_up X-Real-IP {client_ip}
+            header_up X-Forwarded-For {client_ip}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # Light security hardening. CSP is intentionally absent for now — adding
+    # one would block Next.js's hydration boundary scripts unless the right
+    # nonces are configured, which is a Phase-2 hardening task.
+    header {
+        # Don't reveal Caddy version
+        -Server
+        # Force HTTPS for return visits
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        # Mitigate clickjacking
+        X-Frame-Options "DENY"
+        # No MIME sniffing
+        X-Content-Type-Options "nosniff"
+        # Conservative referrer policy
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    # JSON logs to stdout — picked up by `docker logs` and the json-file driver
+    # rotation set in compose.
+    log {
+        output stdout
+        format json
+    }
+}

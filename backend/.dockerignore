@@ -1,0 +1,35 @@
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+.venv
+venv
+env
+.env
+.env.*
+!.env.example
+
+# IDE / VCS
+.git
+.gitignore
+.idea
+.vscode
+*.swp
+
+# Tests + dev artifacts
+tests
+.pytest_cache
+.mypy_cache
+.ruff_cache
+htmlcov
+.coverage
+coverage.xml
+
+# Docs
+README.md
+*.md
+
+# Local
+*.log
+.DS_Store

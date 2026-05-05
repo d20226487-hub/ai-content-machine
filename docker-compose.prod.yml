@@ -1,0 +1,247 @@
+# Production override for docker-compose.yml.
+#
+# Use as:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# What this layer does vs the dev base file:
+#   - api/worker use backend/Dockerfile.prod (multi-stage, non-root, no --reload).
+#   - web service runs the production Next.js bundle (next start, not next dev)
+#     and is no longer profile-gated.
+#   - db/redis ports are kept on the internal docker network (no host exposure).
+#   - All app services bind-mount nothing — the baked image is authoritative.
+#   - Log rotation (10 MB × 5 files per container) so disks don't fill silently.
+#   - restart: unless-stopped on every service.
+#   - Memory limits to keep a runaway task from OOM-ing the host.
+#   - Adds an api healthcheck so future Caddy/depends_on chains can wait properly.
+#
+# Required env vars (read from .env):
+#   POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
+#   FERNET_KEY (or FERNET_KEYS for rotation — see Blocker 5)
+#   JWT_SECRET
+#   BOOTSTRAP_ADMIN_EMAIL, BOOTSTRAP_ADMIN_PASSWORD (only for first seed)
+#   NEXT_PUBLIC_API_URL  — baked into the frontend bundle at build time
+
+services:
+  db:
+    ports: !reset []
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  redis:
+    ports: !reset []
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  # ----- one-shot: alembic upgrade head + python -m app.seed -----
+  #
+  # Runs once per `compose up` then exits. api + worker wait for it to finish
+  # successfully via `depends_on.condition: service_completed_successfully`.
+  # On every subsequent up the migration is a no-op and the seed is idempotent
+  # (creates the bootstrap admin only if absent), so this is safe to re-run.
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    # Container exits after this command; no port, no healthcheck, no restart.
+    restart: "no"
+    # New service, no parent in the dev file → must provide its own env wiring.
+    env_file: .env
+    environment:
+      # Mirror the dev compose's docker-network-aware DATABASE_URL so migrate
+      # talks to the `db` service by hostname (the .env value points at the
+      # host loopback, which doesn't resolve from inside the container).
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-acm}:${POSTGRES_PASSWORD:-acm_dev}@db:5432/${POSTGRES_DB:-acm}
+    entrypoint: ["/usr/bin/tini", "--"]
+    command: ["sh", "-c", "alembic upgrade head && python -m app.seed"]
+    depends_on:
+      db:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    # Behind Caddy now — drop the host-published port 8000.
+    # The container still listens on 8000 internally; Caddy reaches it by
+    # service name on the docker network.
+    ports: !reset []
+    # `!reset` is required (Compose v2.20+): plain `[]` MERGES with the dev
+    # file's volume list and would silently keep the bind mount alive.
+    volumes: !reset []
+    # Bootstrap creds belong only to the `migrate` service (which runs the
+    # seed). Clear them on api so a runtime exec into the container doesn't
+    # leak the password via `env`. `environment:` overrides values from
+    # `env_file:` per Compose precedence rules.
+    environment:
+      BOOTSTRAP_ADMIN_EMAIL: ""
+      BOOTSTRAP_ADMIN_PASSWORD: ""
+      BOOTSTRAP_ADMIN_NAME: ""
+      BOOTSTRAP_ADMIN_RESET_PASSWORD: ""
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # Override the dev `--reload` command. Workers configurable via env.
+    command:
+      - sh
+      - -c
+      - exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-2} --proxy-headers --forwarded-allow-ips=*
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    volumes: !reset []
+    # Same as api — worker doesn't seed; clear bootstrap creds.
+    environment:
+      BOOTSTRAP_ADMIN_EMAIL: ""
+      BOOTSTRAP_ADMIN_PASSWORD: ""
+      BOOTSTRAP_ADMIN_NAME: ""
+      BOOTSTRAP_ADMIN_RESET_PASSWORD: ""
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    command:
+      - celery
+      - -A
+      - app.tasks.celery_app
+      - worker
+      - --loglevel=info
+      - --concurrency=${WORKER_CONCURRENCY:-8}
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  web:
+    # Override the dev profile so this service runs by default in prod.
+    profiles: !reset []
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        # Inlined into the client bundle at build time. We deliberately use
+        # ACM_PUBLIC_API_URL here (not NEXT_PUBLIC_API_URL) so the dev compose's
+        # NEXT_PUBLIC_API_URL=http://localhost:8000 doesn't poison the prod
+        # build via variable substitution. Default `/api` resolves same-origin
+        # under whatever ${ACM_HOSTNAME} the user browses to. Override to e.g.
+        # https://acm.example.com/api only if you're hosting api and web on
+        # different origins.
+        NEXT_PUBLIC_API_URL: ${ACM_PUBLIC_API_URL:-/api}
+    environment:
+      NODE_ENV: production
+    volumes: !reset []
+    command: ["node", "server.js"]
+    # Behind Caddy — clear the dev port mapping. Web is now only reachable
+    # via the reverse proxy on the public hostname.
+    ports: !reset []
+    restart: unless-stopped
+    healthcheck:
+      # All elements MUST be strings; compose rejects mixed YAML scalars here.
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # ----- reverse proxy + TLS termination -----
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      # 80 is needed for the Let's Encrypt HTTP-01 challenge AND for the
+      # automatic http→https redirect Caddy installs. 443 is the TLS port.
+      # The udp/443 mapping unlocks HTTP/3.
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Persist the auto-issued certs and ACME account key. WITHOUT this
+      # volume, every `up` re-fetches certs and you'll hit Let's Encrypt's
+      # rate limits within a few cycles.
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      ACM_HOSTNAME: ${ACM_HOSTNAME:-localhost}
+      ACM_LETSENCRYPT_EMAIL: ${ACM_LETSENCRYPT_EMAIL:-admin@example.com}
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+volumes:
+  caddy_data:
+  caddy_config:

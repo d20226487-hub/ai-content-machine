@@ -1,0 +1,83 @@
+# syntax=docker/dockerfile:1.7
+#
+# Production image for the Next.js 15 frontend.
+#
+# Differences from ./Dockerfile (the dev image):
+#   - Three stages: deps → build → runtime. Runtime ships only .next/standalone +
+#     .next/static + public (~150 MB instead of ~700 MB with full node_modules).
+#   - Runs `next build` then `node server.js` (not `next dev`).
+#   - Runs as a non-root user.
+#   - HEALTHCHECK that doesn't depend on extra packages.
+#
+# IMPORTANT: NEXT_PUBLIC_API_URL is read by Next at BUILD TIME and inlined into
+# the client bundle. Pass via build arg:
+#     docker build \
+#         --build-arg NEXT_PUBLIC_API_URL=https://acm.example.com/api \
+#         -f Dockerfile.prod .
+# If you forget, every user's browser will call http://localhost:8000.
+
+# ----- deps -----
+
+FROM node:20-slim AS deps
+
+WORKDIR /app
+
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    npm_config_loglevel=warn \
+    npm_config_fund=false \
+    npm_config_audit=false
+
+COPY package.json package-lock.json* ./
+RUN --mount=type=cache,target=/root/.npm \
+    if [ -f package-lock.json ]; then \
+        npm ci --omit=optional ; \
+    else \
+        npm install --omit=optional ; \
+    fi
+
+
+# ----- build -----
+
+FROM node:20-slim AS builder
+
+WORKDIR /app
+
+ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} \
+    NEXT_TELEMETRY_DISABLED=1 \
+    NODE_ENV=production
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+RUN npm run build
+
+
+# ----- runtime -----
+
+FROM node:20-slim AS runtime
+
+WORKDIR /app
+
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
+
+# node:20-slim already ships a non-root `node` user (uid 1000) — reuse it
+# rather than fight the image. Just chown the artifacts to it.
+
+# Standalone output is the minimal set of files Next needs to run.
+COPY --from=builder --chown=node:node /app/.next/standalone ./
+COPY --from=builder --chown=node:node /app/.next/static    ./.next/static
+COPY --from=builder --chown=node:node /app/public          ./public
+
+USER node
+
+EXPOSE 3000
+
+# Inline node-based health probe (avoids installing curl/wget into a slim image)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD node -e "require('http').get('http://localhost:3000', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"
+
+CMD ["node", "server.js"]

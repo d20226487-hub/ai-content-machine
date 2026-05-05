@@ -1,0 +1,1026 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+
+import { CellEditorModal } from "@/components/CellEditorModal";
+import { ColumnConfigModal } from "@/components/ColumnConfigModal";
+import { BulkPublishModal } from "@/components/BulkPublishModal";
+import { GenerationQueueModal } from "@/components/GenerationQueueModal";
+import { Modal } from "@/components/Modal";
+import { useT, type TranslationKey } from "@/lib/i18n-context";
+import {
+  addColumn as apiAddColumn,
+  addRow as apiAddRow,
+  deleteColumn as apiDeleteColumn,
+  deleteRow as apiDeleteRow,
+  enqueueGeneration,
+  getTable,
+  updateColumn as apiUpdateColumn,
+  upsertCells,
+} from "@/lib/library";
+import type {
+  BulkCell,
+  BulkColumn,
+  BulkRow,
+  BulkTable,
+  CellStatus,
+} from "@/lib/types";
+
+interface Props {
+  table: BulkTable;
+  onTableChange: (next: BulkTable) => void;
+  onSavingChange: (saving: boolean, lastSavedAt: number | null) => void;
+}
+
+const AUTOSAVE_DEBOUNCE_MS = 600;
+const POLL_INTERVAL_MS = 1500;
+const PAGE_SIZE_OPTIONS = [5, 10, 20, 50, 100, 200, 500, 1000] as const;
+type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
+const DEFAULT_PAGE_SIZE: PageSize = 5;
+const PAGE_SIZE_STORAGE_KEY = "acm_bulk_page_size";
+
+const DEFAULT_COL_WIDTH = 200;
+const MIN_COL_WIDTH = 80;
+const ROW_NUM_WIDTH = 40;
+const CHECKBOX_WIDTH = 32;
+const ADD_COL_WIDTH = 48;
+
+function readPageSize(): PageSize {
+  if (typeof window === "undefined") return DEFAULT_PAGE_SIZE;
+  const v = Number(window.localStorage.getItem(PAGE_SIZE_STORAGE_KEY));
+  return (PAGE_SIZE_OPTIONS as readonly number[]).includes(v)
+    ? (v as PageSize)
+    : DEFAULT_PAGE_SIZE;
+}
+
+const ROW_HEIGHTS = {
+  compact: { labelKey: "bulkGrid.heightCompact" as TranslationKey, px: 28 },
+  default: { labelKey: "bulkGrid.heightDefault" as TranslationKey, px: 60 },
+  comfortable: { labelKey: "bulkGrid.heightComfortable" as TranslationKey, px: 120 },
+  tall: { labelKey: "bulkGrid.heightTall" as TranslationKey, px: 240 },
+} as const;
+type RowHeightKey = keyof typeof ROW_HEIGHTS;
+const ROW_HEIGHT_KEYS = Object.keys(ROW_HEIGHTS) as RowHeightKey[];
+
+function rowHeightKey(tableId: number): string {
+  return `acm_bulk_row_height_${tableId}`;
+}
+
+function readRowHeight(tableId: number): RowHeightKey {
+  if (typeof window === "undefined") return "default";
+  const v = window.localStorage.getItem(rowHeightKey(tableId));
+  return v && v in ROW_HEIGHTS ? (v as RowHeightKey) : "default";
+}
+
+function writeRowHeight(tableId: number, value: RowHeightKey): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(rowHeightKey(tableId), value);
+}
+
+function colWidthsKey(tableId: number): string {
+  return `acm_bulk_col_widths_${tableId}`;
+}
+
+function readColWidths(tableId: number): Record<number, number> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(colWidthsKey(tableId));
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeColWidths(tableId: number, widths: Record<number, number>): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(colWidthsKey(tableId), JSON.stringify(widths));
+}
+
+export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
+  const { t } = useT();
+  // Keep cells indexed by "rowId:columnId" for O(1) lookup
+  const cellMap = useMemo(() => {
+    const m = new Map<string, BulkCell>();
+    for (const c of table.cells) m.set(`${c.row_id}:${c.column_id}`, c);
+    return m;
+  }, [table.cells]);
+
+  // Pending edits live in a ref so flushPending always sees the latest writes,
+  // even when invoked from a stale closure (e.g. onBlur fires before React re-renders
+  // with the just-typed value). The pendingTick state forces re-renders so cells
+  // reflect typing in real time.
+  const pendingRef = useRef<Map<string, string | null>>(new Map());
+  const [pendingTick, setPendingTick] = useState(0);
+  void pendingTick; // read so React knows the render depends on it
+  const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Refs to the latest table + cellMap so flushPending merges into current state
+  // even when called from an unmount cleanup or a long-pending timer.
+  const tableRef = useRef(table);
+  const cellMapRef = useRef(cellMap);
+  tableRef.current = table;
+  cellMapRef.current = cellMap;
+  const onTableChangeRef = useRef(onTableChange);
+  onTableChangeRef.current = onTableChange;
+  const onSavingChangeRef = useRef(onSavingChange);
+  onSavingChangeRef.current = onSavingChange;
+
+  // Modal: viewing a cell's content (HTML viewer)
+  const [viewing, setViewing] = useState<{
+    column: BulkColumn;
+    row: BulkRow;
+    cell: BulkCell | null;
+  } | null>(null);
+
+  // Configure-column modal
+  const [configuring, setConfiguring] = useState<BulkColumn | null>(null);
+
+  // Selected row IDs for batch generation (persists across pages)
+  const [selectedRowIds, setSelectedRowIds] = useState<Set<number>>(new Set());
+
+  // Modal: cell error details
+  const [errorView, setErrorView] = useState<{ cell: BulkCell; column: BulkColumn } | null>(null);
+
+  // Inline column rename (double-click the header name to start)
+  const [renamingColumnId, setRenamingColumnId] = useState<number | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+
+  async function commitColumnRename(col: BulkColumn) {
+    const next = renameDraft.trim();
+    setRenamingColumnId(null);
+    if (!next || next === col.name) return;
+    try {
+      const updated = await apiUpdateColumn(table.id, col.id, { name: next });
+      onTableChange({
+        ...table,
+        columns: table.columns.map((c) => (c.id === col.id ? updated : c)),
+      });
+    } catch (err) {
+      console.error("[Bulk] inline rename failed", err);
+    }
+  }
+
+  // ---- Pagination ----
+  const [pageSize, setPageSize] = useState<PageSize>(DEFAULT_PAGE_SIZE);
+  const [pageIndex, setPageIndex] = useState(0);
+
+  // Hydrate page size from localStorage on mount
+  useEffect(() => {
+    setPageSize(readPageSize());
+  }, []);
+
+  // ---- Column widths (per-table, persisted in localStorage) ----
+  const [colWidths, setColWidths] = useState<Record<number, number>>({});
+  useEffect(() => {
+    setColWidths(readColWidths(table.id));
+  }, [table.id]);
+
+  // ---- Row height (per-table, persisted in localStorage) ----
+  const [rowHeight, setRowHeight] = useState<RowHeightKey>("default");
+  useEffect(() => {
+    setRowHeight(readRowHeight(table.id));
+  }, [table.id]);
+  function changeRowHeight(value: RowHeightKey): void {
+    setRowHeight(value);
+    writeRowHeight(table.id, value);
+  }
+  const rowHeightPx = ROW_HEIGHTS[rowHeight].px;
+
+  // Holds the cleanup callback for an in-flight column resize, so we can run
+  // it from the component's unmount path. Without this, unmounting mid-drag
+  // (e.g. user navigates away while holding the mouse down) leaks the
+  // global mousemove/mouseup listeners on document.
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    return () => {
+      resizeCleanupRef.current?.();
+      resizeCleanupRef.current = null;
+    };
+  }, []);
+
+  function startResize(colId: number, e: React.MouseEvent): void {
+    e.preventDefault();
+    // If a previous drag is somehow still pending, tear it down first.
+    resizeCleanupRef.current?.();
+
+    const startX = e.clientX;
+    const startW = colWidths[colId] ?? DEFAULT_COL_WIDTH;
+    // Disable text selection during the drag
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+
+    function onMove(ev: MouseEvent): void {
+      const next = Math.max(MIN_COL_WIDTH, startW + (ev.clientX - startX));
+      setColWidths((prev) => ({ ...prev, [colId]: next }));
+    }
+    function cleanup(): void {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+      resizeCleanupRef.current = null;
+    }
+    function onUp(): void {
+      cleanup();
+      // Persist final widths
+      setColWidths((prev) => {
+        writeColWidths(table.id, prev);
+        return prev;
+      });
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    resizeCleanupRef.current = cleanup;
+  }
+
+  function changePageSize(size: PageSize) {
+    setPageSize(size);
+    setPageIndex(0);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(size));
+    }
+  }
+
+  const totalRows = table.rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+  // Clamp pageIndex if rows were deleted out from under us
+  const safePageIndex = Math.min(pageIndex, totalPages - 1);
+  const pageStart = safePageIndex * pageSize;
+  const pageEnd = pageStart + pageSize;
+  const visibleRows = table.rows.slice(pageStart, pageEnd);
+  const visibleRowIdSet = useMemo(
+    () => new Set(visibleRows.map((r) => r.id)),
+    [visibleRows],
+  );
+
+  // ---- Polling: while ANY cell is 'generating', re-fetch the whole table.
+  const generatingCount = useMemo(
+    () => Array.from(cellMap.values()).filter((c) => c.status === "generating").length,
+    [cellMap],
+  );
+
+  useEffect(() => {
+    if (generatingCount === 0) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const fresh = await getTable(tableRef.current.id);
+        if (!cancelled) onTableChangeRef.current(fresh);
+      } catch (err) {
+        console.error("[Bulk] poll failed", err);
+      }
+    };
+    const handle = setInterval(tick, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+    };
+  }, [generatingCount]);
+
+  function getCellValue(rowId: number, colId: number): string {
+    const k = `${rowId}:${colId}`;
+    if (pendingRef.current.has(k)) return pendingRef.current.get(k) ?? "";
+    return cellMap.get(k)?.value ?? "";
+  }
+
+  function getCellStatus(rowId: number, colId: number): CellStatus {
+    const k = `${rowId}:${colId}`;
+    if (pendingRef.current.has(k)) {
+      return pendingRef.current.get(k) ? "manual" : "empty";
+    }
+    return cellMap.get(k)?.status ?? "empty";
+  }
+
+  function scheduleFlush() {
+    if (flushTimer.current) clearTimeout(flushTimer.current);
+    flushTimer.current = setTimeout(() => void flushPending(), AUTOSAVE_DEBOUNCE_MS);
+  }
+
+  async function flushPending() {
+    flushTimer.current = null;
+    const snapshot = pendingRef.current;
+    if (snapshot.size === 0) return;
+    // Optimistically clear so further typing doesn't get re-saved twice.
+    pendingRef.current = new Map();
+
+    const writes = Array.from(snapshot.entries()).map(([key, value]) => {
+      const [rowIdStr, colIdStr] = key.split(":");
+      return {
+        row_id: Number(rowIdStr),
+        column_id: Number(colIdStr),
+        value: value ?? null,
+      };
+    });
+
+    onSavingChangeRef.current(true, null);
+    try {
+      const written = await upsertCells(tableRef.current.id, writes);
+      const newCellMap = new Map(cellMapRef.current);
+      for (const w of written) {
+        const key = `${w.row_id}:${w.column_id}`;
+        const existing = newCellMap.get(key);
+        newCellMap.set(key, {
+          id: w.id,
+          row_id: w.row_id,
+          column_id: w.column_id,
+          value: w.value,
+          status: w.status as CellStatus,
+          error: existing?.error ?? null,
+          model_used: existing?.model_used ?? null,
+          generated_at: existing?.generated_at ?? null,
+          updated_at: w.updated_at,
+        });
+      }
+      onTableChangeRef.current({
+        ...tableRef.current,
+        cells: Array.from(newCellMap.values()),
+      });
+      onSavingChangeRef.current(false, Date.now());
+    } catch (err) {
+      console.error("[Bulk] cell save failed", err);
+      // Restore the unsaved writes (don't clobber anything the user has typed since).
+      for (const [k, v] of snapshot.entries()) {
+        if (!pendingRef.current.has(k)) pendingRef.current.set(k, v);
+      }
+      setPendingTick((n) => n + 1);
+      onSavingChangeRef.current(false, null);
+    }
+  }
+
+  // Flush on unmount
+  useEffect(() => {
+    return () => {
+      if (flushTimer.current) {
+        clearTimeout(flushTimer.current);
+      }
+      void flushPending();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function setCell(rowId: number, colId: number, value: string) {
+    const key = `${rowId}:${colId}`;
+    pendingRef.current.set(key, value === "" ? null : value);
+    setPendingTick((n) => n + 1);
+    scheduleFlush();
+  }
+
+  // ---- Generation queue ----
+  const [queueOpen, setQueueOpen] = useState(false);
+  const [publishOpen, setPublishOpen] = useState(false);
+
+  async function openQueue(): Promise<void> {
+    // Flush any pending cell edits first so what's in the queue reflects reality.
+    await flushPending();
+    setQueueOpen(true);
+  }
+
+  // ---- Clear values for selected rows ----
+  async function clearSelectedRowValues(): Promise<void> {
+    if (selectedRowIds.size === 0) return;
+    const rowIds = Array.from(selectedRowIds);
+    if (!window.confirm(t("bulkGrid.confirmClearValues", { count: rowIds.length })))
+      return;
+    // Cancel any pending typing on those rows so they don't immediately re-save.
+    for (const key of Array.from(pendingRef.current.keys())) {
+      const [r] = key.split(":");
+      if (rowIds.includes(Number(r))) pendingRef.current.delete(key);
+    }
+    // Build a write batch: every existing cell in those rows -> value=null, status=empty.
+    const writes = table.cells
+      .filter((c) => rowIds.includes(c.row_id))
+      .map((c) => ({
+        row_id: c.row_id,
+        column_id: c.column_id,
+        value: null,
+        status: "empty" as const,
+      }));
+    if (writes.length === 0) return;
+    onSavingChangeRef.current(true, null);
+    try {
+      await upsertCells(table.id, writes);
+      const fresh = await getTable(table.id);
+      onTableChangeRef.current(fresh);
+      onSavingChangeRef.current(false, Date.now());
+    } catch (err) {
+      console.error("[Bulk] clear values failed", err);
+      alert(t("bulkGrid.clearValuesFailed"));
+      onSavingChangeRef.current(false, null);
+    }
+  }
+
+  async function onQueueEnqueued(_message: string): Promise<void> {
+    // Re-fetch to flip cells to 'generating'; polling will take it from there.
+    try {
+      const fresh = await getTable(table.id);
+      onTableChangeRef.current(fresh);
+    } catch (err) {
+      console.error("[Bulk] post-enqueue refresh failed", err);
+    }
+  }
+
+  function selectionToggle(rowId: number) {
+    setSelectedRowIds((cur) => {
+      const next = new Set(cur);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  }
+
+  function selectionAllOnPage() {
+    setSelectedRowIds((cur) => {
+      const next = new Set(cur);
+      for (const r of visibleRows) next.add(r.id);
+      return next;
+    });
+  }
+
+  function selectionClearPage() {
+    setSelectedRowIds((cur) => {
+      const next = new Set(cur);
+      for (const r of visibleRows) next.delete(r.id);
+      return next;
+    });
+  }
+
+  function selectionAllInTable() {
+    setSelectedRowIds(new Set(table.rows.map((r) => r.id)));
+  }
+
+  function selectionClear() {
+    setSelectedRowIds(new Set());
+  }
+
+  const allOnPageSelected =
+    visibleRows.length > 0 && visibleRows.every((r) => selectedRowIds.has(r.id));
+
+  const outputColsWithPrompt = table.columns.filter(
+    (c) => c.kind === "output" && c.prompt_id != null,
+  );
+
+  // ---- Column actions ----
+
+  async function onAddColumnClick() {
+    const name = window.prompt(t("bulkGrid.addColumnPrompt"));
+    if (!name?.trim()) return;
+    try {
+      const col = await apiAddColumn(table.id, { name: name.trim(), kind: "input" });
+      onTableChange({ ...table, columns: [...table.columns, col] });
+    } catch (err) {
+      console.error("[Bulk] add column failed", err);
+      alert(t("bulkGrid.addColumnFailed"));
+    }
+  }
+
+  async function onDeleteColumn(col: BulkColumn) {
+    if (!window.confirm(t("bulkGrid.confirmDeleteColumn", { name: col.name }))) return;
+    try {
+      await apiDeleteColumn(table.id, col.id);
+      onTableChange({
+        ...table,
+        columns: table.columns.filter((c) => c.id !== col.id),
+        cells: table.cells.filter((c) => c.column_id !== col.id),
+      });
+    } catch (err) {
+      console.error("[Bulk] delete column failed", err);
+    }
+  }
+
+  async function onToggleKind(col: BulkColumn) {
+    const newKind = col.kind === "input" ? "output" : "input";
+    try {
+      const updated = await apiUpdateColumn(table.id, col.id, { kind: newKind });
+      onTableChange({
+        ...table,
+        columns: table.columns.map((c) => (c.id === col.id ? updated : c)),
+      });
+    } catch (err) {
+      console.error("[Bulk] toggle kind failed", err);
+    }
+  }
+
+  // ---- Row actions ----
+
+  async function onAddRow() {
+    try {
+      const row = await apiAddRow(table.id);
+      const nextRows = [...table.rows, row];
+      onTableChange({ ...table, rows: nextRows });
+      // Jump to whatever page the new row lands on so the user actually sees it.
+      const newPage = Math.floor((nextRows.length - 1) / pageSize);
+      setPageIndex(newPage);
+    } catch (err) {
+      console.error("[Bulk] add row failed", err);
+    }
+  }
+
+  async function onDeleteRow(row: BulkRow) {
+    if (!window.confirm(t("bulkGrid.confirmDeleteRow"))) return;
+    try {
+      await apiDeleteRow(table.id, row.id);
+      onTableChange({
+        ...table,
+        rows: table.rows.filter((r) => r.id !== row.id),
+        cells: table.cells.filter((c) => c.row_id !== row.id),
+      });
+    } catch (err) {
+      console.error("[Bulk] delete row failed", err);
+    }
+  }
+
+  function openCell(row: BulkRow, col: BulkColumn) {
+    const cell = cellMap.get(`${row.id}:${col.id}`) ?? null;
+    setViewing({ row, column: col, cell });
+  }
+
+  return (
+    <>
+      {/* Generation toolbar */}
+      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-neutral-200 bg-white px-3 py-2 text-xs dark:border-neutral-800 dark:bg-neutral-900">
+        <span className="text-neutral-500 dark:text-neutral-400">
+          {selectedRowIds.size > 0
+            ? t("bulkGrid.toolbarSelected", { count: selectedRowIds.size })
+            : t("bulkGrid.toolbarClickGenerate")}
+        </span>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {selectedRowIds.size > 0 && (
+            <>
+              <button
+                type="button"
+                onClick={() => void clearSelectedRowValues()}
+                className="rounded-md border border-neutral-300 px-3 py-1 font-medium text-red-600 hover:bg-red-50 dark:border-neutral-700 dark:text-red-400 dark:hover:bg-red-950/40"
+                title={t("bulkGrid.clearValuesHint")}
+              >
+                {t("bulkGrid.clearValues")}
+              </button>
+              <button
+                type="button"
+                onClick={selectionClear}
+                className="rounded-md border border-neutral-300 px-3 py-1 font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+              >
+                {t("bulkGrid.clearSelection")}
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            onClick={() => setPublishOpen(true)}
+            className="rounded-md border border-neutral-300 px-3 py-1 font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
+            title={t("bulkGrid.publishHint")}
+          >
+            {selectedRowIds.size > 0
+              ? t("bulkGrid.publishLabelSelected", { count: selectedRowIds.size })
+              : t("bulkGrid.publishLabel")}
+          </button>
+          <button
+            type="button"
+            onClick={() => void openQueue()}
+            disabled={outputColsWithPrompt.length === 0}
+            className="rounded-md bg-neutral-900 px-3 py-1 font-medium text-white hover:bg-neutral-800 disabled:opacity-40 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
+            title={
+              outputColsWithPrompt.length === 0
+                ? t("bulkGrid.generateDisabledHint")
+                : t("bulkGrid.generateOpenHint")
+            }
+          >
+            {selectedRowIds.size > 0
+              ? t("bulkGrid.generateLabelSelected", { count: selectedRowIds.size })
+              : t("bulkGrid.generateLabel")}
+          </button>
+        </div>
+      </div>
+
+      <div className="overflow-auto rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
+        <table
+          className="border-separate border-spacing-0 text-sm"
+          style={{ tableLayout: "fixed" }}
+        >
+          <colgroup>
+            <col style={{ width: CHECKBOX_WIDTH }} />
+            <col style={{ width: ROW_NUM_WIDTH }} />
+            {table.columns.map((col) => (
+              <col
+                key={col.id}
+                style={{ width: colWidths[col.id] ?? DEFAULT_COL_WIDTH }}
+              />
+            ))}
+            <col style={{ width: ADD_COL_WIDTH }} />
+          </colgroup>
+          <thead className="sticky top-0 z-10 bg-neutral-50 dark:bg-neutral-950">
+            <tr>
+              <th className="w-8 border-b border-neutral-200 px-1 py-2 text-center dark:border-neutral-800">
+                <input
+                  type="checkbox"
+                  checked={allOnPageSelected}
+                  onChange={(e) =>
+                    e.target.checked ? selectionAllOnPage() : selectionClearPage()
+                  }
+                  className="h-3.5 w-3.5"
+                  title={t("bulkGrid.selectAllOnPage")}
+                />
+              </th>
+              <th className="w-10 border-b border-neutral-200 px-2 py-2 text-center text-[10px] font-medium uppercase tracking-wide text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+                #
+              </th>
+              {table.columns.map((col) => (
+                <th
+                  key={col.id}
+                  className="group relative border-b border-l border-neutral-200 px-2 py-2 text-left dark:border-neutral-800"
+                >
+                  {/* Drag handle pinned to the right edge of the cell */}
+                  <div
+                    onMouseDown={(e) => startResize(col.id, e)}
+                    onDoubleClick={(e) => {
+                      // Double-click handle resets that column to default width.
+                      e.stopPropagation();
+                      setColWidths((prev) => {
+                        const next = { ...prev };
+                        delete next[col.id];
+                        writeColWidths(table.id, next);
+                        return next;
+                      });
+                    }}
+                    title={t("bulkGrid.dragResizeHint")}
+                    className="absolute right-0 top-0 z-20 h-full w-1.5 cursor-col-resize bg-transparent hover:bg-blue-400/60 active:bg-blue-500/80"
+                  />
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      {renamingColumnId === col.id ? (
+                        <input
+                          autoFocus
+                          type="text"
+                          value={renameDraft}
+                          onChange={(e) => setRenameDraft(e.target.value)}
+                          onBlur={() => void commitColumnRename(col)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") void commitColumnRename(col);
+                            if (e.key === "Escape") setRenamingColumnId(null);
+                          }}
+                          className="block w-full rounded border border-neutral-300 px-1 py-0.5 text-xs font-medium text-neutral-900 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+                        />
+                      ) : (
+                        <p
+                          onDoubleClick={() => {
+                            setRenamingColumnId(col.id);
+                            setRenameDraft(col.name);
+                          }}
+                          title={t("bulkGrid.doubleClickRename")}
+                          className="truncate cursor-text text-xs font-medium text-neutral-900 dark:text-neutral-100"
+                        >
+                          {col.name}
+                        </p>
+                      )}
+                      <p className="text-[10px] uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                        {col.kind === "output" ? t("bulkGrid.colKindOutput") : t("bulkGrid.colKindInput")}
+                        {col.kind === "output" && col.prompt_id == null && t("bulkGrid.colNoPrompt")}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-0.5 text-[11px] text-neutral-500 opacity-0 transition-opacity group-hover:opacity-100 dark:text-neutral-400">
+                      {col.kind === "output" && (
+                        <button
+                          onClick={() => setConfiguring(col)}
+                          className="rounded px-1 hover:bg-neutral-100 hover:text-neutral-900 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+                          title={t("bulkGrid.cfgPromptHint")}
+                        >
+                          ⚙
+                        </button>
+                      )}
+                      <button
+                        onClick={() => onToggleKind(col)}
+                        className="rounded px-1 hover:bg-neutral-100 hover:text-neutral-900 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+                        title={t("bulkGrid.toggleKindHint", {
+                          kind: col.kind === "input" ? t("bulkGrid.colKindOutput") : t("bulkGrid.colKindInput"),
+                        })}
+                      >
+                        ⇄
+                      </button>
+                      <button
+                        onClick={() => onDeleteColumn(col)}
+                        className="rounded px-1 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/40 dark:hover:text-red-400"
+                        title={t("bulkGrid.deleteColumnHint")}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                </th>
+              ))}
+              <th className="w-12 border-b border-l border-neutral-200 px-2 py-2 text-center dark:border-neutral-800">
+                <button
+                  onClick={onAddColumnClick}
+                  title={t("bulkGrid.addColumnHint")}
+                  className="text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
+                >
+                  +
+                </button>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibleRows.map((row, relIdx) => {
+              const absoluteIdx = pageStart + relIdx;
+              return (
+              <tr key={row.id} className="group">
+                <td className="border-b border-neutral-200 px-1 py-1 text-center dark:border-neutral-800">
+                  <input
+                    type="checkbox"
+                    checked={selectedRowIds.has(row.id)}
+                    onChange={() => selectionToggle(row.id)}
+                    className="h-3.5 w-3.5"
+                  />
+                </td>
+                <td className="border-b border-neutral-200 px-2 py-1 text-center text-[10px] text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+                  <span className="group-hover:hidden">{absoluteIdx + 1}</span>
+                  <button
+                    onClick={() => onDeleteRow(row)}
+                    title={t("bulkGrid.deleteRowHint")}
+                    className="hidden hover:text-red-600 group-hover:inline dark:hover:text-red-400"
+                  >
+                    ×
+                  </button>
+                </td>
+                {table.columns.map((col) => {
+                  const cellRef = cellMap.get(`${row.id}:${col.id}`) ?? null;
+                  const value = getCellValue(row.id, col.id);
+                  const status = getCellStatus(row.id, col.id);
+                  return (
+                    <td
+                      key={col.id}
+                      onDoubleClick={() => {
+                        if (status === "generating" || status === "failed") return;
+                        openCell(row, col);
+                      }}
+                      title={t("bulkGrid.openViewerHint")}
+                      className={
+                        "group/cell relative border-b border-l border-neutral-200 align-top dark:border-neutral-800 " +
+                        (status === "generating"
+                          ? "bg-amber-50 dark:bg-amber-950/30"
+                          : status === "failed"
+                            ? "bg-red-50 dark:bg-red-950/30"
+                            : status === "generated"
+                              ? "bg-green-50/30 dark:bg-green-950/20"
+                              : "")
+                      }
+                    >
+                      {status === "generating" ? (
+                        <div
+                          style={{ height: rowHeightPx }}
+                          className="flex items-center px-2 text-xs text-amber-700 dark:text-amber-300"
+                        >
+                          <span className="mr-2 inline-block h-2 w-2 animate-pulse rounded-full bg-amber-500" />
+                          {t("bulkGrid.generating")}
+                        </div>
+                      ) : status === "failed" ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (cellRef) setErrorView({ cell: cellRef, column: col });
+                          }}
+                          style={{ height: rowHeightPx }}
+                          className="flex w-full items-center px-2 text-left text-xs text-red-700 hover:underline dark:text-red-300"
+                          title={t("bulkGrid.failedHint")}
+                        >
+                          {t("bulkGrid.failedClickToSee")}
+                        </button>
+                      ) : (
+                        <>
+                          <textarea
+                            value={value}
+                            onChange={(e) => setCell(row.id, col.id, e.target.value)}
+                            onBlur={() => void flushPending()}
+                            placeholder={col.kind === "output" ? t("bulkGrid.outputPlaceholder") : ""}
+                            style={{ height: rowHeightPx }}
+                            className="block w-full resize-none border-0 bg-transparent px-2 py-1 pr-6 text-xs text-neutral-900 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:text-neutral-100 [&::-webkit-scrollbar]:hidden [scrollbar-width:none]"
+                          />
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openCell(row, col);
+                            }}
+                            title={t("bulkGrid.openViewer")}
+                            tabIndex={-1}
+                            className="absolute right-1 top-1 z-10 rounded px-1 text-[10px] text-neutral-400 opacity-0 hover:bg-neutral-100 hover:text-neutral-900 group-hover/cell:opacity-100 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+                          >
+                            ↗
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  );
+                })}
+                <td className="border-b border-l border-neutral-200 dark:border-neutral-800" />
+              </tr>
+            );
+            })}
+            <tr>
+              <td colSpan={table.columns.length + 3} className="px-2 py-2">
+                <button
+                  onClick={onAddRow}
+                  className="text-xs font-medium text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
+                >
+                  {t("bulkGrid.addRow")}
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      {/* Pagination footer */}
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-neutral-200 bg-white px-3 py-2 text-xs dark:border-neutral-800 dark:bg-neutral-900">
+        <div className="flex items-center gap-2 text-neutral-600 dark:text-neutral-400">
+          <span>
+            {totalRows === 0
+              ? t("bulkGrid.noRows")
+              : t("bulkGrid.rowsRange", {
+                  from: pageStart + 1,
+                  to: Math.min(pageEnd, totalRows),
+                  total: totalRows,
+                })}
+          </span>
+          {selectedRowIds.size > 0 && (
+            <>
+              <span aria-hidden>·</span>
+              <span>{t("bulkGrid.selectedSuffix", { count: selectedRowIds.size })}</span>
+              {selectedRowIds.size < totalRows && (
+                <button
+                  type="button"
+                  onClick={selectionAllInTable}
+                  className="ml-1 underline hover:text-neutral-900 dark:hover:text-neutral-100"
+                >
+                  {t("bulkGrid.selectAllN", { total: totalRows })}
+                </button>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2">
+            <span className="text-neutral-500 dark:text-neutral-400">{t("bulkGrid.rowHeight")}</span>
+            <select
+              value={rowHeight}
+              onChange={(e) => changeRowHeight(e.target.value as RowHeightKey)}
+              className="rounded-md border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900"
+            >
+              {ROW_HEIGHT_KEYS.map((k) => (
+                <option key={k} value={k}>
+                  {t(ROW_HEIGHTS[k].labelKey)}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex items-center gap-2">
+            <span className="text-neutral-500 dark:text-neutral-400">{t("bulkGrid.rowsPerPage")}</span>
+            <select
+              value={pageSize}
+              onChange={(e) => changePageSize(Number(e.target.value) as PageSize)}
+              className="rounded-md border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900"
+            >
+              {PAGE_SIZE_OPTIONS.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setPageIndex(0)}
+              disabled={safePageIndex === 0}
+              className="rounded border border-neutral-300 px-2 py-0.5 disabled:opacity-30 dark:border-neutral-700"
+              title={t("bulkGrid.firstPage")}
+            >
+              «
+            </button>
+            <button
+              type="button"
+              onClick={() => setPageIndex((i) => Math.max(0, i - 1))}
+              disabled={safePageIndex === 0}
+              className="rounded border border-neutral-300 px-2 py-0.5 disabled:opacity-30 dark:border-neutral-700"
+              title={t("bulkGrid.previousPage")}
+            >
+              ‹
+            </button>
+            <span className="px-2 text-neutral-700 dark:text-neutral-300">
+              {t("common.pageXofY", { page: safePageIndex + 1, total: totalPages })}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPageIndex((i) => Math.min(totalPages - 1, i + 1))}
+              disabled={safePageIndex >= totalPages - 1}
+              className="rounded border border-neutral-300 px-2 py-0.5 disabled:opacity-30 dark:border-neutral-700"
+              title={t("bulkGrid.nextPage")}
+            >
+              ›
+            </button>
+            <button
+              type="button"
+              onClick={() => setPageIndex(totalPages - 1)}
+              disabled={safePageIndex >= totalPages - 1}
+              className="rounded border border-neutral-300 px-2 py-0.5 disabled:opacity-30 dark:border-neutral-700"
+              title={t("bulkGrid.lastPage")}
+            >
+              »
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {viewing && (
+        <CellEditorModal
+          title={`${viewing.column.name} · ${t("colCfg.rowHash", {
+            n: table.rows.findIndex((r) => r.id === viewing.row.id) + 1,
+          })}`}
+          initialValue={getCellValue(viewing.row.id, viewing.column.id)}
+          onClose={() => setViewing(null)}
+          onSave={async (next) => {
+            // Push directly through the same upsert path the inline textarea uses,
+            // so status flips to 'manual' and the table state stays in sync.
+            const rowId = viewing.row.id;
+            const colId = viewing.column.id;
+            pendingRef.current.set(`${rowId}:${colId}`, next === "" ? null : next);
+            await flushPending();
+            setViewing(null);
+          }}
+        />
+      )}
+
+      {configuring && (
+        <ColumnConfigModal
+          table={table}
+          column={configuring}
+          onClose={() => setConfiguring(null)}
+          onSaved={(col) =>
+            onTableChange({
+              ...table,
+              columns: table.columns.map((c) => (c.id === col.id ? col : c)),
+            })
+          }
+        />
+      )}
+
+      {publishOpen && (
+        <BulkPublishModal
+          table={table}
+          selectedRowIds={Array.from(selectedRowIds)}
+          onClose={() => setPublishOpen(false)}
+        />
+      )}
+
+      {queueOpen && (
+        <GenerationQueueModal
+          table={table}
+          preselectedRowIds={Array.from(selectedRowIds)}
+          onClose={() => setQueueOpen(false)}
+          onEnqueued={(msg) => void onQueueEnqueued(msg)}
+        />
+      )}
+
+      {errorView && (
+        <Modal onClose={() => setErrorView(null)} size="max-w-2xl">
+          <h3 className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
+            {t("bulkGrid.errorTitle", { col: errorView.column.name })}
+          </h3>
+          <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md bg-red-50 p-3 font-mono text-xs text-red-900 dark:bg-red-950/50 dark:text-red-200">
+            {errorView.cell.error ?? t("bulkGrid.errorEmpty")}
+          </pre>
+          <div className="mt-4 flex justify-end gap-2">
+            <button
+              onClick={async () => {
+                if (!errorView.cell) return;
+                const cell = errorView.cell;
+                setErrorView(null);
+                try {
+                  await enqueueGeneration(table.id, {
+                    row_ids: [cell.row_id],
+                    column_ids: [cell.column_id],
+                    mode: "all",
+                  });
+                  const fresh = await getTable(table.id);
+                  onTableChangeRef.current(fresh);
+                } catch (err) {
+                  console.error("[Bulk] retry cell failed", err);
+                  alert(t("bulkGrid.retryFailed"));
+                }
+              }}
+              className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
+            >
+              {t("bulkGrid.retryCell")}
+            </button>
+            <button
+              onClick={() => setErrorView(null)}
+              className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+            >
+              {t("common.close")}
+            </button>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
