@@ -140,6 +140,98 @@ that's the api still warming up. The `warmup` one-shot pings `/health` a
 few times to absorb cold-start latency, but DB-heavy first request can
 still trip. Refresh.
 
+## Deploy modes
+
+There are two front-of-house configurations. Pick the one that fits your
+infrastructure — the rest of the stack (api, worker, db, redis, migrate,
+web, backups) is identical in both.
+
+| Mode      | Reverse proxy + TLS | When to use                                                                                       |
+| --------- | ------------------- | ------------------------------------------------------------------------------------------------- |
+| **Caddy** | Caddy on host 80/443, Let's Encrypt | Solo VPS deploy. ACM is the only thing on the host that needs the public ports.                  |
+| **Traefik** | Host Traefik on 80/443, ACM behind it | Shared host running multiple tools through a single Traefik. ACM only exposes an internal nginx. |
+
+### Mode A — Caddy (default)
+
+The runbook above. Compose command is:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
+
+### Mode B — Traefik-fronted
+
+This mode disables Caddy and adds an `nginx-acm` container that sits on
+both the ACM internal docker network and the external `traefik_proxy`
+network. Traefik (running outside this stack on the same host) reaches it
+by service name at `https://nginx-acm:443` with `insecureSkipVerify`.
+
+**One-time setup**:
+
+```bash
+# 1. Create the external network Traefik already uses (skip if it exists):
+docker network create traefik_proxy
+
+# 2. Generate the self-signed cert pair for nginx-acm:
+bash nginx/gen-cert.sh
+
+# 3. Add the router + service block to your Traefik dynamic config —
+#    see nginx/traefik-router.example.yml for the exact shape. Set the
+#    Host(`...`) rule to whatever DNS name points at this host.
+```
+
+**Deploy**:
+
+```bash
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.prod.yml \
+  -f docker-compose.traefik.yml \
+  up -d --build
+```
+
+`docker compose ps` will show `caddy` in `Exited (0)` — that's intentional.
+The Traefik overlay no-ops Caddy's entrypoint because Compose overlays
+can't fully remove a service.
+
+**What's different vs Mode A**:
+
+- Caddy is inert; ports 80/443 are owned by Traefik on the host.
+- TLS is terminated twice: once at Traefik (public cert) and again at
+  nginx-acm (long-lived self-signed). Traefik trusts the self-signed cert
+  via `serversTransport: insecure-backend`.
+- IP allow-listing happens in Traefik's `allow-vpn-only` middleware, not in
+  ACM. The login throttle inside ACM still works on real client IPs because
+  both proxies pass `X-Forwarded-For` through.
+- `ACM_HOSTNAME` and `ACM_LETSENCRYPT_EMAIL` in `.env` are unused in this
+  mode (no cert is issued by ACM itself). The frontend bundle still uses
+  `ACM_PUBLIC_API_URL=/api` for same-origin routing — leave that as is.
+
+### Localhost testing
+
+Both modes have a way to test locally without touching production:
+
+- **Dev path (recommended for day-to-day work)** — use the base compose
+  alone with the frontend running natively, exactly as the development
+  README describes. No reverse proxy, no TLS. Browse `http://localhost:3010`.
+  This works regardless of which prod mode you'll eventually deploy with.
+
+  ```bash
+  docker compose up                # backend in docker
+  cd frontend && npm run dev       # frontend on :3010 natively
+  ```
+
+- **Caddy mode dry-run on localhost** — leave `ACM_HOSTNAME=localhost`
+  in `.env`. Caddy uses its built-in local CA. Browse
+  `https://localhost` (your browser will warn about the cert — expected).
+
+- **Traefik mode dry-run on localhost** — without Traefik installed, you
+  can still exercise the nginx-acm container directly. Uncomment the
+  `ports: ["127.0.0.1:8443:443"]` line in `docker-compose.traefik.yml`
+  (it's pre-written, commented out, near the bottom of the `nginx-acm`
+  service), then `up -d`. Browse `https://localhost:8443`. Re-comment the
+  line before deploying to production so Traefik is the only path in.
+
 ## Subsequent deploys
 
 ```bash

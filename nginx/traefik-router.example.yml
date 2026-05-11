@@ -1,0 +1,27 @@
+# Example router/service block to drop into your Traefik dynamic config
+# (the same file that defines `nginx-tool-1`, etc).
+#
+# Adjust `Host(...)` to whatever DNS name points at the host, and reuse
+# the same allow-list / cert / serversTransport definitions you already
+# have for the other tools.
+#
+# IMPORTANT: the `insecure-backend` serversTransport (already defined in
+# your snippet) is what lets Traefik accept nginx-acm's self-signed cert.
+
+http:
+  routers:
+    acm:
+      rule: Host(`acm.mrba-stage1.xyz`)   # <-- set this
+      entryPoints:
+        - websecure
+      tls: {}
+      middlewares:
+        - allow-vpn-only                  # the shared IP allowlist
+      service: acm
+
+  services:
+    acm:
+      loadBalancer:
+        servers:
+          - url: "https://nginx-acm:443"
+        serversTransport: insecure-backend
