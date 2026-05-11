@@ -69,6 +69,12 @@ class BulkTable(Base, TimestampMixin):
 
 class BulkTableColumn(Base):
     __tablename__ = "bulk_table_columns"
+    __table_args__ = (
+        # Prevents two concurrent column-add requests from landing on the same
+        # position. Without this, both could pre-compute the same `max+1`,
+        # both INSERT, and end up with duplicate positions for the table.
+        UniqueConstraint("table_id", "position", name="uq_bulk_columns_table_position"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     table_id: Mapped[int] = mapped_column(

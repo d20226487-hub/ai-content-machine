@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { BackupCard } from "@/components/BackupCard";
+import { PricingCard } from "@/components/PricingCard";
 import { ProviderCard } from "@/components/ProviderCard";
 import { PublishDefaultsCard } from "@/components/PublishDefaultsCard";
 import { ApiError } from "@/lib/api";
@@ -43,7 +45,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <main className="mx-auto max-w-4xl p-10">
+    <main className="mx-auto max-w-6xl p-10">
       <h1 className="text-2xl font-semibold text-neutral-900 dark:text-neutral-100">{t("settings.title")}</h1>
       <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
         {t("settings.subtitle")}
@@ -69,6 +71,14 @@ export default function SettingsPage() {
 
       <div className="mt-10">
         <PublishDefaultsCard />
+      </div>
+
+      <div className="mt-10">
+        <PricingCard />
+      </div>
+
+      <div className="mt-10">
+        <BackupCard />
       </div>
     </main>
   );

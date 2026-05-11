@@ -48,10 +48,18 @@
             # Keep idle keepalive long enough that streaming generation paths
             # don't get cut, but short enough that wedged backends recycle.
             transport http {
+                # 10s dial gives api room to bounce/restart without 502s
+                # bleeding to users. Was 5s; the 5s spec turned out to be
+                # tight under cold-start CPU pressure on small VPSes.
+                dial_timeout 10s
                 read_timeout 120s
                 write_timeout 120s
-                dial_timeout 5s
             }
+            # If the dial fails, retry for up to 30s before giving up. This
+            # absorbs short upstream gaps (api restart, deploy rollover) so
+            # the user sees a delayed response rather than a 502.
+            lb_try_duration 30s
+            lb_try_interval 1s
         }
     }
 

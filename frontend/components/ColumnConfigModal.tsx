@@ -92,14 +92,18 @@ export function ColumnConfigModal({ table, column, onClose, onSaved }: Props) {
 
   const selectedProvider = providers.find((p) => p.code === providerCode);
 
-  // When prompt changes, fetch its detail (variables list)
+  // When prompt changes, fetch its detail (variables list).
+  // Abort superseded fetches via an `ignored` flag so a stale result can't
+  // overwrite the active prompt's variable map.
   useEffect(() => {
     if (selectedPromptId == null) {
       setPromptDetail(null);
       return;
     }
+    let ignored = false;
     getPrompt(selectedPromptId)
       .then((p) => {
+        if (ignored) return;
         setPromptDetail(p);
         // Auto-match: for any variable not already mapped, look for a source
         // column whose name matches case-insensitively.
@@ -115,7 +119,12 @@ export function ColumnConfigModal({ table, column, onClose, onSaved }: Props) {
           return next;
         });
       })
-      .catch((e) => setError(e));
+      .catch((e) => {
+        if (!ignored) setError(e);
+      });
+    return () => {
+      ignored = true;
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPromptId]);
 

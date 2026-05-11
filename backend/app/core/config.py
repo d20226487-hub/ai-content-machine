@@ -29,6 +29,21 @@ class Settings(BaseSettings):
 
     CORS_ORIGINS: str = "http://localhost:3000"
 
+    # "json" (one record per line, machine-readable) or "pretty" (human-friendly
+    # in dev). Default "pretty" because most local invocations don't set it.
+    LOG_FORMAT: str = "pretty"
+    LOG_LEVEL: str = "INFO"
+
+    # Sentry — optional. When unset, Sentry is a no-op (no init). Set in
+    # prod .env to ship errors to your Sentry project (or self-hosted
+    # GlitchTip, which is API-compatible).
+    SENTRY_DSN: str | None = None
+    # Free-form environment label that ends up on every event.
+    SENTRY_ENVIRONMENT: str = "production"
+    # 0.0..1.0 — fraction of transactions to sample for performance traces.
+    # 0 disables tracing entirely (errors still ship).
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.0
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -8,7 +8,13 @@ from app.db.base import Base
 
 
 class BulkPublishRun(Base):
-    """A single bulk-publish operation: one table → one (domain, profile)."""
+    """A single bulk-publish operation.
+
+    `mode` determines how each row's target is resolved:
+      * 'single' — every row goes to (domain_id, profile_name) on this run.
+      * 'multi'  — each row reads its own domain + profile from cells in
+        the columns referenced by domain_column_id / profile_column_id.
+    """
 
     __tablename__ = "bulk_publish_runs"
 
@@ -26,11 +32,27 @@ class BulkPublishRun(Base):
     table_id: Mapped[int] = mapped_column(
         ForeignKey("bulk_tables.id", ondelete="CASCADE"), nullable=False
     )
+
+    # 'single' | 'multi'
+    mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="single"
+    )
+
+    # Single-mode targets. Null for multi-mode runs.
     domain_id: Mapped[int | None] = mapped_column(
         ForeignKey("domains.id", ondelete="SET NULL"), nullable=True
     )
-    # '' for Custom CMS (no profile concept). Real profile name for WP.
+    # '' for Custom CMS or for multi-mode (where the profile is per-row).
     profile_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+
+    # Multi-mode targets. Null for single-mode runs.
+    domain_column_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bulk_table_columns.id", ondelete="SET NULL"), nullable=True
+    )
+    profile_column_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bulk_table_columns.id", ondelete="SET NULL"), nullable=True
+    )
+
     language: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     # 'all' | 'selected' | 'range'
@@ -57,22 +79,62 @@ class BulkPublishRun(Base):
 
 
 class BulkTablePublishMapping(Base):
-    """Memo of the most-recent column→field mapping per (table, domain, profile).
+    """Memo of the most-recent column→field mapping for one table.
 
-    The BulkPublishModal pre-fills from this row; users can clear it via the
-    DELETE endpoint to start fresh.
+    Two shapes coexist in this table — selected by the `mode` column:
+
+    Single mode: keyed on (table_id, domain_id, profile_name). One row per
+    triple. Used by the BulkPublishModal in single mode to pre-fill the
+    column→field mapping when the user picks the same domain+profile they
+    used last time.
+
+    Multi mode: keyed on (table_id) only. One row per table. Holds the
+    column→field mapping plus which columns hold the per-row domain and
+    profile. Cross-mode reads don't collide because partial unique indexes
+    in the migration enforce shape-by-mode separately.
     """
 
     __tablename__ = "bulk_table_publish_mappings"
+    __table_args__ = (
+        # Partial uniques are created in migration 0017; we declare them here
+        # only for documentation. Alembic doesn't autogenerate from them.
+        Index(
+            "uq_btpm_single",
+            "table_id",
+            "domain_id",
+            "profile_name",
+            unique=True,
+            postgresql_where="mode = 'single'",
+        ),
+        Index(
+            "uq_btpm_multi",
+            "table_id",
+            unique=True,
+            postgresql_where="mode = 'multi'",
+        ),
+    )
 
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     table_id: Mapped[int] = mapped_column(
-        ForeignKey("bulk_tables.id", ondelete="CASCADE"), primary_key=True
+        ForeignKey("bulk_tables.id", ondelete="CASCADE"), nullable=False
     )
-    domain_id: Mapped[int] = mapped_column(
-        ForeignKey("domains.id", ondelete="CASCADE"), primary_key=True
+    # 'single' | 'multi'
+    mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="single"
     )
-    profile_name: Mapped[str] = mapped_column(
-        String(200), primary_key=True, default=""
+
+    # Single-mode key parts. Null for multi.
+    domain_id: Mapped[int | None] = mapped_column(
+        ForeignKey("domains.id", ondelete="CASCADE"), nullable=True
+    )
+    profile_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    # Multi-mode column references. Null for single.
+    domain_column_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bulk_table_columns.id", ondelete="SET NULL"), nullable=True
+    )
+    profile_column_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bulk_table_columns.id", ondelete="SET NULL"), nullable=True
     )
 
     field_to_column: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)

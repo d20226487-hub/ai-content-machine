@@ -13,10 +13,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import AppSetting, Domain
+from app.services.app_settings_cache import (
+    get_settings_many,
+    invalidate as invalidate_setting,
+)
 
 
 @dataclass
@@ -53,12 +56,10 @@ _KEYS = {
 
 
 async def load_global_defaults(db: AsyncSession) -> DomainRateLimits:
-    rows = (
-        await db.execute(
-            select(AppSetting).where(AppSetting.key.in_(list(_KEYS.values())))
-        )
-    ).scalars().all()
-    by_key = {r.key: r.value for r in rows}
+    # Cached read — same value comes back from process-local cache for
+    # subsequent calls within the TTL window. Bulk publish runs land here
+    # once per row; without the cache that's K SELECTs per row.
+    by_key = await get_settings_many(db, list(_KEYS.values()))
 
     def get_int(field: str) -> int:
         v = by_key.get(_KEYS[field])
@@ -98,6 +99,9 @@ async def update_global_defaults(
         else:
             existing.value = v
         existing.updated_by_id = updated_by_id
+        # Drop the cached value so this worker sees the new one immediately.
+        # Cross-worker propagation happens on the cache TTL boundary.
+        invalidate_setting(key)
     await db.commit()
     return values
 

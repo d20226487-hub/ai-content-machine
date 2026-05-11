@@ -4,7 +4,12 @@ import { useEffect, useState } from "react";
 
 import { ApiError } from "@/lib/api";
 import { useT } from "@/lib/i18n-context";
-import { listPublishJobs, type PublishJob } from "@/lib/publish";
+import {
+  clearCompletedPublishJobs,
+  deletePublishJob,
+  listPublishJobs,
+  type PublishJob,
+} from "@/lib/publish";
 
 const STATUS_BADGE: Record<string, string> = {
   posted: "bg-green-50 text-green-700 ring-green-600/10 dark:bg-green-950/40 dark:text-green-400 dark:ring-green-400/30",
@@ -20,25 +25,69 @@ export default function PostPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
 
   useEffect(() => {
-    listPublishJobs({ page, page_size: pageSize })
+    listPublishJobs({ page, page_size: pageSize, source_kind: "single" })
       .then((r) => {
         setJobs(r.items);
         setTotal(r.total);
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : t("common.failedToLoad")));
-  }, [page, pageSize, t]);
+  }, [page, pageSize, t, reloadTick]);
+
+  async function onDeleteJob(id: number) {
+    if (!confirm(t("pubHistory.deleteConfirm"))) return;
+    setBusy(true);
+    try {
+      await deletePublishJob(id);
+      setReloadTick((n) => n + 1);
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : t("common.actionFailed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onClearCompleted() {
+    if (!confirm(t("pubHistory.clearCompletedConfirm"))) return;
+    setBusy(true);
+    try {
+      const { deleted } = await clearCompletedPublishJobs({
+        source_kind: "single",
+      });
+      alert(t("pubHistory.clearCompletedResult", { count: deleted }));
+      setPage(1);
+      setReloadTick((n) => n + 1);
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : t("common.actionFailed"));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <main className="mx-auto max-w-7xl px-5 py-6">
-      <div className="mb-4">
-        <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
-          {t("pubHistory.title")}
-        </h1>
-        <p className="mt-0.5 text-sm text-neutral-500 dark:text-neutral-400">
-          {t("pubHistory.subtitle", { count: total.toLocaleString() })}
-        </p>
+      <div className="mb-4 flex items-end justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
+            {t("pubHistory.title")}
+          </h1>
+          <p className="mt-0.5 text-sm text-neutral-500 dark:text-neutral-400">
+            {t("pubHistory.subtitle", { count: total.toLocaleString() })}
+          </p>
+        </div>
+        {total > 0 && (
+          <button
+            type="button"
+            onClick={onClearCompleted}
+            disabled={busy}
+            className="rounded-md border border-red-300 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-800/60 dark:text-red-400 dark:hover:bg-red-950/40"
+          >
+            {t("pubHistory.clearCompleted")}
+          </button>
+        )}
       </div>
 
       {error && (
@@ -58,19 +107,20 @@ export default function PostPage() {
               <th className="px-3 py-2">{t("pubHistory.colLang")}</th>
               <th className="px-3 py-2">{t("pubHistory.colPost")}</th>
               <th className="px-3 py-2">{t("pubHistory.colError")}</th>
+              <th className="px-3 py-2 w-10"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
             {jobs === null && (
               <tr>
-                <td colSpan={7} className="px-3 py-8 text-center text-neutral-500">
+                <td colSpan={8} className="px-3 py-8 text-center text-neutral-500">
                   {t("common.loading")}
                 </td>
               </tr>
             )}
             {jobs !== null && jobs.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-3 py-8 text-center text-neutral-500">
+                <td colSpan={8} className="px-3 py-8 text-center text-neutral-500">
                   {t("pubHistory.empty")}
                 </td>
               </tr>
@@ -131,6 +181,19 @@ export default function PostPage() {
                     <span className="text-amber-800 dark:text-amber-300">
                       {j.warnings[0]}
                     </span>
+                  )}
+                </td>
+                <td className="px-2 py-2 text-right">
+                  {(j.status === "posted" || j.status === "failed") && (
+                    <button
+                      type="button"
+                      onClick={() => onDeleteJob(j.id)}
+                      disabled={busy}
+                      title={t("pubHistory.deleteRow")}
+                      className="rounded p-1 text-neutral-400 hover:bg-red-50 hover:text-red-700 disabled:opacity-50 dark:text-neutral-500 dark:hover:bg-red-950/40 dark:hover:text-red-400"
+                    >
+                      ×
+                    </button>
                   )}
                 </td>
               </tr>

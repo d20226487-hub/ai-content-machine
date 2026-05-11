@@ -83,6 +83,21 @@ class OpenAICompatibleProvider(BaseProvider):
                 f"Unexpected {self.code} response shape: {e}", raw=resp.text
             ) from e
 
+        usage = data.get("usage") or {}
         return GenerationResult(
-            text=text, model=model_used, finish_reason=finish, raw=data
+            text=text,
+            model=model_used,
+            finish_reason=finish,
+            raw=data,
+            prompt_tokens=_safe_int(usage.get("prompt_tokens")),
+            completion_tokens=_safe_int(usage.get("completion_tokens")),
         )
+
+
+def _safe_int(v: object) -> int | None:
+    if v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None

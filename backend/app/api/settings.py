@@ -16,6 +16,11 @@ from app.schemas.provider import (
     ProviderRead,
     ProviderUpdate,
 )
+from app.schemas.usage import PricingTableRow, PricingTableUpdate
+from app.services.pricing import load_pricing, save_pricing
+from app.services.provider_cache import invalidate as invalidate_provider_cache
+from app.db.models import User
+from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/settings", tags=["settings"], dependencies=[Depends(require_role("admin"))])
 
@@ -57,6 +62,9 @@ async def update_provider(
 
     await db.commit()
     await db.refresh(provider)
+    # Drop the read cache so the admin's next page load reflects the change
+    # in this worker. Cross-worker propagation is bounded by the cache TTL.
+    invalidate_provider_cache()
     return provider
 
 
@@ -155,3 +163,37 @@ async def _get_or_404(db: AsyncSession, code: str) -> Provider:
             detail=f"Provider '{code}' not found",
         )
     return provider
+
+
+# ---------- pricing (#9 spend tracking) ----------
+
+
+@router.get("/pricing", response_model=list[PricingTableRow])
+async def get_pricing(db: AsyncSession = Depends(get_db)) -> list[PricingTableRow]:
+    """Read the per-`provider:model` pricing table. Empty list if unset."""
+    raw = await load_pricing(db)
+    out: list[PricingTableRow] = []
+    for key, rate in raw.items():
+        provider, _, model = key.partition(":")
+        out.append(
+            PricingTableRow(
+                provider_code=provider,
+                model=model,
+                input_per_1m=rate.get("input_per_1m"),
+                output_per_1m=rate.get("output_per_1m"),
+            )
+        )
+    return out
+
+
+@router.put("/pricing", response_model=list[PricingTableRow])
+async def put_pricing(
+    payload: PricingTableUpdate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> list[PricingTableRow]:
+    """Idempotent overwrite — sends the full table on save. Empty/zero rates
+    clear that row; a missing (provider:model) pair clears it entirely."""
+    rows_dict = [r.model_dump() for r in payload.rates]
+    await save_pricing(db, rows_dict, actor_id=actor.id)
+    return await get_pricing(db)

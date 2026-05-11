@@ -17,6 +17,8 @@ from app.db.models import Provider
 from app.services.ai_assist import first_enabled_provider_code
 from app.services.error_log import log_error
 from app.services.prompts import extract_variables, render_template
+from app.services.provider_cache import get_enabled_providers
+from app.services.usage import record_usage
 
 router = APIRouter(
     prefix="/generate", tags=["generate"], dependencies=[Depends(get_current_user)]
@@ -40,21 +42,21 @@ async def list_enabled_providers(
 ) -> list[EnabledProvider]:
     """Every provider toggled ON in Settings, regardless of whether a key is set yet.
     The frontend disables options where has_api_key=false so the user understands
-    why an enabled provider isn't selectable."""
-    rows = (
-        await db.execute(
-            select(Provider).where(Provider.enabled.is_(True)).order_by(Provider.id)
-        )
-    ).scalars().all()
+    why an enabled provider isn't selectable.
+
+    Backed by a 15s in-process TTL cache; settings.py PATCH/test routes call
+    invalidate() so an admin's own session sees changes immediately. Other
+    workers see them on the next TTL boundary."""
+    snapshot = await get_enabled_providers(db)
     return [
         EnabledProvider(
             code=p.code,
             display_name=p.display_name,
             default_model=p.default_model,
-            available_models=p.available_models or [],
-            has_api_key=bool(p.api_key_encrypted),
+            available_models=list(p.available_models),
+            has_api_key=p.has_api_key,
         )
-        for p in rows
+        for p in snapshot
     ]
 
 
@@ -159,6 +161,21 @@ async def generate_single(
             resource_id=payload.prompt_id,
         )
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
+
+    # Track-only spend log (#9). Best-effort: never breaks the request.
+    await record_usage(
+        db,
+        user_id=getattr(user, "id", None),
+        provider_code=code,
+        model=result.model,
+        prompt_tokens=result.prompt_tokens,
+        completion_tokens=result.completion_tokens,
+        source="single",
+        source_ref={
+            "prompt_id": payload.prompt_id,
+            "version_number": payload.version_number,
+        },
+    )
 
     return GenerateSingleResponse(
         text=result.text,

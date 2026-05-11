@@ -6,6 +6,8 @@ import { useEffect, useState } from "react";
 import { ApiError } from "@/lib/api";
 import { useT } from "@/lib/i18n-context";
 import {
+  clearCompletedBulkRuns,
+  deleteBulkRun,
   listBulkRuns,
   type BulkRunStatus,
   type BulkRunSummary,
@@ -24,6 +26,8 @@ export default function RunsPage() {
   const { t } = useT();
   const [runs, setRuns] = useState<BulkRunSummary[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -49,17 +53,61 @@ export default function RunsPage() {
       clearInterval(handle);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runs?.map((r) => `${r.id}:${r.status}:${r.done}:${r.failed}`).join(",")]);
+  }, [runs?.map((r) => `${r.id}:${r.status}:${r.done}:${r.failed}`).join(","), reloadTick]);
+
+  async function onDeleteRun(id: number) {
+    if (!confirm(t("bulkRuns.deleteConfirm", { id }))) return;
+    setBusy(true);
+    try {
+      await deleteBulkRun(id);
+      setRuns((cur) => (cur ? cur.filter((r) => r.id !== id) : cur));
+      setReloadTick((n) => n + 1);
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : t("common.actionFailed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onClearCompleted() {
+    if (!confirm(t("bulkRuns.clearCompletedConfirm"))) return;
+    setBusy(true);
+    try {
+      const { deleted } = await clearCompletedBulkRuns();
+      alert(t("bulkRuns.clearCompletedResult", { count: deleted }));
+      setReloadTick((n) => n + 1);
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : t("common.actionFailed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const hasCompleted = !!runs?.some((r) =>
+    ["done", "failed", "cancelled"].includes(r.status),
+  );
 
   return (
     <main className="mx-auto max-w-7xl px-5 py-6">
-      <div className="mb-4">
-        <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
-          {t("bulkRuns.title")}
-        </h1>
-        <p className="mt-0.5 text-sm text-neutral-500 dark:text-neutral-400">
-          {t("bulkRuns.subtitle")}
-        </p>
+      <div className="mb-4 flex items-end justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
+            {t("bulkRuns.title")}
+          </h1>
+          <p className="mt-0.5 text-sm text-neutral-500 dark:text-neutral-400">
+            {t("bulkRuns.subtitle")}
+          </p>
+        </div>
+        {hasCompleted && (
+          <button
+            type="button"
+            onClick={onClearCompleted}
+            disabled={busy}
+            className="rounded-md border border-red-300 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-800/60 dark:text-red-400 dark:hover:bg-red-950/40"
+          >
+            {t("bulkRuns.clearCompleted")}
+          </button>
+        )}
       </div>
 
       {loadError && (
@@ -78,19 +126,20 @@ export default function RunsPage() {
               <th className="px-3 py-2">{t("bulkRuns.colProfile")}</th>
               <th className="px-3 py-2">{t("bulkRuns.colStatus")}</th>
               <th className="px-3 py-2">{t("bulkRuns.colProgress")}</th>
+              <th className="px-3 py-2 w-10"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
             {runs === null && (
               <tr>
-                <td colSpan={6} className="px-3 py-8 text-center text-neutral-500">
+                <td colSpan={7} className="px-3 py-8 text-center text-neutral-500">
                   {t("common.loading")}
                 </td>
               </tr>
             )}
             {runs !== null && runs.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-3 py-8 text-center text-neutral-500">
+                <td colSpan={7} className="px-3 py-8 text-center text-neutral-500">
                   {t("bulkRuns.empty")}
                 </td>
               </tr>
@@ -146,6 +195,22 @@ export default function RunsPage() {
                         )}
                       </span>
                     </div>
+                  </td>
+                  <td className="px-2 py-2 text-right">
+                    {["done", "failed", "cancelled"].includes(r.status) && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteRun(r.id);
+                        }}
+                        disabled={busy}
+                        title={t("bulkRuns.deleteRow")}
+                        className="rounded p-1 text-neutral-400 hover:bg-red-50 hover:text-red-700 disabled:opacity-50 dark:text-neutral-500 dark:hover:bg-red-950/40 dark:hover:text-red-400"
+                      >
+                        ×
+                      </button>
+                    )}
                   </td>
                 </tr>
               );

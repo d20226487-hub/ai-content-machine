@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { EditPromptModal } from "@/components/EditPromptModal";
+import { TestPromptModal } from "@/components/TestPromptModal";
 import { ApiError } from "@/lib/api";
 import { useT } from "@/lib/i18n-context";
 import {
@@ -29,6 +30,7 @@ export default function PromptDetailPage() {
   const [tags, setTags] = useState<Tag[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
+  const [testing, setTesting] = useState(false);
 
   const [versionContents, setVersionContents] = useState<Record<number, string>>({});
   const [openVersions, setOpenVersions] = useState<Set<number>>(new Set());
@@ -61,15 +63,23 @@ export default function PromptDetailPage() {
 
   useEffect(() => {
     if (!Number.isFinite(id)) return;
+    let ignored = false;
     getPrompt(id)
-      .then(setPrompt)
-      .catch((err) =>
-        setError(err instanceof ApiError ? err.message : t("common.failedToLoad")),
-      );
+      .then((p) => {
+        if (!ignored) setPrompt(p);
+      })
+      .catch((err) => {
+        if (ignored) return;
+        setError(err instanceof ApiError ? err.message : t("common.failedToLoad"));
+      });
     Promise.all([listCategories(), listTags()]).then(([cs, ts]) => {
+      if (ignored) return;
       setCategories(cs);
       setTags(ts);
     });
+    return () => {
+      ignored = true;
+    };
   }, [id, t]);
 
   if (error) {
@@ -181,6 +191,13 @@ export default function PromptDetailPage() {
           )}
         </div>
         <div className="flex shrink-0 gap-2">
+          <button
+            onClick={() => setTesting(true)}
+            title={t("promptDetail.testHint")}
+            className="rounded-md border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
+          >
+            {t("promptDetail.test")}
+          </button>
           <button
             onClick={() => setEditing(true)}
             className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 dark:hover:bg-neutral-200"
@@ -406,6 +423,7 @@ export default function PromptDetailPage() {
           }}
         />
       )}
+      {testing && <TestPromptModal prompt={prompt} onClose={() => setTesting(false)} />}
     </main>
   );
 }

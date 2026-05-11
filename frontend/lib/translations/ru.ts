@@ -11,6 +11,7 @@ import type { en } from "./en";
 export const ru: Record<keyof typeof en, string> = {
   // ---------- common ----------
   "common.loading": "Загрузка…",
+  "common.retry": "Повторить",
   "common.save": "Сохранить",
   "common.saving": "Сохранение…",
   "common.saved": "Сохранено",
@@ -125,6 +126,28 @@ export const ru: Record<keyof typeof en, string> = {
   "users.colRole": "Роль",
   "users.colActive": "Активен",
   "users.colCreated": "Создан",
+  "users.colSpend": "Расходы (этот месяц)",
+  "users.colSpendHint":
+    "Расходы на вызовы LLM API в этом месяце (USD). Наведите на мелкие цифры — увидите за день / 7 дней / всё время. Цены задаются в Настройках → Цены.",
+  "users.spendToday": "сегодня",
+  "users.spendWeek": "7д",
+  "users.spendMonth": "месяц",
+  "users.spendAll": "всё время",
+  "users.spendEvents": "вызовов",
+  "users.orphanSpend":
+    "Расходы удалённых пользователей: {month} в этом месяце, {all} всего.",
+  "pricing.title": "Цены LLM",
+  "pricing.subtitle":
+    "USD за 1 000 000 токенов для каждой пары provider:model. Стоимость рассчитывается в момент записи события — изменения здесь влияют только на новые генерации, исторические суммы не пересчитываются.",
+  "pricing.addRow": "+ Добавить строку",
+  "pricing.empty":
+    "Цены ещё не настроены. Добавьте строку для пары provider:model, чтобы начать отслеживать расходы.",
+  "pricing.colProvider": "Код провайдера",
+  "pricing.colModel": "Модель",
+  "pricing.colInput": "Вход $/1M",
+  "pricing.colOutput": "Выход $/1M",
+  "pricing.unitHint":
+    "USD за 1M токенов. Десятичные дроби допустимы: 0.075, 1.25 и т. п.",
   "users.you": "вы",
   "users.confirmDelete":
     "Удалить пользователя {email}? Это действие нельзя отменить.",
@@ -149,6 +172,48 @@ export const ru: Record<keyof typeof en, string> = {
 
   // ---------- settings ----------
   "settings.title": "Настройки",
+  "backup.title": "Резервные копии базы",
+  "backup.subtitle":
+    "Ежедневный pg_dump запускается в 03:00 UTC. Дампы хранятся локально и при желании загружаются в любое S3-совместимое хранилище.",
+  "backup.scheduleHeading": "Расписание",
+  "backup.scheduleHint":
+    "Резервные копии создаются раз в сутки в выбранное время. Изменения вступают в силу при следующем запуске — перезапуск не нужен.",
+  "backup.scheduleEnabled": "Создавать копии автоматически",
+  "backup.scheduleEnabledHint":
+    "Когда выключено — ежедневное расписание не запускается. Запустить вручную можно кнопкой выше в любой момент.",
+  "backup.scheduleHour": "Время запуска (UTC)",
+  "backup.destinationHeading": "Куда сохранять",
+  "backup.destinationHint":
+    "Резервная копия всегда сохраняется на сервере, где работает приложение. По желанию её можно также загружать в S3-совместимое хранилище (AWS S3, MinIO, Garage, Backblaze B2 и т. п.) для внешнего копирования.",
+  "backup.s3Enabled": "Загружать копии в S3-совместимое хранилище",
+  "backup.s3EnabledHint":
+    "Когда выключено — копии остаются только на этом сервере. Когда включено — воркер загружает каждый дамп и удаляет более старые по сроку хранения в S3.",
+  "backup.endpoint": "URL эндпойнта",
+  "backup.region": "Регион",
+  "backup.bucket": "Бакет",
+  "backup.prefix": "Префикс ключа",
+  "backup.accessKey": "Access key ID",
+  "backup.secretKey": "Secret access key",
+  "backup.secretConfigured": "(задан — введите новое значение для замены)",
+  "backup.secretEmpty": "Не задан",
+  "backup.clearSecret": "Удалить сохранённый ключ",
+  "backup.secretCleared": "Ключ удалён.",
+  "backup.localRetention": "Локальное хранение (дней)",
+  "backup.s3Retention": "Хранение в S3 (дней)",
+  "backup.testConnection": "Проверить подключение",
+  "backup.testing": "Проверка…",
+  "backup.runNow": "Запустить сейчас",
+  "backup.runningNow": "Запуск…",
+  "backup.recentRuns": "Последние запуски",
+  "backup.noRuns": "Пока нет резервных копий.",
+  "backup.col.started": "Начало",
+  "backup.col.status": "Статус",
+  "backup.col.size": "Размер",
+  "backup.col.trigger": "Триггер",
+  "backup.col.s3": "Ключ S3",
+  "backup.col.error": "Ошибка",
+  "backup.loadHint":
+    "Если это появилось после обновления, бэкенду, возможно, нужна пересборка + `alembic upgrade head`, чтобы подхватить новые роуты и таблицу backup_runs.",
   "settings.subtitle":
     "Провайдеры ИИ, модели по умолчанию и лимиты запросов для каждого провайдера. Только API-ключи шифруются на диске; вы можете очистить или заменить их в любой момент.",
   "settings.loadingProviders": "Загрузка провайдеров…",
@@ -286,6 +351,23 @@ export const ru: Record<keyof typeof en, string> = {
   "promptDetail.createdBy": "Создан",
   "promptDetail.createdOn": "{date}",
   "promptDetail.currentContent": "Текущая версия",
+  "promptDetail.test": "Тест",
+  "promptDetail.testHint":
+    "Попробовать этот промпт с тестовыми значениями переменных — без сохранения и публикации, просто для быстрой проверки.",
+  "test.title": "Тест промпта — {name}",
+  "test.subtitle":
+    "Заполните переменные и сгенерируйте результат. Ничего не сохраняется.",
+  "test.noVariables": "У этого промпта нет переменных; нажмите «Сгенерировать», чтобы увидеть вывод.",
+  "test.provider": "Провайдер",
+  "test.model": "Модель",
+  "test.noKey": " (нет API-ключа)",
+  "test.pickProviderModel": "Сначала выберите провайдера и модель.",
+  "test.missingHint": "Не заполнены переменные: {vars}",
+  "test.generate": "Сгенерировать",
+  "test.generating": "Генерация…",
+  "test.generateFailed": "Не удалось сгенерировать",
+  "test.failedLoadProviders": "Не удалось загрузить провайдеров",
+  "test.resultMeta": "{provider} · {model}",
   "promptDetail.variables": "Переменные",
   "promptDetail.versionHistory": "История версий ({count})",
   "promptDetail.versionCurrent": "текущая",
@@ -555,6 +637,13 @@ export const ru: Record<keyof typeof en, string> = {
   "queue.willGenerate":
     "Будет сгенерировано ячеек: {count} в колонках: {cols} × строках: {rows}.",
   "queue.using": "Используется: {variants}",
+  "queue.usingOverride": "Переопределение: для каждой ячейки этого запуска — {provider} / {model}.",
+  "queue.overrideLabel": "Переопределить провайдера и модель для этого запуска",
+  "queue.overrideHint":
+    "Принудительно использовать один и тот же провайдер/модель для всех ячеек, игнорируя настройки колонок — полезно для разовых A/B тестов или перезапусков.",
+  "queue.overrideProvider": "Провайдер",
+  "queue.overrideModel": "Модель",
+  "queue.overrideNoKey": " (нет API-ключа)",
   "queue.workspaceDefault": "(значение по умолчанию)",
   "queue.defaultModel": "(модель по умолчанию)",
   "queue.failedToEnqueue": "Не удалось поставить в очередь",
@@ -816,6 +905,22 @@ export const ru: Record<keyof typeof en, string> = {
   "bulkRuns.empty": "Массовых запусков пока нет.",
   "bulkRuns.tableFallback": "Таблица №{id}",
   "bulkRuns.failedSuffix": "(ошибок: {count})",
+  "bulkRuns.clearCompleted": "Очистить завершённые",
+  "bulkRuns.clearCompletedConfirm":
+    "Удалить все завершённые прогоны (done / failed / cancelled) и их задачи публикации? Это действие необратимо.",
+  "bulkRuns.clearCompletedResult": "Удалено прогонов: {count}.",
+  "bulkRuns.deleteRow": "Удалить",
+  "bulkRuns.deleteConfirm":
+    "Удалить прогон #{id} и его задачи публикации? Это действие необратимо.",
+  "bulkRuns.colActions": "",
+  "pubHistory.clearCompleted": "Очистить завершённые",
+  "pubHistory.clearCompletedConfirm":
+    "Удалить все завершённые задачи публикации (posted / failed)? Это действие необратимо.",
+  "pubHistory.clearCompletedResult": "Удалено задач: {count}.",
+  "pubHistory.deleteRow": "Удалить",
+  "pubHistory.deleteConfirm":
+    "Удалить эту задачу публикации? Это действие необратимо.",
+  "pubHistory.colActions": "",
 
   // bulk run detail
   "bulkRun.back": "← Назад к запускам",
@@ -833,17 +938,47 @@ export const ru: Record<keyof typeof en, string> = {
   "bulkRun.skippedPrefix": "{count} пропущено",
   "bulkRun.colTime": "Время",
   "bulkRun.colRow": "Строка",
+  "bulkRun.colDomain": "Сайт",
+  "bulkRun.colProfile": "Профиль",
   "bulkRun.colStatus": "Статус",
   "bulkRun.colPost": "Запись",
   "bulkRun.colError": "Ошибка / предупреждения",
   "bulkRun.empty": "Результатов по строкам пока нет.",
   "bulkRun.viewLink": "Открыть",
+  "bulkRun.modeSingle": "Один сайт",
+  "bulkRun.modeMulti": "Несколько сайтов",
+  "bulkRun.acrossDomains": "по {count} сайтам",
+  "bulkRun.byDomainHeading": "По сайтам ({count})",
+  "bulkRun.colTotal": "Всего",
+  "bulkRun.colPosted": "Опубликовано",
+  "bulkRun.colFailed": "С ошибкой",
+  "bulkRun.unresolved": "(не определён)",
+  "bulkRun.allFailed": "все упали",
+  "bulkRun.allFailedHint": "Все строки на этот сайт завершились ошибкой — проверьте сначала учётные данные и доступность.",
+  "bulkRun.filter": "Фильтр",
+  "bulkRun.filterAll": "все",
+  "bulkRun.filterDomain": "Сайт",
+  "bulkRun.filterStatus": "Статус",
+  "bulkRun.clearFilters": "Сбросить фильтры",
 
   // bulk publish modal
   "bulkPub.title": "Массовая публикация",
   "bulkPub.subtitle":
     "Каждая строка таблицы {table} становится отдельной записью. Сопоставьте поля публикации с колонками; при необходимости укажите колонки, в которые будут записаны новый ID и URL записи.",
+  "bulkPub.mode": "Режим",
+  "bulkPub.modeSingle": "Один сайт",
+  "bulkPub.modeMulti": "Несколько сайтов",
+  "bulkPub.modeSingleHint":
+    "Все строки этого запуска отправляются на один домен и в один профиль (тип записи).",
+  "bulkPub.modeMultiHint":
+    "Каждая строка читает целевой сайт (и при желании — профиль) из колонок таблицы. Подходит для сетей сателлитов: одна таблица содержит контент для множества сайтов.",
   "bulkPub.fieldDomain": "Домен",
+  "bulkPub.fieldDomainColumn": "Колонка с доменом",
+  "bulkPub.fieldProfileColumn": "Колонка с профилем (необязательно)",
+  "bulkPub.profileColumnDefault": "— использовать профиль по умолчанию для каждого домена —",
+  "bulkPub.profileColumnHint":
+    "Если задано — каждая строка берёт имя профиля из этой колонки. Имя должно совпадать с настроенным на целевом домене.",
+  "bulkPub.pickColumn": "— выберите колонку —",
   "bulkPub.fieldPostType": "Тип записи",
   "bulkPub.fieldLanguage": "Язык",
   "bulkPub.rows": "Строки",
@@ -870,6 +1005,8 @@ export const ru: Record<keyof typeof en, string> = {
   "bulkPub.remember":
     "Запомнить это сопоставление для будущих запусков на это назначение",
   "bulkPub.willPublish": "Будет опубликовано строк: {count}.",
+  "bulkPub.willPublishAcross": "Будет опубликовано строк: {count} по {domains} сайтам.",
+  "bulkPub.andMore": "…и ещё {count}",
   "bulkPub.missingRequired":
     "Не выбрана колонка для обязательных полей: {fields}",
   "bulkPub.noRowsSelected": "Не выбрано ни одной строки.",

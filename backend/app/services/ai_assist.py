@@ -31,9 +31,18 @@ async def first_enabled_provider_code(db: AsyncSession) -> str | None:
 
 
 async def draft_prompt(
-    db: AsyncSession, *, description: str, provider_code: str | None, model: str | None
+    db: AsyncSession,
+    *,
+    description: str,
+    provider_code: str | None,
+    model: str | None,
+    user_id: int | None = None,
 ) -> tuple[str, str, str]:
-    """Returns (draft_content, provider_used_code, model_used)."""
+    """Returns (draft_content, provider_used_code, model_used).
+
+    `user_id` is recorded against the spend log (#9). Optional so the
+    function stays callable from non-HTTP contexts.
+    """
     code = provider_code or await first_enabled_provider_code(db)
     if not code:
         raise ProviderNotConfigured(
@@ -69,5 +78,20 @@ async def draft_prompt(
     if text.startswith("```") and text.endswith("```"):
         lines = text.split("\n")
         text = "\n".join(lines[1:-1]).strip()
+
+    # Track-only spend log (#9). Local import to avoid a circular: usage.py
+    # imports pricing which imports app_settings_cache; ai_assist sits below
+    # all of those today.
+    from app.services.usage import record_usage
+    await record_usage(
+        db,
+        user_id=user_id,
+        provider_code=code,
+        model=result.model,
+        prompt_tokens=result.prompt_tokens,
+        completion_tokens=result.completion_tokens,
+        source="ai_assist",
+        source_ref=None,
+    )
 
     return text, code, result.model

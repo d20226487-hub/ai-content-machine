@@ -73,6 +73,21 @@ class AIStudioProvider(BaseProvider):
         except (KeyError, IndexError, TypeError) as e:
             raise ProviderError(f"Unexpected AI Studio response shape: {e}", raw=data) from e
 
+        usage = data.get("usageMetadata") or {}
         return GenerationResult(
-            text=text, model=chosen_model, finish_reason=finish, raw=data
+            text=text,
+            model=chosen_model,
+            finish_reason=finish,
+            raw=data,
+            prompt_tokens=_safe_int(usage.get("promptTokenCount")),
+            completion_tokens=_safe_int(usage.get("candidatesTokenCount")),
         )
+
+
+def _safe_int(v: object) -> int | None:
+    if v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None

@@ -5,12 +5,14 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { NewPromptModal } from "@/components/NewPromptModal";
+import { TestPromptModal } from "@/components/TestPromptModal";
 import { UserChip } from "@/components/UserChip";
 import { ApiError } from "@/lib/api";
 import { useT } from "@/lib/i18n-context";
 import {
   createCategory,
   deleteCategory,
+  getPrompt,
   listCategories,
   listPrompts,
   listTags,
@@ -70,6 +72,20 @@ export default function PromptsPage() {
   const [searchDraft, setSearchDraft] = useState(q);
   const [debouncedSearch, setDebouncedSearch] = useState(q);
   const [refreshTick, setRefreshTick] = useState(0);
+  const [testingPrompt, setTestingPrompt] = useState<PromptDetail | null>(null);
+  const [testLoadingId, setTestLoadingId] = useState<number | null>(null);
+
+  async function onOpenTest(promptId: number) {
+    setTestLoadingId(promptId);
+    try {
+      const detail = await getPrompt(promptId);
+      setTestingPrompt(detail);
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : t("prompts.failedLoadPrompts"));
+    } finally {
+      setTestLoadingId(null);
+    }
+  }
 
   useEffect(() => {
     setSearchDraft(q);
@@ -437,6 +453,17 @@ export default function PromptsPage() {
                   >
                     {t("common.open")}
                   </Link>
+                  <button
+                    type="button"
+                    onClick={() => onOpenTest(p.id)}
+                    disabled={testLoadingId === p.id}
+                    title={t("promptDetail.testHint")}
+                    className="font-medium text-neutral-700 hover:underline disabled:opacity-60 dark:text-neutral-300"
+                  >
+                    {testLoadingId === p.id
+                      ? t("test.generating")
+                      : t("promptDetail.test")}
+                  </button>
                   <PromptMoveControl
                     prompt={p}
                     categories={categories}
@@ -523,6 +550,13 @@ export default function PromptsPage() {
             setTotal((n) => n + 1);
             void refreshCategories();
           }}
+        />
+      )}
+
+      {testingPrompt && (
+        <TestPromptModal
+          prompt={testingPrompt}
+          onClose={() => setTestingPrompt(null)}
         />
       )}
     </main>

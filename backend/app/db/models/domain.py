@@ -17,7 +17,9 @@ class Domain(Base):
     __tablename__ = "domains"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Unique because multi-site bulk publish resolves rows to domains by
+    # exact name match — duplicates would be ambiguous.
+    name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
     base_url: Mapped[str] = mapped_column(String(500), nullable=False, unique=True)
 
     # 'wordpress' | 'custom'

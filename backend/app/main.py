@@ -8,6 +8,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import (
     auth,
+    backup as backup_router,
     categories,
     domains as domains_router,
     errors as errors_router,
@@ -23,11 +24,24 @@ from app.api import (
     users as users_module,
 )
 from app.core.config import get_settings
+from app.core.logging import RequestIdMiddleware, configure_logging
+from app.core.sentry import init_sentry
 from app.services.error_log import log_error_standalone
 
 settings = get_settings()
 
+# Configure logging FIRST, before FastAPI / routers import-time logging would
+# otherwise default-format. Idempotent.
+configure_logging(level=settings.LOG_LEVEL, fmt=settings.LOG_FORMAT)
+
+# Sentry — no-op when SENTRY_DSN is unset.
+init_sentry("api")
+
 app = FastAPI(title="AI Content Machine", version="0.1.0")
+
+# Bind request_id and emit one structured access-log line per request.
+# Added BEFORE other middlewares so the id covers their work too.
+app.add_middleware(RequestIdMiddleware)
 
 # gzip larger responses; ~85% reduction on HTML/JSON-heavy payloads.
 # Threshold of 1024 bytes skips the overhead for tiny replies.
@@ -86,6 +100,7 @@ app.include_router(errors_router.router)
 app.include_router(domains_router.router)
 app.include_router(publish_router.router)
 app.include_router(publish_bulk_router.router)
+app.include_router(backup_router.router)
 
 
 @app.get("/")

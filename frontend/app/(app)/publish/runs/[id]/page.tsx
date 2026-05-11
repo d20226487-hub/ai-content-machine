@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 
 import { ApiError } from "@/lib/api";
 import { useT } from "@/lib/i18n-context";
-import { listPublishJobs, type PublishJob } from "@/lib/publish";
+import { listPublishJobs, type JobStatus, type PublishJob } from "@/lib/publish";
 import {
   cancelBulkRun,
   getBulkRun,
@@ -40,20 +40,36 @@ export default function RunDetailPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Multi-mode filters: by domain id (null = "(unresolved)") and by job status.
+  const [filterDomain, setFilterDomain] = useState<string>("all");
+  const [filterStatus, setFilterStatus] = useState<"all" | JobStatus>("all");
+
   const refresh = useCallback(async () => {
     try {
-      const [r, j] = await Promise.all([
-        getBulkRun(id),
-        listPublishJobs({ page, page_size: pageSize, run_id: id }),
-      ]);
+      const opts: Parameters<typeof listPublishJobs>[0] = {
+        page,
+        page_size: pageSize,
+        run_id: id,
+      };
+      if (filterStatus !== "all") opts.status = filterStatus;
+      if (filterDomain !== "all" && filterDomain !== "unresolved") {
+        opts.domain_id = Number(filterDomain);
+      }
+      const [r, j] = await Promise.all([getBulkRun(id), listPublishJobs(opts)]);
+      // For "unresolved" we still fetched all jobs, then filter client-side
+      // since the listPublishJobs API doesn't support "domain_id IS NULL".
+      let items = j.items;
+      if (filterDomain === "unresolved") {
+        items = items.filter((it) => it.domain_id == null);
+      }
       setRun(r);
-      setJobs(j.items);
+      setJobs(items);
       setJobsTotal(j.total);
       setLoadError(null);
     } catch (err) {
       setLoadError(err instanceof ApiError ? err.message : t("bulkRun.failedToLoad"));
     }
-  }, [id, page, pageSize, t]);
+  }, [id, page, pageSize, filterDomain, filterStatus, t]);
 
   useEffect(() => {
     if (!Number.isFinite(id)) return;
@@ -79,6 +95,8 @@ export default function RunDetailPage() {
       setBusy(false);
     }
   }
+
+  const isMulti = run?.mode === "multi";
 
   if (loadError) {
     return (
@@ -110,10 +128,11 @@ export default function RunDetailPage() {
   async function onRerunFailed() {
     setBusy(true);
     try {
-      const next = await rerunFailedRows(id);
-      router.push(`/publish/runs/${next.id}`);
+      await rerunFailedRows(id);
+      await refresh();
     } catch (err) {
       alert(err instanceof ApiError ? err.message : t("bulkRun.rerunFailedFailed"));
+    } finally {
       setBusy(false);
     }
   }
@@ -129,13 +148,31 @@ export default function RunDetailPage() {
 
       <div className="mb-4 flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
+          <h1 className="flex items-center gap-2 text-xl font-semibold text-neutral-900 dark:text-neutral-100">
             {t("bulkRun.runHash", { id: run.id })}
+            <span
+              className={
+                "inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide " +
+                (isMulti
+                  ? "bg-purple-50 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300"
+                  : "bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300")
+              }
+            >
+              {isMulti ? t("bulkRun.modeMulti") : t("bulkRun.modeSingle")}
+            </span>
           </h1>
           <p className="mt-0.5 text-sm text-neutral-500 dark:text-neutral-400">
-            <b>{run.table_name ?? t("bulkRuns.tableFallback", { id: run.table_id })}</b> →{" "}
-            <b>{run.domain_name ?? t("pubHistory.deletedDomain")}</b>
-            {run.profile_name && <> · {run.profile_name}</>}
+            <b>{run.table_name ?? t("bulkRuns.tableFallback", { id: run.table_id })}</b>
+            {!isMulti && (
+              <>
+                {" → "}
+                <b>{run.domain_name ?? t("pubHistory.deletedDomain")}</b>
+                {run.profile_name && <> · {run.profile_name}</>}
+              </>
+            )}
+            {isMulti && (
+              <> · {t("bulkRun.acrossDomains", { count: run.by_domain.length })}</>
+            )}
             {run.language && <> · {run.language}</>}
           </p>
         </div>
@@ -211,6 +248,133 @@ export default function RunDetailPage() {
         </div>
       </div>
 
+      {/* Per-domain summary — multi mode only */}
+      {isMulti && run.by_domain.length > 0 && (
+        <div className="mb-4 rounded-lg border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
+          <h2 className="mb-2 text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+            {t("bulkRun.byDomainHeading", { count: run.by_domain.length })}
+          </h2>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-xs">
+              <thead className="text-left text-[11px] font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                <tr>
+                  <th className="py-1 pr-3">{t("bulkRun.colDomain")}</th>
+                  <th className="py-1 pr-3 text-right">{t("bulkRun.colTotal")}</th>
+                  <th className="py-1 pr-3 text-right">{t("bulkRun.colPosted")}</th>
+                  <th className="py-1 pr-3 text-right">{t("bulkRun.colFailed")}</th>
+                  <th className="py-1"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
+                {run.by_domain.map((d, i) => {
+                  const filterValue = d.domain_id == null ? "unresolved" : String(d.domain_id);
+                  const isAllFailed = d.posted === 0 && d.failed > 0;
+                  return (
+                    <tr key={`${d.domain_id ?? "u"}-${i}`}>
+                      <td className="py-1 pr-3 font-mono text-neutral-700 dark:text-neutral-300">
+                        {d.domain_name ?? t("bulkRun.unresolved")}
+                      </td>
+                      <td className="py-1 pr-3 text-right tabular-nums">{d.total}</td>
+                      <td className="py-1 pr-3 text-right tabular-nums text-green-700 dark:text-green-400">
+                        {d.posted}
+                      </td>
+                      <td
+                        className={
+                          "py-1 pr-3 text-right tabular-nums " +
+                          (d.failed > 0
+                            ? "text-red-700 dark:text-red-400"
+                            : "text-neutral-500 dark:text-neutral-400")
+                        }
+                      >
+                        {d.failed}
+                        {isAllFailed && (
+                          <span
+                            title={t("bulkRun.allFailedHint")}
+                            className="ml-1 inline-block rounded bg-red-100 px-1 text-[10px] font-medium text-red-800 dark:bg-red-950/60 dark:text-red-300"
+                          >
+                            {t("bulkRun.allFailed")}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-1 text-right">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFilterDomain(filterValue);
+                            setPage(1);
+                          }}
+                          className="text-[11px] text-blue-600 hover:underline dark:text-blue-400"
+                        >
+                          {t("bulkRun.filter")}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Filters: domain + status — only useful in multi mode for domain;
+          status filter helpful in both. */}
+      <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-neutral-600 dark:text-neutral-400">
+        {isMulti && (
+          <label className="flex items-center gap-1">
+            <span>{t("bulkRun.filterDomain")}:</span>
+            <select
+              value={filterDomain}
+              onChange={(e) => {
+                setFilterDomain(e.target.value);
+                setPage(1);
+              }}
+              className="rounded-md border border-neutral-300 bg-white px-2 py-0.5 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
+            >
+              <option value="all">{t("bulkRun.filterAll")}</option>
+              {run.by_domain.map((d, i) => (
+                <option
+                  key={`${d.domain_id ?? "u"}-${i}`}
+                  value={d.domain_id == null ? "unresolved" : String(d.domain_id)}
+                >
+                  {d.domain_name ?? t("bulkRun.unresolved")} ({d.total})
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <label className="flex items-center gap-1">
+          <span>{t("bulkRun.filterStatus")}:</span>
+          <select
+            value={filterStatus}
+            onChange={(e) => {
+              setFilterStatus(e.target.value as "all" | JobStatus);
+              setPage(1);
+            }}
+            className="rounded-md border border-neutral-300 bg-white px-2 py-0.5 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
+          >
+            <option value="all">{t("bulkRun.filterAll")}</option>
+            <option value="posted">posted</option>
+            <option value="failed">failed</option>
+            <option value="posting">posting</option>
+            <option value="queued">queued</option>
+          </select>
+        </label>
+        {(filterDomain !== "all" || filterStatus !== "all") && (
+          <button
+            type="button"
+            onClick={() => {
+              setFilterDomain("all");
+              setFilterStatus("all");
+              setPage(1);
+            }}
+            className="text-blue-600 hover:underline dark:text-blue-400"
+          >
+            {t("bulkRun.clearFilters")}
+          </button>
+        )}
+      </div>
+
       {/* Per-row jobs */}
       <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
         <table className="min-w-full divide-y divide-neutral-200 text-sm dark:divide-neutral-800">
@@ -218,6 +382,8 @@ export default function RunDetailPage() {
             <tr className="text-left text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
               <th className="px-3 py-2">{t("bulkRun.colTime")}</th>
               <th className="px-3 py-2">{t("bulkRun.colRow")}</th>
+              <th className="px-3 py-2">{t("bulkRun.colDomain")}</th>
+              <th className="px-3 py-2">{t("bulkRun.colProfile")}</th>
               <th className="px-3 py-2">{t("bulkRun.colStatus")}</th>
               <th className="px-3 py-2">{t("bulkRun.colPost")}</th>
               <th className="px-3 py-2">{t("bulkRun.colError")}</th>
@@ -226,7 +392,7 @@ export default function RunDetailPage() {
           <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
             {jobs.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-3 py-6 text-center text-neutral-500">
+                <td colSpan={7} className="px-3 py-6 text-center text-neutral-500">
                   {t("bulkRun.empty")}
                 </td>
               </tr>
@@ -238,6 +404,12 @@ export default function RunDetailPage() {
                 </td>
                 <td className="px-3 py-2 text-xs text-neutral-700 dark:text-neutral-300">
                   {(j.source_ref?.row_id as number | undefined) ?? "—"}
+                </td>
+                <td className="px-3 py-2 text-xs font-mono text-neutral-700 dark:text-neutral-300">
+                  {j.domain_name ?? (j.domain_id == null ? <span className="text-neutral-500 italic">{t("bulkRun.unresolved")}</span> : j.domain_id)}
+                </td>
+                <td className="px-3 py-2 text-xs text-neutral-700 dark:text-neutral-300">
+                  {j.profile_name ?? <span className="text-neutral-500">—</span>}
                 </td>
                 <td className="px-3 py-2">
                   <span

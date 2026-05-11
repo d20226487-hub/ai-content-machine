@@ -1,3 +1,4 @@
+from app.db.models.backup_run import BackupRun
 from app.db.models.bulk_publish import BulkPublishRun, BulkTablePublishMapping
 from app.db.models.bulk_table import (
     BulkTable,
@@ -16,10 +17,12 @@ from app.db.models.provider import Provider
 from app.db.models.publish_job import PublishJob
 from app.db.models.role import Role
 from app.db.models.tag import Tag, prompt_tags
+from app.db.models.usage_event import UsageEvent
 from app.db.models.user import User
 
 __all__ = [
     "AppSetting",
+    "BackupRun",
     "BulkPublishRun",
     "BulkTable",
     "BulkTableCell",
@@ -38,6 +41,7 @@ __all__ = [
     "PublishJob",
     "Role",
     "Tag",
+    "UsageEvent",
     "User",
     "prompt_tags",
 ]

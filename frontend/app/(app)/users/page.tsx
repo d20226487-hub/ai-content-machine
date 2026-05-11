@@ -7,6 +7,11 @@ import { UserModal } from "@/components/UserModal";
 import { ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { useT } from "@/lib/i18n-context";
+import {
+  formatUsd,
+  listUserSpend,
+  type UserSpendSummary,
+} from "@/lib/spend";
 import { deleteUser, listRoles, listUsers } from "@/lib/users";
 import type { Role, User } from "@/lib/types";
 
@@ -22,6 +27,8 @@ export default function UsersPage() {
 
   const [users, setUsers] = useState<User[] | null>(null);
   const [roles, setRoles] = useState<Role[]>([]);
+  const [spendByUser, setSpendByUser] = useState<Record<number, UserSpendSummary>>({});
+  const [orphanSpend, setOrphanSpend] = useState<UserSpendSummary | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState>({ kind: "closed" });
 
@@ -33,14 +40,28 @@ export default function UsersPage() {
 
   useEffect(() => {
     if (!actor || !["admin", "manager"].includes(actor.role.name)) return;
-    Promise.all([listUsers(), listRoles()])
-      .then(([u, r]) => {
+    let ignored = false;
+    Promise.all([listUsers(), listRoles(), listUserSpend()])
+      .then(([u, r, s]) => {
+        if (ignored) return;
         setUsers(u);
         setRoles(r);
+        const byId: Record<number, UserSpendSummary> = {};
+        let orphan: UserSpendSummary | null = null;
+        for (const row of s) {
+          if (row.user_id == null) orphan = row;
+          else byId[row.user_id] = row;
+        }
+        setSpendByUser(byId);
+        setOrphanSpend(orphan);
       })
-      .catch((err) =>
-        setLoadError(err instanceof ApiError ? err.message : t("common.failedToLoad")),
-      );
+      .catch((err) => {
+        if (ignored) return;
+        setLoadError(err instanceof ApiError ? err.message : t("common.failedToLoad"));
+      });
+    return () => {
+      ignored = true;
+    };
   }, [actor, t]);
 
   if (authLoading || !actor) return null;
@@ -79,7 +100,7 @@ export default function UsersPage() {
   }
 
   return (
-    <main className="mx-auto max-w-5xl p-10">
+    <main className="mx-auto max-w-7xl p-10">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-neutral-900 dark:text-neutral-100">{t("users.title")}</h1>
@@ -106,7 +127,7 @@ export default function UsersPage() {
       )}
 
       {users && (
-        <div className="mt-8 overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-sm">
+        <div className="mt-8 overflow-x-auto rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-sm">
           <table className="min-w-full text-sm">
             <thead className="bg-neutral-50 dark:bg-neutral-950 text-left text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
               <tr>
@@ -115,6 +136,12 @@ export default function UsersPage() {
                 <th className="px-4 py-3 font-medium">{t("users.colRole")}</th>
                 <th className="px-4 py-3 font-medium">{t("users.colActive")}</th>
                 <th className="px-4 py-3 font-medium">{t("users.colCreated")}</th>
+                <th
+                  className="px-4 py-3 font-medium"
+                  title={t("users.colSpendHint")}
+                >
+                  {t("users.colSpend")}
+                </th>
                 <th className="px-4 py-3" />
               </tr>
             </thead>
@@ -124,7 +151,7 @@ export default function UsersPage() {
                   <td className="px-4 py-3 text-neutral-900 dark:text-neutral-100">
                     {u.email}
                     {u.id === actor.id && (
-                      <span className="ml-2 rounded-full bg-neutral-200 px-2 py-0.5 text-[10px] uppercase tracking-wide text-neutral-700 dark:text-neutral-300">
+                      <span className="ml-2 rounded-full bg-neutral-200 px-2 py-0.5 text-[10px] uppercase tracking-wide text-neutral-700 dark:bg-neutral-700 dark:text-neutral-200">
                         {t("users.you")}
                       </span>
                     )}
@@ -144,6 +171,18 @@ export default function UsersPage() {
                   </td>
                   <td className="px-4 py-3 text-neutral-500 dark:text-neutral-400">
                     {new Date(u.created_at).toLocaleDateString()}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3 align-top">
+                    <SpendCell
+                      summary={spendByUser[u.id]}
+                      labels={{
+                        today: t("users.spendToday"),
+                        week: t("users.spendWeek"),
+                        month: t("users.spendMonth"),
+                        all: t("users.spendAll"),
+                        events: t("users.spendEvents"),
+                      }}
+                    />
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex justify-end gap-3 text-sm">
@@ -172,6 +211,15 @@ export default function UsersPage() {
         </div>
       )}
 
+      {orphanSpend && (
+        <p className="mt-3 text-xs text-neutral-500 dark:text-neutral-400">
+          {t("users.orphanSpend", {
+            month: formatUsd(orphanSpend.spend.this_month_usd),
+            all: formatUsd(orphanSpend.spend.all_time_usd),
+          })}
+        </p>
+      )}
+
       {modal.kind === "create" && (
         <UserModal
           mode="create"
@@ -192,5 +240,45 @@ export default function UsersPage() {
         />
       )}
     </main>
+  );
+}
+
+/** Inline spend cell: month value prominent, daily/week/all-time inline below.
+ * Anything zero collapses to "—" so the column doesn't look noisy when
+ * pricing isn't configured yet or no usage has been recorded. */
+function SpendCell({
+  summary,
+  labels,
+}: {
+  summary?: UserSpendSummary;
+  labels: { today: string; week: string; month: string; all: string; events: string };
+}) {
+  if (!summary) {
+    return <span className="text-neutral-400 dark:text-neutral-500">—</span>;
+  }
+  const s = summary.spend;
+  const eventsLabel = (n: number) => `${n.toLocaleString()} ${labels.events}`;
+  return (
+    <div className="min-w-[14rem]">
+      <div className="font-mono text-sm tabular-nums text-neutral-900 dark:text-neutral-100">
+        {formatUsd(s.this_month_usd)}
+        <span className="ml-1 text-[10px] font-normal uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+          {labels.month}
+        </span>
+      </div>
+      <div className="mt-0.5 font-mono text-[10px] tabular-nums text-neutral-500 dark:text-neutral-400">
+        <span title={eventsLabel(s.today_events)}>
+          {labels.today} {formatUsd(s.today_usd)}
+        </span>
+        <span className="mx-2 text-neutral-300 dark:text-neutral-600">·</span>
+        <span title={eventsLabel(s.this_week_events)}>
+          {labels.week} {formatUsd(s.this_week_usd)}
+        </span>
+        <span className="mx-2 text-neutral-300 dark:text-neutral-600">·</span>
+        <span title={eventsLabel(s.all_time_events)}>
+          {labels.all} {formatUsd(s.all_time_usd)}
+        </span>
+      </div>
+    </div>
   );
 }

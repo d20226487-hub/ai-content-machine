@@ -158,7 +158,7 @@ async def test_publish_one_row_proceeds_when_only_failed_job_exists():
 
     db = _FakeDB()
     run = BulkPublishRun(
-        id=1, table_id=1, status="running", domain_id=42,
+        id=1, table_id=1, mode="single", status="running", domain_id=42,
         row_filter="all", cell_filter="all",
         field_to_column={}, back_fill={},
         total=1, done=0, failed=1, skipped=0, profile_name="",

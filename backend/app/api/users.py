@@ -7,6 +7,7 @@ from app.api.deps import get_current_user, require_role
 from app.core.security import hash_password
 from app.db.models import Role, User
 from app.db.session import get_db
+from app.schemas.usage import SpendWindow, UserSpendSummary
 from app.schemas.user import (
     PasswordReset,
     RoleRead,
@@ -14,6 +15,7 @@ from app.schemas.user import (
     UserRead,
     UserUpdate,
 )
+from app.services.usage import summary_for_all_users, summary_for_user
 
 ADMIN_OR_MANAGER = ("admin", "manager")
 
@@ -245,3 +247,38 @@ async def delete_user(
 
     await db.delete(target)
     await db.commit()
+
+
+# ---------- spend tracking (#9) ----------
+
+
+@users_router.get("/spend", response_model=list[UserSpendSummary])
+async def list_user_spend(
+    db: AsyncSession = Depends(get_db),
+) -> list[UserSpendSummary]:
+    """One row per user with daily/weekly/monthly/all-time spend totals.
+
+    Includes a `(user_id=null)` row when there are usage events from users
+    that have since been deleted — admins can still see that historical
+    spend exists, just not which person it belonged to.
+    """
+    rows = await summary_for_all_users(db)
+    return [
+        UserSpendSummary(
+            user_id=r["user_id"],
+            user_email=r["user_email"],
+            user_name=r["user_name"],
+            spend=SpendWindow(**r["spend"]),
+        )
+        for r in rows
+    ]
+
+
+@users_router.get("/{user_id}/spend", response_model=SpendWindow)
+async def get_user_spend(
+    user_id: int, db: AsyncSession = Depends(get_db)
+) -> SpendWindow:
+    """Per-user spend windows. 404 if the user doesn't exist."""
+    target = await _get_user_or_404(db, user_id)
+    summary = await summary_for_user(db, target.id)
+    return SpendWindow(**summary)

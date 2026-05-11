@@ -107,12 +107,17 @@ async def create_domain(
     db.add(domain)
     try:
         await db.commit()
-    except IntegrityError:
+    except IntegrityError as e:
         await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"A domain with base_url {payload.base_url!r} already exists",
-        )
+        # Distinguish which uniqueness was violated: domains.name (added in
+        # 0017 for multi-mode lookup) or domains.base_url. Postgres surfaces
+        # the constraint name; asyncpg surfaces it via the cause chain.
+        cause_text = str(e.orig) if getattr(e, "orig", None) else str(e)
+        if "uq_domains_name" in cause_text:
+            detail = f"A domain named {payload.name!r} already exists. Pick a different name."
+        else:
+            detail = f"A domain with base_url {payload.base_url!r} already exists"
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
     await db.refresh(domain)
     return _to_read(domain)
 
@@ -166,12 +171,15 @@ async def update_domain(
 
     try:
         await db.commit()
-    except IntegrityError:
+    except IntegrityError as e:
         await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="base_url conflict",
-        )
+        cause_text = str(e.orig) if getattr(e, "orig", None) else str(e)
+        if "uq_domains_name" in cause_text:
+            new_name = data.get("name", d.name)
+            detail = f"A domain named {new_name!r} already exists. Pick a different name."
+        else:
+            detail = "base_url conflict"
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
     await db.refresh(d)
     return _to_read(d)
 

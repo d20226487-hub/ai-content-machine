@@ -4,8 +4,8 @@ Access: admin or manager (same as Domains).
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import delete as sa_delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_role
@@ -132,6 +132,10 @@ async def list_publish_jobs(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     status_filter: str | None = Query(None, alias="status"),
+    source_kind: str | None = Query(
+        None,
+        description="Filter to a specific source_kind ('single' | 'bulk_row' | 'bulk_cell').",
+    ),
     domain_id: int | None = None,
     generation_id: int | None = Query(
         None,
@@ -150,6 +154,8 @@ async def list_publish_jobs(
     conditions = []
     if status_filter:
         conditions.append(PublishJob.status == status_filter)
+    if source_kind:
+        conditions.append(PublishJob.source_kind == source_kind)
     if domain_id is not None:
         conditions.append(PublishJob.domain_id == domain_id)
     if generation_id is not None:
@@ -192,6 +198,59 @@ async def get_publish_job(
         raise HTTPException(status_code=404, detail="Not found")
     job, domain_name = row
     return _to_detail(job, domain_name)
+
+
+_TERMINAL_JOB_STATUSES = ("posted", "failed")
+
+
+@router.delete(
+    "/jobs/completed",
+    status_code=status.HTTP_200_OK,
+)
+async def clear_completed_publish_jobs(
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_role("admin", "manager")),
+    source_kind: str | None = Query(
+        None,
+        description="Restrict the wipe to one source_kind. Omit to clear every kind.",
+    ),
+) -> dict:
+    """Delete every publish_job in a terminal state (posted | failed).
+
+    In-flight rows (queued / posting) are left alone — cancel them first if
+    you want them gone. Pass ``source_kind=single`` from the Single Runs page
+    so the wipe doesn't also clear bulk-row history (which is owned by its
+    parent BulkPublishRun).
+    """
+    stmt = sa_delete(PublishJob).where(PublishJob.status.in_(_TERMINAL_JOB_STATUSES))
+    if source_kind:
+        stmt = stmt.where(PublishJob.source_kind == source_kind)
+    result = await db.execute(stmt)
+    await db.commit()
+    return {"deleted": result.rowcount or 0}
+
+
+@router.delete(
+    "/jobs/{job_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def delete_publish_job(
+    job_id: int,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_role("admin", "manager")),
+) -> Response:
+    job = await db.get(PublishJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    if job.status not in _TERMINAL_JOB_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete a publish job in status {job.status!r}. Wait for it to finish first.",
+        )
+    await db.delete(job)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 def _to_read(job: PublishJob, domain_name: str | None) -> PublishJobRead:

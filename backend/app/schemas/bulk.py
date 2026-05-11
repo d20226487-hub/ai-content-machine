@@ -197,6 +197,14 @@ class GenerateRequest(BaseModel):
     # Deprecated alias kept for back-compat. Prefer `mode`.
     overwrite: bool = False
 
+    # Queue-wide override: when set, every cell in this run uses these
+    # values instead of the per-column provider_code / model. Useful for
+    # one-off A/B tests, retrying with a more reliable provider, or running
+    # a cheap model across an expensive table without re-configuring N
+    # columns. Both must be set together; setting only one is a 400.
+    override_provider_code: str | None = None
+    override_model: str | None = None
+
 
 class GenerateResponse(BaseModel):
     enqueued_cell_ids: list[int]

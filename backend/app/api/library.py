@@ -839,6 +839,13 @@ async def enqueue_generation(
     """Mark cells 'generating' and enqueue one Celery task per cell."""
     await _get_owned_table_or_404(db, table_id, actor)
 
+    # Queue-wide override validation: both or neither.
+    if (payload.override_provider_code is None) != (payload.override_model is None):
+        raise HTTPException(
+            status_code=400,
+            detail="override_provider_code and override_model must be set together",
+        )
+
     # Resolve target columns (output columns with a prompt assigned).
     col_q = select(BulkTableColumn).where(
         BulkTableColumn.table_id == table_id,
@@ -932,8 +939,15 @@ async def enqueue_generation(
         # Enqueue Celery tasks AFTER commit so workers don't pick up cells
         # that aren't visible yet. .delay() is just a Redis push, so even a
         # tight loop of N enqueues is in the order of milliseconds for N=10k.
+        # Override values are forwarded as kwargs (None when not set).
         for rid, cid in to_enqueue:
-            generate_bulk_cell.delay(table_id, rid, cid)
+            generate_bulk_cell.delay(
+                table_id,
+                rid,
+                cid,
+                override_provider_code=payload.override_provider_code,
+                override_model=payload.override_model,
+            )
 
     mode_label = {"empty": "empty", "failed": "failed", "all": "all"}[effective_mode]
     msg = f"Enqueued {len(enqueued)} cell(s) (mode: {mode_label})."

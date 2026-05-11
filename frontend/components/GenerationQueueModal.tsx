@@ -4,13 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 
 import { ErrorPanel } from "@/components/ErrorPanel";
 import { Modal } from "@/components/Modal";
+import { listEnabledProviders } from "@/lib/generate";
 import { useT } from "@/lib/i18n-context";
 import {
   enqueueGeneration,
   type GenerateMode,
   type GenerateRequestPayload,
 } from "@/lib/library";
-import type { BulkCell, BulkTable } from "@/lib/types";
+import type { BulkCell, BulkTable, EnabledProvider } from "@/lib/types";
 
 interface Props {
   table: BulkTable;
@@ -103,11 +104,60 @@ export function GenerationQueueModal({
     return Array.from(variants);
   }, [pickedColumnIds, table.columns, t]);
 
+  // Queue-wide override: when on, every cell in this run uses the same
+  // provider+model regardless of per-column settings. Off by default — most
+  // runs just use what's configured on each column.
+  const [overrideEnabled, setOverrideEnabled] = useState(false);
+  const [providers, setProviders] = useState<EnabledProvider[] | null>(null);
+  const [overrideProvider, setOverrideProvider] = useState<string | null>(null);
+  const [overrideModel, setOverrideModel] = useState<string | null>(null);
+
+  // Load providers lazily on first enable.
+  useEffect(() => {
+    if (!overrideEnabled || providers !== null) return;
+    let ignored = false;
+    listEnabledProviders()
+      .then((list) => {
+        if (ignored) return;
+        setProviders(list);
+        const first = list.find((p) => p.has_api_key) ?? list[0] ?? null;
+        if (first && overrideProvider === null) {
+          setOverrideProvider(first.code);
+          setOverrideModel(first.default_model ?? first.available_models[0] ?? null);
+        }
+      })
+      .catch(() => {
+        if (!ignored) setProviders([]);
+      });
+    return () => {
+      ignored = true;
+    };
+  }, [overrideEnabled, providers, overrideProvider]);
+
+  const overrideProviderObj = useMemo(
+    () => providers?.find((p) => p.code === overrideProvider) ?? null,
+    [providers, overrideProvider],
+  );
+
+  // When the user picks a different override provider, default the model.
+  useEffect(() => {
+    if (!overrideEnabled || !overrideProviderObj) return;
+    setOverrideModel(
+      overrideProviderObj.default_model ??
+        overrideProviderObj.available_models[0] ??
+        null,
+    );
+  }, [overrideEnabled, overrideProviderObj]);
+
+  const overrideValid =
+    !overrideEnabled || (!!overrideProvider && !!overrideModel);
+
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
   async function onSubmit() {
     if (eligibleCount === 0) return;
+    if (!overrideValid) return;
     setBusy(true);
     setError(null);
     try {
@@ -116,6 +166,10 @@ export function GenerationQueueModal({
         row_ids: targetRowIds,
         mode,
       };
+      if (overrideEnabled && overrideProvider && overrideModel) {
+        payload.override_provider_code = overrideProvider;
+        payload.override_model = overrideModel;
+      }
       const r = await enqueueGeneration(table.id, payload);
       onEnqueued(r.message);
       onClose();
@@ -276,6 +330,66 @@ export function GenerationQueueModal({
         </div>
       </section>
 
+      {/* Queue-wide provider/model override */}
+      <section className="mt-5">
+        <label className="flex cursor-pointer items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={overrideEnabled}
+            onChange={(e) => setOverrideEnabled(e.target.checked)}
+            className="mt-0.5 h-3.5 w-3.5"
+          />
+          <span>
+            <span className="font-medium text-neutral-800 dark:text-neutral-200">
+              {t("queue.overrideLabel")}
+            </span>
+            <span className="ml-2 text-xs text-neutral-500 dark:text-neutral-400">
+              {t("queue.overrideHint")}
+            </span>
+          </span>
+        </label>
+        {overrideEnabled && (
+          <div className="mt-2 grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="mb-0.5 block text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                {t("queue.overrideProvider")}
+              </span>
+              <select
+                value={overrideProvider ?? ""}
+                onChange={(e) => setOverrideProvider(e.target.value || null)}
+                disabled={!providers}
+                className="block w-full rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+              >
+                {providers === null && <option value="">{t("common.loading")}</option>}
+                {(providers ?? []).map((p) => (
+                  <option key={p.code} value={p.code} disabled={!p.has_api_key}>
+                    {p.display_name}
+                    {!p.has_api_key && t("queue.overrideNoKey")}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-0.5 block text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                {t("queue.overrideModel")}
+              </span>
+              <select
+                value={overrideModel ?? ""}
+                onChange={(e) => setOverrideModel(e.target.value || null)}
+                disabled={!overrideProviderObj}
+                className="block w-full rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+              >
+                {(overrideProviderObj?.available_models ?? []).map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        )}
+      </section>
+
       <section className="mt-5 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs dark:border-neutral-800 dark:bg-neutral-950">
         <p className="text-neutral-700 dark:text-neutral-300">
           {t("queue.willGenerate", {
@@ -284,10 +398,19 @@ export function GenerationQueueModal({
             rows: targetRowIds.length,
           })}
         </p>
-        {providerSummary.length > 0 && (
+        {overrideEnabled && overrideProvider && overrideModel ? (
           <p className="mt-1 truncate text-neutral-500 dark:text-neutral-400">
-            {t("queue.using", { variants: providerSummary.join(", ") })}
+            {t("queue.usingOverride", {
+              provider: overrideProvider,
+              model: overrideModel,
+            })}
           </p>
+        ) : (
+          providerSummary.length > 0 && (
+            <p className="mt-1 truncate text-neutral-500 dark:text-neutral-400">
+              {t("queue.using", { variants: providerSummary.join(", ") })}
+            </p>
+          )
         )}
       </section>
 
@@ -308,7 +431,7 @@ export function GenerationQueueModal({
         <button
           type="button"
           onClick={onSubmit}
-          disabled={busy || eligibleCount === 0}
+          disabled={busy || eligibleCount === 0 || !overrideValid}
           className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-60 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
         >
           {busy

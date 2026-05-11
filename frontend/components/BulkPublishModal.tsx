@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { Modal } from "@/components/Modal";
@@ -13,11 +13,14 @@ import {
   type PublishProfile,
 } from "@/lib/domains";
 import {
-  clearMapping,
+  clearMappingMulti,
+  clearMappingSingle,
   createBulkRun,
-  getMapping,
+  getMappingMulti,
+  getMappingSingle,
   type BulkPublishPayload,
   type CellFilter,
+  type PublishMode,
   type RowFilter,
 } from "@/lib/publishBulk";
 import type { BulkColumn, BulkTable } from "@/lib/types";
@@ -37,9 +40,19 @@ interface FieldSlot {
 export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
   const { t } = useT();
   const router = useRouter();
+
+  // Mode is the top-level switch. Soft preserve on toggle: mapping/filters/
+  // back-fill carry across modes; only the mode-specific target fields reset.
+  const [mode, setMode] = useState<PublishMode>("single");
+
   const [domains, setDomains] = useState<Domain[] | null>(null);
+  // Single-mode targets
   const [domainId, setDomainId] = useState<number | null>(null);
   const [profileName, setProfileName] = useState<string | null>(null);
+  // Multi-mode targets
+  const [domainColumnId, setDomainColumnId] = useState<number | "">("");
+  const [profileColumnId, setProfileColumnId] = useState<number | "">("");
+
   const [language, setLanguage] = useState<string | null>(null);
 
   const [rowFilter, setRowFilter] = useState<RowFilter>(
@@ -87,8 +100,28 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
     return wpProfiles.find((p) => p.name === profileName) ?? wpProfiles[0] ?? null;
   }, [selected, wpProfiles, profileName]);
 
+  // In multi mode the field map applies to every row regardless of domain.
+  // We use the first WP domain's first profile as the canonical schema —
+  // the user's stated invariant is that all sites share the same fields.
+  const multiCanonicalProfile = useMemo<PublishProfile | null>(() => {
+    if (mode !== "multi") return null;
+    const wp = (domains ?? []).find((d) => d.cms_type === "wordpress");
+    if (!wp) return null;
+    const profiles = wp.publish_config?.profiles;
+    if (profiles && profiles.length > 0) return profiles[0];
+    return { name: "Default", post_type: "posts", fields: DEFAULT_WP_FIELDS };
+  }, [mode, domains]);
+
   // Compute the set of field "slots" the user must map columns to.
   const slots: FieldSlot[] = useMemo(() => {
+    if (mode === "multi") {
+      const fields = multiCanonicalProfile?.fields ?? DEFAULT_WP_FIELDS;
+      return fields.map((f) => ({
+        key: f.key,
+        label: f.label || f.key,
+        required: !!f.required,
+      }));
+    }
     if (!selected) return [];
     if (selected.cms_type === "wordpress") {
       const fields = activeProfile?.fields ?? DEFAULT_WP_FIELDS;
@@ -103,14 +136,12 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
     return placeholders
       .filter((p) => p !== "language")
       .map((p) => ({ key: p, label: p, required: false }));
-  }, [selected, activeProfile]);
+  }, [mode, multiCanonicalProfile, selected, activeProfile]);
 
-  // When domain/profile changes: pick default language + load saved mapping memo.
+  // Pick default profile for single-WP when selected domain changes.
   useEffect(() => {
-    if (!selected) return;
+    if (mode !== "single" || !selected) return;
     setLanguage(selected.languages[0] ?? "en");
-
-    // Default WP profile picker selection
     if (selected.cms_type === "wordpress") {
       const profileNames = wpProfiles.map((p) => p.name);
       setProfileName((cur) =>
@@ -119,32 +150,73 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
     } else {
       setProfileName(null);
     }
-  }, [selected, wpProfiles]);
+  }, [mode, selected, wpProfiles]);
 
+  // Load saved mapping when key changes (single mode: domain+profile; multi: just table).
+  //
+  // Soft preserve: skip the load when the only thing that changed was `mode`.
+  // Without this guard the effect would re-fetch on every Single↔Multi toggle
+  // and clobber whatever the user had just filled in. Tracked via a ref so
+  // we can detect "previous mode != current mode" without that creating yet
+  // another effect dep.
+  const prevModeRef = useRef<PublishMode>(mode);
   useEffect(() => {
-    if (!selected) {
-      setFieldToColumn({});
-      setPostIdTarget("");
-      setPostUrlTarget("");
-      return;
-    }
-    getMapping(table.id, selected.id, profileName)
-      .then((m) => {
-        setFieldToColumn(m.field_to_column ?? {});
-        setPostIdTarget(
-          (m.back_fill?.post_id_target as number | undefined) ?? "",
-        );
-        setPostUrlTarget(
-          (m.back_fill?.post_url_target as number | undefined) ?? "",
-        );
-        if (m.language) setLanguage(m.language);
-      })
-      .catch(() => {
+    const modeChanged = prevModeRef.current !== mode;
+    prevModeRef.current = mode;
+    // Soft preserve: a mode toggle alone never refetches.
+    if (modeChanged) return;
+
+    if (mode === "single") {
+      if (!selected) {
         setFieldToColumn({});
         setPostIdTarget("");
         setPostUrlTarget("");
-      });
-  }, [selected, profileName, table.id]);
+        return;
+      }
+      getMappingSingle(table.id, selected.id, profileName)
+        .then((m) => {
+          setFieldToColumn(m.field_to_column ?? {});
+          setPostIdTarget((m.back_fill?.post_id_target as number | undefined) ?? "");
+          setPostUrlTarget((m.back_fill?.post_url_target as number | undefined) ?? "");
+          if (m.language) setLanguage(m.language);
+        })
+        .catch(() => {
+          setFieldToColumn({});
+          setPostIdTarget("");
+          setPostUrlTarget("");
+        });
+    } else {
+      getMappingMulti(table.id)
+        .then((m) => {
+          setFieldToColumn(m.field_to_column ?? {});
+          setPostIdTarget((m.back_fill?.post_id_target as number | undefined) ?? "");
+          setPostUrlTarget((m.back_fill?.post_url_target as number | undefined) ?? "");
+          if (m.language) setLanguage(m.language);
+          if (typeof m.domain_column_id === "number") setDomainColumnId(m.domain_column_id);
+          if (typeof m.profile_column_id === "number") setProfileColumnId(m.profile_column_id);
+        })
+        .catch(() => {
+          // No saved multi mapping yet — fine.
+        });
+    }
+  }, [mode, selected, profileName, table.id]);
+
+  // Soft-preserve toggle: clear only mode-specific target fields when mode changes.
+  function onModeChange(next: PublishMode) {
+    if (next === mode) return;
+    setMode(next);
+    if (next === "multi") {
+      // Leaving single → clear single-mode targets; multi-mode columns load
+      // from saved mapping in the effect above.
+      setProfileName(null);
+    } else {
+      // Leaving multi → clear multi-mode column refs; domain dropdown will
+      // reset to the first credentialled option already-loaded in `domains`.
+      setDomainColumnId("");
+      setProfileColumnId("");
+    }
+    // Mapping / filters / back-fill stay (intentional — soft preserve).
+  }
 
   // "Will publish N rows" estimate (client-side).
   const candidatePreview = useMemo(() => {
@@ -170,6 +242,44 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
     return candidates.length;
   }, [rowFilter, rangeStart, rangeEnd, cellFilter, postIdTarget, selectedRowIds, table]);
 
+  // Multi-mode: count distinct domain values across the candidate rows.
+  const multiBreakdown = useMemo(() => {
+    if (mode !== "multi" || domainColumnId === "") return null;
+    const colId = Number(domainColumnId);
+
+    let candidateIds: Set<number>;
+    if (rowFilter === "selected") {
+      candidateIds = new Set(selectedRowIds);
+    } else if (rowFilter === "range") {
+      const s = Math.max(1, Number(rangeStart) || 1) - 1;
+      const e = Math.max(0, Number(rangeEnd) || 0);
+      candidateIds = new Set(table.rows.slice(s, e).map((r) => r.id));
+    } else {
+      candidateIds = new Set(table.rows.map((r) => r.id));
+    }
+    if (cellFilter !== "all" && postIdTarget !== "") {
+      const filterColId = Number(postIdTarget);
+      const filled: Record<number, string> = {};
+      for (const c of table.cells) {
+        if (c.column_id === filterColId) filled[c.row_id] = c.value || "";
+      }
+      for (const rid of Array.from(candidateIds)) {
+        if (filled[rid]) candidateIds.delete(rid);
+      }
+    }
+
+    const counts = new Map<string, number>();
+    for (const cell of table.cells) {
+      if (cell.column_id !== colId) continue;
+      if (!candidateIds.has(cell.row_id)) continue;
+      const v = (cell.value || "").trim() || "(empty)";
+      counts.set(v, (counts.get(v) ?? 0) + 1);
+    }
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, count]) => ({ name, count }));
+  }, [mode, domainColumnId, rowFilter, rangeStart, rangeEnd, cellFilter, postIdTarget, selectedRowIds, table]);
+
   function setSlot(key: string, colId: number | null) {
     setFieldToColumn((m) => {
       const next = { ...m };
@@ -180,13 +290,20 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
   }
 
   async function onClear() {
-    if (!selected) return;
     if (!confirm(t("bulkPub.confirmClearMapping"))) return;
     try {
-      await clearMapping(table.id, selected.id, profileName);
+      if (mode === "single" && selected) {
+        await clearMappingSingle(table.id, selected.id, profileName);
+      } else if (mode === "multi") {
+        await clearMappingMulti(table.id);
+      }
       setFieldToColumn({});
       setPostIdTarget("");
       setPostUrlTarget("");
+      if (mode === "multi") {
+        setDomainColumnId("");
+        setProfileColumnId("");
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t("domainMod.clearCacheFailed"));
     }
@@ -194,8 +311,9 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!selected) return;
     setError(null);
+
+    if (mode === "single" && !selected) return;
 
     // Validate required slots are mapped
     const missing = slots.filter((s) => s.required && fieldToColumn[s.key] == null);
@@ -226,8 +344,7 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
 
     const payload: BulkPublishPayload = {
       table_id: table.id,
-      domain_id: selected.id,
-      profile_name: profileName,
+      mode,
       language,
       row_filter: rowFilter,
       selection,
@@ -236,6 +353,15 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
       back_fill,
       save_mapping: saveMapping,
     };
+
+    if (mode === "single") {
+      payload.domain_id = selected!.id;
+      payload.profile_name = profileName;
+    } else {
+      payload.domain_column_id = Number(domainColumnId);
+      payload.profile_column_id =
+        profileColumnId !== "" ? Number(profileColumnId) : null;
+    }
 
     setBusy(true);
     try {
@@ -248,6 +374,14 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
   }
 
   const eligibleColumns = table.columns;
+  // In multi mode, the publish button needs a domain column picked (and the
+  // standard required-field mapping). Profile column is optional — falls back
+  // to the domain's default profile when omitted.
+  const publishDisabled =
+    busy ||
+    candidatePreview === 0 ||
+    (mode === "single" && !selected) ||
+    (mode === "multi" && domainColumnId === "");
 
   return (
     <Modal onClose={onClose} size="max-w-3xl">
@@ -265,54 +399,125 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-3">
-          <Field label={t("bulkPub.fieldDomain")}>
-            <select
-              value={domainId ?? ""}
-              onChange={(e) => setDomainId(Number(e.target.value))}
-              className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-            >
-              {(domains ?? []).map((d) => (
-                <option key={d.id} value={d.id} disabled={!d.has_credentials}>
-                  {d.name} ({d.cms_type}){!d.has_credentials ? t("pubMod.noCreds") : ""}
-                </option>
-              ))}
-            </select>
-          </Field>
-
-          {selected?.cms_type === "wordpress" && wpProfiles.length > 0 && (
-            <Field label={t("bulkPub.fieldPostType")}>
-              <select
-                value={profileName ?? ""}
-                onChange={(e) => setProfileName(e.target.value)}
-                disabled={wpProfiles.length === 1}
-                className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm disabled:opacity-70 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+        {/* Mode toggle */}
+        <div>
+          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+            {t("bulkPub.mode")}
+          </span>
+          <div className="inline-flex rounded-md border border-neutral-300 p-0.5 dark:border-neutral-700">
+            {(["single", "multi"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => onModeChange(m)}
+                className={
+                  "rounded px-3 py-1 text-sm font-medium transition-colors " +
+                  (mode === m
+                    ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                    : "text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100")
+                }
               >
-                {wpProfiles.map((p) => (
-                  <option key={p.name} value={p.name}>
-                    {p.name} — {p.post_type}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          )}
+                {m === "single" ? t("bulkPub.modeSingle") : t("bulkPub.modeMulti")}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+            {mode === "single" ? t("bulkPub.modeSingleHint") : t("bulkPub.modeMultiHint")}
+          </p>
+        </div>
 
-          {selected && selected.languages.length > 1 && (
-            <Field label={t("bulkPub.fieldLanguage")}>
+        {/* Single-mode: Domain + Profile dropdowns */}
+        {mode === "single" && (
+          <div className="grid grid-cols-2 gap-3">
+            <Field label={t("bulkPub.fieldDomain")}>
               <select
-                value={language ?? ""}
-                onChange={(e) => setLanguage(e.target.value)}
+                value={domainId ?? ""}
+                onChange={(e) => setDomainId(Number(e.target.value))}
                 className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
               >
-                {selected.languages.map((l) => (
-                  <option key={l} value={l}>
-                    {l}
+                {(domains ?? []).map((d) => (
+                  <option key={d.id} value={d.id} disabled={!d.has_credentials}>
+                    {d.name} ({d.cms_type}){!d.has_credentials ? t("pubMod.noCreds") : ""}
                   </option>
                 ))}
               </select>
             </Field>
-          )}
-        </div>
+
+            {selected?.cms_type === "wordpress" && wpProfiles.length > 0 && (
+              <Field label={t("bulkPub.fieldPostType")}>
+                <select
+                  value={profileName ?? ""}
+                  onChange={(e) => setProfileName(e.target.value)}
+                  disabled={wpProfiles.length === 1}
+                  className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm disabled:opacity-70 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+                >
+                  {wpProfiles.map((p) => (
+                    <option key={p.name} value={p.name}>
+                      {p.name} — {p.post_type}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
+
+            {selected && selected.languages.length > 1 && (
+              <Field label={t("bulkPub.fieldLanguage")}>
+                <select
+                  value={language ?? ""}
+                  onChange={(e) => setLanguage(e.target.value)}
+                  className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+                >
+                  {selected.languages.map((l) => (
+                    <option key={l} value={l}>
+                      {l}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
+          </div>
+        )}
+
+        {/* Multi-mode: column pickers */}
+        {mode === "multi" && (
+          <div className="grid grid-cols-2 gap-3">
+            <Field label={t("bulkPub.fieldDomainColumn")}>
+              <select
+                value={domainColumnId}
+                onChange={(e) =>
+                  setDomainColumnId(e.target.value ? Number(e.target.value) : "")
+                }
+                className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+              >
+                <option value="">{t("bulkPub.pickColumn")}</option>
+                {eligibleColumns.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label={t("bulkPub.fieldProfileColumn")}>
+              <select
+                value={profileColumnId}
+                onChange={(e) =>
+                  setProfileColumnId(e.target.value ? Number(e.target.value) : "")
+                }
+                className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+              >
+                <option value="">{t("bulkPub.profileColumnDefault")}</option>
+                {eligibleColumns.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+                {t("bulkPub.profileColumnHint")}
+              </p>
+            </Field>
+          </div>
+        )}
 
         {/* Row filter */}
         <div>
@@ -406,7 +611,7 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
         </div>
 
         {/* Field-to-column mapping */}
-        {selected && (
+        {(mode === "multi" || selected) && (
           <div className="border-t border-neutral-200 pt-3 dark:border-neutral-800">
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
@@ -506,7 +711,33 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
         </label>
 
         <div className="rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-800 dark:bg-blue-950/40 dark:text-blue-300">
-          {t("bulkPub.willPublish", { count: candidatePreview })}
+          {mode === "multi" && multiBreakdown ? (
+            <div>
+              <div className="font-medium">
+                {t("bulkPub.willPublishAcross", {
+                  count: candidatePreview,
+                  domains: multiBreakdown.length,
+                })}
+              </div>
+              {multiBreakdown.length > 0 && (
+                <ul className="mt-1 max-h-32 overflow-auto text-xs">
+                  {multiBreakdown.slice(0, 8).map((b) => (
+                    <li key={b.name} className="flex justify-between gap-3">
+                      <span className="truncate font-mono">{b.name}</span>
+                      <span className="shrink-0 tabular-nums">{b.count}</span>
+                    </li>
+                  ))}
+                  {multiBreakdown.length > 8 && (
+                    <li className="text-blue-700/70 dark:text-blue-300/70">
+                      {t("bulkPub.andMore", { count: multiBreakdown.length - 8 })}
+                    </li>
+                  )}
+                </ul>
+              )}
+            </div>
+          ) : (
+            t("bulkPub.willPublish", { count: candidatePreview })
+          )}
         </div>
 
         {error && (
@@ -525,7 +756,7 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
           </button>
           <button
             type="submit"
-            disabled={busy || !selected || candidatePreview === 0}
+            disabled={publishDisabled}
             className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-60 dark:bg-neutral-100 dark:text-neutral-900"
           >
             {busy ? t("bulkPub.starting") : t("bulkPub.start", { count: candidatePreview })}

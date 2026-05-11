@@ -49,6 +49,7 @@ export function listPublishJobs(opts: {
   page?: number;
   page_size?: number;
   status?: JobStatus;
+  source_kind?: "single" | "bulk_row" | "bulk_cell";
   domain_id?: number;
   run_id?: number;
   generation_id?: number;
@@ -66,6 +67,19 @@ export function listPublishJobs(opts: {
 
 export function getPublishJob(id: number) {
   return api<PublishJobDetail>(`/publish/jobs/${id}`);
+}
+
+export function deletePublishJob(id: number) {
+  return api<void>(`/publish/jobs/${id}`, { method: "DELETE" });
+}
+
+export function clearCompletedPublishJobs(opts: {
+  source_kind?: "single" | "bulk_row" | "bulk_cell";
+} = {}) {
+  const qs = opts.source_kind ? `?source_kind=${opts.source_kind}` : "";
+  return api<{ deleted: number }>(`/publish/jobs/completed${qs}`, {
+    method: "DELETE",
+  });
 }
 
 export interface PublishDefaults {

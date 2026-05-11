@@ -8,6 +8,12 @@ class GenerationResult:
     model: str
     finish_reason: str | None = None
     raw: dict | None = None
+    # Populated when the provider returns token usage metadata. Used by the
+    # spend-tracking layer (services/usage.py) to compute per-call cost.
+    # None means the provider didn't return that count — cost is then
+    # best-effort (zero contribution from that bucket).
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
 
 
 @dataclass

@@ -173,6 +173,7 @@ def _to_detail(p: Prompt, users: dict[int, User]) -> PromptDetail:
 async def draft_with_ai(
     payload: PromptDraftRequest,
     db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
 ) -> PromptDraftResponse:
     try:
         text, code, model = await draft_prompt(
@@ -180,6 +181,7 @@ async def draft_with_ai(
             description=payload.description,
             provider_code=payload.provider_code,
             model=payload.model,
+            user_id=actor.id,
         )
     except ProviderNotConfigured as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

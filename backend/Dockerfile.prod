@@ -40,10 +40,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     UVICORN_WORKERS=2
 
-# curl: HEALTHCHECK probe.
-# tini:  proper PID 1 (reaps zombies, forwards signals to the python process).
+# curl:              HEALTHCHECK probe.
+# tini:              proper PID 1 (reaps zombies, forwards signals).
+# postgresql-client: pg_dump for the daily backup task.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl tini \
+    && apt-get install -y --no-install-recommends curl tini postgresql-client \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 1000 app \
     && useradd  --system --uid 1000 --gid app --create-home --home-dir /home/app app
@@ -57,6 +58,12 @@ RUN pip install --no-index --find-links /wheels -r requirements.txt \
     && rm -rf /wheels
 
 COPY --chown=app:app . .
+
+# Pre-create the backup mount point with the right ownership. Docker named
+# volumes inherit ownership from the underlying image directory on first
+# creation; without this the volume would be root-owned and the non-root
+# worker process wouldn't be able to write the daily pg_dump.
+RUN mkdir -p /var/backups/acm && chown app:app /var/backups/acm
 
 USER app
 

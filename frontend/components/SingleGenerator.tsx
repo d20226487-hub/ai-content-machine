@@ -75,13 +75,24 @@ export function SingleGenerator() {
       });
   }, []);
 
-  // Load prompt detail (with current version + variables) on selection
+  // Load prompt detail (with current version + variables) on selection.
+  // `ignored` flag drops late results from superseded fetches: if the user
+  // changes selectedPromptId twice quickly, the older request's resolution
+  // would otherwise overwrite the newer one's state.
   useEffect(() => {
     if (selectedPromptId == null) {
       setSelectedPrompt(null);
       return;
     }
-    getPrompt(selectedPromptId).then(setSelectedPrompt).catch(() => {});
+    let ignored = false;
+    getPrompt(selectedPromptId)
+      .then((p) => {
+        if (!ignored) setSelectedPrompt(p);
+      })
+      .catch(() => {});
+    return () => {
+      ignored = true;
+    };
   }, [selectedPromptId]);
 
   // Reset variable values when prompt changes

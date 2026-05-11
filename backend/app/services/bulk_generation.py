@@ -112,8 +112,15 @@ async def generate_one_cell(
     table_id: int,
     row_id: int,
     column_id: int,
+    override_provider_code: str | None = None,
+    override_model: str | None = None,
 ) -> None:
-    """Do the work and persist either success or failure. Caller commits."""
+    """Do the work and persist either success or failure. Caller commits.
+
+    `override_provider_code` + `override_model`: queue-wide override. When
+    both are non-None, they replace the per-column settings for this call.
+    Validated together at the API layer; we just trust the pair here.
+    """
     col = await _load_column(db, column_id)
 
     # Sanity: must be an output column with a prompt assignment.
@@ -140,8 +147,15 @@ async def generate_one_cell(
 
     rendered, _missing = render_template(template, variables)
 
-    # Per-column overrides take precedence; fall back to first-enabled provider.
-    code = col.provider_code or await first_enabled_provider_code(db)
+    # Resolution order:
+    #   1. Queue-wide override (if both fields set on this run)
+    #   2. Per-column provider_code/model
+    #   3. Fallback: first-enabled provider + its default model
+    code = (
+        override_provider_code
+        or col.provider_code
+        or await first_enabled_provider_code(db)
+    )
     if not code:
         await _write_failure(
             db, row_id, column_id, "No AI provider is enabled. Configure one in Settings."
@@ -160,7 +174,7 @@ async def generate_one_cell(
         await db.execute(select(Provider).where(Provider.code == code))
     ).scalar_one()
 
-    chosen_model = col.model or provider_row.default_model
+    chosen_model = override_model or col.model or provider_row.default_model
 
     from app.services.rate_limit import get_rate_limiter
     from app.services.retry import call_with_retry
@@ -229,6 +243,24 @@ async def generate_one_cell(
         table.name = table.name  # touch so onupdate fires
 
     await db.commit()
+
+    # Track-only spend log (#9). Attribute the spend to the table owner so
+    # it shows up under the right user in /users. Best-effort.
+    from app.services.usage import record_usage  # local import: avoid cycle
+    await record_usage(
+        db,
+        user_id=table.created_by_id if table is not None else None,
+        provider_code=code,
+        model=result.model,
+        prompt_tokens=result.prompt_tokens,
+        completion_tokens=result.completion_tokens,
+        source="bulk_cell",
+        source_ref={
+            "table_id": table_id,
+            "row_id": row_id,
+            "column_id": column_id,
+        },
+    )
 
 
 async def _write_failure(

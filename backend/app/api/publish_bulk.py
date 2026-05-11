@@ -3,12 +3,14 @@
 Run lifecycle (mirrors the bulk_generation pattern):
   POST /publish/bulk            → creates a run + enqueues seed task
   GET  /publish/runs            → list (admin/manager)
-  GET  /publish/runs/{id}       → detail (config + counters)
-  POST /publish/runs/{id}/pause | resume | cancel
+  GET  /publish/runs/{id}       → detail (config + counters + by-domain)
+  POST /publish/runs/{id}/pause | resume | cancel | rerun-failed
 
 Mapping memo (auto-prefill the modal next time):
-  GET    /publish/mappings/{table_id}/{domain_id}/{profile_name}
-  DELETE /publish/mappings/{table_id}/{domain_id}/{profile_name}
+  GET    /publish/mappings/{table_id}/single/{domain_id}/{profile_name}
+  DELETE /publish/mappings/{table_id}/single/{domain_id}/{profile_name}
+  GET    /publish/mappings/{table_id}/multi
+  DELETE /publish/mappings/{table_id}/multi
 
 Profile name uses '-' as a placeholder for "no profile" in the URL since
 empty path segments don't work; the API normalizes '-' → ''.
@@ -18,13 +20,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import delete as sa_delete, func, select, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_role
 from app.db.models import (
     BulkPublishRun,
     BulkTable,
+    BulkTableColumn,
     BulkTablePublishMapping,
     Domain,
     PublishJob,
@@ -36,9 +39,13 @@ from app.schemas.publish import (
     BulkRunDetail,
     BulkRunListResponse,
     BulkRunSummary,
+    ByDomainStat,
     PublishMapping,
 )
-from app.tasks.publish_bulk import seed_publish_run as seed_publish_run_task
+from app.tasks.publish_bulk import (
+    publish_one_bulk_row as publish_one_bulk_row_task,
+    seed_publish_run as seed_publish_run_task,
+)
 
 router = APIRouter(
     prefix="/publish",
@@ -56,6 +63,13 @@ def _decode_url_profile(name: str) -> str:
     return "" if name == "-" else name
 
 
+async def _column_belongs_to_table(
+    db: AsyncSession, *, column_id: int, table_id: int
+) -> bool:
+    col = await db.get(BulkTableColumn, column_id)
+    return col is not None and col.table_id == table_id
+
+
 @router.post("/bulk", response_model=BulkRunDetail, status_code=status.HTTP_201_CREATED)
 async def create_bulk_publish_run(
     payload: BulkPublishRequest,
@@ -65,9 +79,6 @@ async def create_bulk_publish_run(
     table = await db.get(BulkTable, payload.table_id)
     if table is None:
         raise HTTPException(status_code=404, detail="Table not found")
-    domain = await db.get(Domain, payload.domain_id)
-    if domain is None:
-        raise HTTPException(status_code=404, detail="Domain not found")
 
     if not payload.field_to_column:
         raise HTTPException(
@@ -75,12 +86,53 @@ async def create_bulk_publish_run(
             detail="field_to_column mapping is required (map at least the required publish fields to bulk columns)",
         )
 
-    profile = _norm_profile(payload.profile_name)
+    domain_id: int | None = None
+    profile = ""
+    domain_column_id: int | None = None
+    profile_column_id: int | None = None
+
+    if payload.mode == "single":
+        # Pydantic validator already enforced domain_id is present.
+        domain = await db.get(Domain, payload.domain_id)  # type: ignore[arg-type]
+        if domain is None:
+            raise HTTPException(status_code=404, detail="Domain not found")
+        domain_id = domain.id
+        profile = _norm_profile(payload.profile_name)
+    else:
+        # Multi mode: domain_column_id required (Pydantic enforced); profile
+        # column required when ANY domain in the table is WordPress. We can't
+        # know that at this point without scanning rows, so we require both
+        # column refs unconditionally for v1 — Custom-CMS-only multi runs are
+        # blocked elsewhere with a clear "not supported in multi mode" error.
+        if payload.domain_column_id is None:
+            raise HTTPException(
+                status_code=400, detail="domain_column_id is required in multi mode"
+            )
+        if not await _column_belongs_to_table(
+            db, column_id=payload.domain_column_id, table_id=table.id
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="domain_column_id does not belong to this table",
+            )
+        if payload.profile_column_id is not None:
+            if not await _column_belongs_to_table(
+                db, column_id=payload.profile_column_id, table_id=table.id
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="profile_column_id does not belong to this table",
+                )
+        domain_column_id = payload.domain_column_id
+        profile_column_id = payload.profile_column_id
 
     run = BulkPublishRun(
         table_id=table.id,
-        domain_id=domain.id,
+        mode=payload.mode,
+        domain_id=domain_id,
         profile_name=profile,
+        domain_column_id=domain_column_id,
+        profile_column_id=profile_column_id,
         language=payload.language,
         row_filter=payload.row_filter,
         selection=payload.selection,
@@ -96,25 +148,20 @@ async def create_bulk_publish_run(
 
     # Persist the mapping memo so the modal pre-fills next time.
     if payload.save_mapping:
-        existing = await db.get(
-            BulkTablePublishMapping, (table.id, domain.id, profile)
+        await _save_mapping(
+            db,
+            table_id=table.id,
+            mode=payload.mode,
+            domain_id=domain_id,
+            profile_name=profile if payload.mode == "single" else None,
+            domain_column_id=domain_column_id,
+            profile_column_id=profile_column_id,
+            field_to_column=run.field_to_column,
+            back_fill=run.back_fill,
+            language=payload.language,
+            actor_id=actor.id,
         )
-        if existing is None:
-            existing = BulkTablePublishMapping(
-                table_id=table.id,
-                domain_id=domain.id,
-                profile_name=profile,
-            )
-            db.add(existing)
-        existing.field_to_column = run.field_to_column
-        existing.back_fill = run.back_fill
-        existing.language = payload.language
-        existing.updated_by_id = actor.id
-        await db.commit()
 
-    # Kick the seed Celery task. Synchronous .delay() on the broker is fine —
-    # it only enqueues the message; the actual scan + child enqueueing happens
-    # in the worker.
     seed_publish_run_task.delay(run.id)
 
     return await _to_detail(db, run)
@@ -201,8 +248,6 @@ async def resume_run(
     detail = await _set_status(
         db, run_id, allowed_from={"paused"}, next_status="running"
     )
-    # Re-enqueue the seed task — it'll skip rows already processed and
-    # only re-enqueue children for rows that haven't reached a terminal state.
     seed_publish_run_task.delay(run_id)
     return detail
 
@@ -210,24 +255,46 @@ async def resume_run(
 @router.post(
     "/runs/{run_id}/rerun-failed",
     response_model=BulkRunDetail,
-    status_code=status.HTTP_201_CREATED,
 )
 async def rerun_failed_rows(
     run_id: int,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(require_role("admin", "manager")),
 ) -> BulkRunDetail:
-    """Create a new run targeting only the rows that failed in this run.
+    """Re-attempt the failed rows of a terminal run in-place.
 
-    Inherits the original run's domain, profile, language, mapping, and back-fill.
+    No new BulkPublishRun is created. The existing run flips back to
+    ``running``; its ``failed`` counter is decremented by the count being
+    retried; ``finished_at`` and ``error`` are cleared; and a child task is
+    enqueued directly for each failed row (the seed task is bypassed —
+    candidate computation would otherwise still exclude these rows because
+    they already have a 'failed' PublishJob).
+
+    Old failed PublishJob rows are kept for audit. Each retry inserts a new
+    PublishJob, so a row that's been retried N times will have N+1 rows in
+    publish_jobs for this (run_id, row_id).
     """
-    src = await db.get(BulkPublishRun, run_id)
-    if src is None:
+    run = await db.get(BulkPublishRun, run_id)
+    if run is None:
         raise HTTPException(status_code=404, detail="Not found")
-    if src.domain_id is None:
+
+    if run.status not in ("done", "failed", "cancelled"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot rerun failed rows while run is {run.status}; wait for it to finish first.",
+        )
+
+    # In single mode the original run's domain must still exist; in multi
+    # mode each row resolves its own, so we just need the column refs.
+    if run.mode == "single" and run.domain_id is None:
         raise HTTPException(
             status_code=409,
             detail="Original run's domain has been deleted; cannot rerun.",
+        )
+    if run.mode == "multi" and run.domain_column_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Original run's domain column has been deleted; cannot rerun.",
         )
 
     failed_rows = (
@@ -235,7 +302,7 @@ async def rerun_failed_rows(
             select(PublishJob.source_ref).where(
                 PublishJob.source_kind == "bulk_row",
                 PublishJob.status == "failed",
-                PublishJob.source_ref["run_id"].astext == str(src.id),
+                PublishJob.source_ref["run_id"].astext == str(run.id),
             )
         )
     ).all()
@@ -250,28 +317,120 @@ async def rerun_failed_rows(
             seen.add(rid)
             row_ids.append(rid)
 
+    # Exclude rows that already have a non-failed job for this run (defensive —
+    # shouldn't happen if the run reached a terminal state, but a manual DB
+    # edit or a partially-applied retry could leave one behind).
+    if row_ids:
+        active = (
+            await db.execute(
+                select(PublishJob.source_ref).where(
+                    PublishJob.source_kind == "bulk_row",
+                    PublishJob.status.in_(("posted", "posting")),
+                    PublishJob.source_ref["run_id"].astext == str(run.id),
+                )
+            )
+        ).all()
+        blocked: set[int] = set()
+        for (sref,) in active:
+            try:
+                blocked.add(int((sref or {}).get("row_id")))
+            except (TypeError, ValueError):
+                continue
+        row_ids = [r for r in row_ids if r not in blocked]
+
     if not row_ids:
         raise HTTPException(status_code=409, detail="No failed rows to rerun.")
 
-    new_run = BulkPublishRun(
-        table_id=src.table_id,
-        domain_id=src.domain_id,
-        profile_name=src.profile_name or "",
-        language=src.language,
-        row_filter="selected",
-        selection={"row_ids": row_ids},
-        cell_filter="all",
-        field_to_column=dict(src.field_to_column or {}),
-        back_fill=dict(src.back_fill or {}),
-        status="queued",
-        created_by_id=actor.id,
-    )
-    db.add(new_run)
+    # Reopen the run. Decrement the failed counter by the number of rows we're
+    # about to retry so the finalizer math (done + failed + skipped >= total)
+    # works out when the new attempts complete. The old failed publish_jobs
+    # rows are left in place for audit.
+    run.status = "running"
+    run.failed = max(0, run.failed - len(row_ids))
+    run.finished_at = None
+    run.error = None
     await db.commit()
-    await db.refresh(new_run)
+    await db.refresh(run)
 
-    seed_publish_run_task.delay(new_run.id)
-    return await _to_detail(db, new_run)
+    for row_id in row_ids:
+        publish_one_bulk_row_task.delay(run.id, row_id)
+
+    return await _to_detail(db, run)
+
+
+_TERMINAL_RUN_STATUSES = ("done", "failed", "cancelled")
+
+
+@router.delete(
+    "/runs/completed",
+    status_code=status.HTTP_200_OK,
+)
+async def clear_completed_runs(
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_role("admin", "manager")),
+) -> dict:
+    """Delete every BulkPublishRun in a terminal state (done | failed | cancelled).
+
+    Child PublishJob rows referencing each run via source_ref->>'run_id' are
+    deleted first (no FK, so we do it manually). In-flight runs (queued /
+    running / paused) are left alone — cancel them first.
+    """
+    run_ids = (
+        await db.execute(
+            select(BulkPublishRun.id).where(
+                BulkPublishRun.status.in_(_TERMINAL_RUN_STATUSES)
+            )
+        )
+    ).scalars().all()
+    if not run_ids:
+        return {"deleted": 0}
+
+    str_ids = [str(i) for i in run_ids]
+    await db.execute(
+        sa_delete(PublishJob).where(
+            PublishJob.source_kind == "bulk_row",
+            PublishJob.source_ref["run_id"].astext.in_(str_ids),
+        )
+    )
+    result = await db.execute(
+        sa_delete(BulkPublishRun).where(BulkPublishRun.id.in_(run_ids))
+    )
+    await db.commit()
+    return {"deleted": result.rowcount or 0}
+
+
+@router.delete(
+    "/runs/{run_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def delete_run(
+    run_id: int,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_role("admin", "manager")),
+) -> Response:
+    """Delete a terminal BulkPublishRun and its child publish_jobs.
+
+    PublishJob rows reference the run via source_ref->>'run_id' (no FK), so
+    we explicitly delete them first.
+    """
+    run = await db.get(BulkPublishRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    if run.status not in _TERMINAL_RUN_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete a run while it is {run.status!r}. Cancel it first.",
+        )
+    await db.execute(
+        sa_delete(PublishJob).where(
+            PublishJob.source_kind == "bulk_row",
+            PublishJob.source_ref["run_id"].astext == str(run.id),
+        )
+    )
+    await db.delete(run)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/runs/{run_id}/cancel", response_model=BulkRunDetail)
@@ -286,18 +445,29 @@ async def cancel_run(
     )
 
 
+# ---------- mapping memo ----------
+
 @router.get(
-    "/mappings/{table_id}/{domain_id}/{profile_name}",
+    "/mappings/{table_id}/single/{domain_id}/{profile_name}",
     response_model=PublishMapping,
 )
-async def get_mapping(
+async def get_mapping_single(
     table_id: int,
     domain_id: int,
     profile_name: str,
     db: AsyncSession = Depends(get_db),
 ) -> PublishMapping:
     profile = _decode_url_profile(profile_name)
-    row = await db.get(BulkTablePublishMapping, (table_id, domain_id, profile))
+    row = (
+        await db.execute(
+            select(BulkTablePublishMapping).where(
+                BulkTablePublishMapping.table_id == table_id,
+                BulkTablePublishMapping.mode == "single",
+                BulkTablePublishMapping.domain_id == domain_id,
+                BulkTablePublishMapping.profile_name == profile,
+            )
+        )
+    ).scalar_one_or_none()
     if row is None:
         return PublishMapping()
     return PublishMapping(
@@ -308,25 +478,148 @@ async def get_mapping(
 
 
 @router.delete(
-    "/mappings/{table_id}/{domain_id}/{profile_name}",
+    "/mappings/{table_id}/single/{domain_id}/{profile_name}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
 )
-async def delete_mapping(
+async def delete_mapping_single(
     table_id: int,
     domain_id: int,
     profile_name: str,
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     profile = _decode_url_profile(profile_name)
-    row = await db.get(BulkTablePublishMapping, (table_id, domain_id, profile))
+    row = (
+        await db.execute(
+            select(BulkTablePublishMapping).where(
+                BulkTablePublishMapping.table_id == table_id,
+                BulkTablePublishMapping.mode == "single",
+                BulkTablePublishMapping.domain_id == domain_id,
+                BulkTablePublishMapping.profile_name == profile,
+            )
+        )
+    ).scalar_one_or_none()
     if row is not None:
         await db.delete(row)
         await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-# ---- helpers ----
+@router.get(
+    "/mappings/{table_id}/multi",
+    response_model=PublishMapping,
+)
+async def get_mapping_multi(
+    table_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> PublishMapping:
+    row = (
+        await db.execute(
+            select(BulkTablePublishMapping).where(
+                BulkTablePublishMapping.table_id == table_id,
+                BulkTablePublishMapping.mode == "multi",
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return PublishMapping()
+    return PublishMapping(
+        field_to_column=row.field_to_column or {},
+        back_fill=row.back_fill or {},
+        language=row.language,
+        domain_column_id=row.domain_column_id,
+        profile_column_id=row.profile_column_id,
+    )
+
+
+@router.delete(
+    "/mappings/{table_id}/multi",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def delete_mapping_multi(
+    table_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    row = (
+        await db.execute(
+            select(BulkTablePublishMapping).where(
+                BulkTablePublishMapping.table_id == table_id,
+                BulkTablePublishMapping.mode == "multi",
+            )
+        )
+    ).scalar_one_or_none()
+    if row is not None:
+        await db.delete(row)
+        await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ---------- helpers ----------
+
+
+async def _save_mapping(
+    db: AsyncSession,
+    *,
+    table_id: int,
+    mode: str,
+    domain_id: int | None,
+    profile_name: str | None,
+    domain_column_id: int | None,
+    profile_column_id: int | None,
+    field_to_column: dict[str, int],
+    back_fill: dict[str, int],
+    language: str | None,
+    actor_id: int | None,
+) -> None:
+    """Upsert a mapping memo. Two shapes coexist:
+      single mode: keyed on (table_id, mode='single', domain_id, profile_name)
+      multi mode:  keyed on (table_id, mode='multi')
+    Partial unique indexes enforce both shapes.
+    """
+    if mode == "single":
+        existing = (
+            await db.execute(
+                select(BulkTablePublishMapping).where(
+                    BulkTablePublishMapping.table_id == table_id,
+                    BulkTablePublishMapping.mode == "single",
+                    BulkTablePublishMapping.domain_id == domain_id,
+                    BulkTablePublishMapping.profile_name == (profile_name or ""),
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            existing = BulkTablePublishMapping(
+                table_id=table_id,
+                mode="single",
+                domain_id=domain_id,
+                profile_name=profile_name or "",
+            )
+            db.add(existing)
+    else:
+        existing = (
+            await db.execute(
+                select(BulkTablePublishMapping).where(
+                    BulkTablePublishMapping.table_id == table_id,
+                    BulkTablePublishMapping.mode == "multi",
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            existing = BulkTablePublishMapping(
+                table_id=table_id,
+                mode="multi",
+            )
+            db.add(existing)
+        existing.domain_column_id = domain_column_id
+        existing.profile_column_id = profile_column_id
+
+    existing.field_to_column = dict(field_to_column)
+    existing.back_fill = dict(back_fill)
+    existing.language = language
+    existing.updated_by_id = actor_id
+    await db.commit()
+
 
 def _to_summary(
     run: BulkPublishRun,
@@ -340,6 +633,7 @@ def _to_summary(
         started_at=run.started_at,
         finished_at=run.finished_at,
         table_id=run.table_id,
+        mode=run.mode,  # type: ignore[arg-type]
         domain_id=run.domain_id,
         domain_name=domain_name,
         table_name=table_name,
@@ -355,6 +649,44 @@ def _to_summary(
     )
 
 
+async def _by_domain_summary(
+    db: AsyncSession, run: BulkPublishRun
+) -> list[ByDomainStat]:
+    """Group this run's publish_jobs by domain and count outcomes.
+
+    Cheap aggregation query — at most one row per domain that ever got a job
+    in this run. For multi-mode runs with hundreds of domains it's still a
+    single GROUP BY on a small index.
+    """
+    stmt = sa_text(
+        """
+        SELECT
+            pj.domain_id,
+            d.name AS domain_name,
+            COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE pj.status = 'posted') AS posted,
+            COUNT(*) FILTER (WHERE pj.status = 'failed') AS failed
+        FROM publish_jobs pj
+        LEFT JOIN domains d ON d.id = pj.domain_id
+        WHERE pj.source_kind = 'bulk_row'
+          AND pj.source_ref->>'run_id' = :run_id
+        GROUP BY pj.domain_id, d.name
+        ORDER BY total DESC, domain_name NULLS LAST
+        """
+    )
+    rows = (await db.execute(stmt, {"run_id": str(run.id)})).all()
+    return [
+        ByDomainStat(
+            domain_id=r[0],
+            domain_name=r[1],
+            total=int(r[2]),
+            posted=int(r[3]),
+            failed=int(r[4]),
+        )
+        for r in rows
+    ]
+
+
 async def _to_detail(db: AsyncSession, run: BulkPublishRun) -> BulkRunDetail:
     domain_name = None
     table_name = None
@@ -366,6 +698,11 @@ async def _to_detail(db: AsyncSession, run: BulkPublishRun) -> BulkRunDetail:
         t = await db.get(BulkTable, run.table_id)
         if t is not None:
             table_name = t.name
+
+    by_domain: list[ByDomainStat] = []
+    if run.mode == "multi":
+        by_domain = await _by_domain_summary(db, run)
+
     base = _to_summary(run, domain_name=domain_name, table_name=table_name)
     return BulkRunDetail(
         **base.model_dump(),
@@ -374,4 +711,7 @@ async def _to_detail(db: AsyncSession, run: BulkPublishRun) -> BulkRunDetail:
         cell_filter=run.cell_filter,  # type: ignore[arg-type]
         field_to_column=run.field_to_column or {},
         back_fill=run.back_fill or {},
+        domain_column_id=run.domain_column_id,
+        profile_column_id=run.profile_column_id,
+        by_domain=by_domain,
     )

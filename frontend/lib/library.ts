@@ -195,6 +195,10 @@ export interface GenerateRequestPayload {
   mode?: GenerateMode;
   /** @deprecated use `mode: 'all'` */
   overwrite?: boolean;
+  /** Queue-wide override: when set, every cell in this run uses these values
+   * instead of per-column settings. Both must be sent together (validated server-side). */
+  override_provider_code?: string | null;
+  override_model?: string | null;
 }
 
 export interface GenerateResponsePayload {

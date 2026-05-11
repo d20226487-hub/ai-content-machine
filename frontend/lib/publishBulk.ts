@@ -10,6 +10,7 @@ export type BulkRunStatus =
 
 export type RowFilter = "all" | "selected" | "range";
 export type CellFilter = "all" | "unpublished" | "failed";
+export type PublishMode = "single" | "multi";
 
 export interface BulkRunSummary {
   id: number;
@@ -17,6 +18,7 @@ export interface BulkRunSummary {
   started_at: string | null;
   finished_at: string | null;
   table_id: number;
+  mode: PublishMode;
   domain_id: number | null;
   domain_name: string | null;
   table_name: string | null;
@@ -31,18 +33,37 @@ export interface BulkRunSummary {
   created_by_id: number | null;
 }
 
+export interface ByDomainStat {
+  domain_id: number | null;
+  domain_name: string | null;
+  total: number;
+  posted: number;
+  failed: number;
+}
+
 export interface BulkRunDetail extends BulkRunSummary {
   row_filter: RowFilter;
   selection: Record<string, unknown> | null;
   cell_filter: CellFilter;
   field_to_column: Record<string, number>;
   back_fill: Record<string, number>;
+  domain_column_id: number | null;
+  profile_column_id: number | null;
+  by_domain: ByDomainStat[];
 }
 
 export interface BulkPublishPayload {
   table_id: number;
-  domain_id: number;
+  mode: PublishMode;
+
+  // single mode
+  domain_id?: number | null;
   profile_name?: string | null;
+
+  // multi mode
+  domain_column_id?: number | null;
+  profile_column_id?: number | null;
+
   language?: string | null;
   row_filter: RowFilter;
   selection?: Record<string, unknown> | null;
@@ -56,6 +77,8 @@ export interface PublishMapping {
   field_to_column: Record<string, number>;
   back_fill: Record<string, number>;
   language: string | null;
+  domain_column_id?: number | null;
+  profile_column_id?: number | null;
 }
 
 export interface BulkRunListResponse {
@@ -109,27 +132,45 @@ export function rerunFailedRows(id: number) {
   });
 }
 
+export function deleteBulkRun(id: number) {
+  return api<void>(`/publish/runs/${id}`, { method: "DELETE" });
+}
+
+export function clearCompletedBulkRuns() {
+  return api<{ deleted: number }>("/publish/runs/completed", {
+    method: "DELETE",
+  });
+}
+
 function profileSegment(name: string | null | undefined): string {
   return !name ? "-" : encodeURIComponent(name);
 }
 
-export function getMapping(
+export function getMappingSingle(
   tableId: number,
   domainId: number,
   profileName: string | null,
 ) {
   return api<PublishMapping>(
-    `/publish/mappings/${tableId}/${domainId}/${profileSegment(profileName)}`,
+    `/publish/mappings/${tableId}/single/${domainId}/${profileSegment(profileName)}`,
   );
 }
 
-export function clearMapping(
+export function clearMappingSingle(
   tableId: number,
   domainId: number,
   profileName: string | null,
 ) {
   return api<void>(
-    `/publish/mappings/${tableId}/${domainId}/${profileSegment(profileName)}`,
+    `/publish/mappings/${tableId}/single/${domainId}/${profileSegment(profileName)}`,
     { method: "DELETE" },
   );
+}
+
+export function getMappingMulti(tableId: number) {
+  return api<PublishMapping>(`/publish/mappings/${tableId}/multi`);
+}
+
+export function clearMappingMulti(tableId: number) {
+  return api<void>(`/publish/mappings/${tableId}/multi`, { method: "DELETE" });
 }

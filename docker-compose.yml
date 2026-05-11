@@ -52,12 +52,28 @@ services:
       REDIS_URL: redis://redis:6379/0
     volumes:
       - ./backend:/app
+      # Daily pg_dump output lives here. Persisted across worker restarts
+      # so retention windows survive a `docker compose up`.
+      - db_backups:/var/backups/acm
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=8
+    # `--beat` runs the periodic-task scheduler embedded in this worker
+    # process. Embedded beat is fine at our scale; if we later run multiple
+    # workers we'd split beat into its own dedicated service so it stays
+    # singleton.
+    command: celery -A app.tasks.celery_app worker --beat --loglevel=info --concurrency=8
+    healthcheck:
+      # `inspect ping` round-trips a control message through the broker to a
+      # live worker. Exits 0 only if at least one worker replies. Catches
+      # wedges where the process is alive but no longer consuming tasks.
+      test: ["CMD-SHELL", "celery -A app.tasks.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10 || exit 1"]
+      interval: 60s
+      timeout: 15s
+      start_period: 30s
+      retries: 3
 
   # Optional: only used if you really want the frontend in Docker.
   # On Windows we strongly recommend running `npm run dev` natively in ./frontend instead.
@@ -81,5 +97,6 @@ services:
 
 volumes:
   db_data:
+  db_backups:
   web_node_modules:
   web_next_cache:

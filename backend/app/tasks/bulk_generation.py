@@ -21,12 +21,37 @@ from app.tasks.celery_app import celery_app
 
 
 @celery_app.task(name="bulk.generate_cell")
-def generate_bulk_cell(table_id: int, row_id: int, column_id: int) -> dict:
-    asyncio.run(_run(table_id, row_id, column_id))
+def generate_bulk_cell(
+    table_id: int,
+    row_id: int,
+    column_id: int,
+    *,
+    override_provider_code: str | None = None,
+    override_model: str | None = None,
+) -> dict:
+    """Generate one cell. The override pair, when both non-None, replaces
+    the per-column provider/model for this run only — see the queue-wide
+    override option in GenerationQueueModal."""
+    asyncio.run(
+        _run(
+            table_id,
+            row_id,
+            column_id,
+            override_provider_code=override_provider_code,
+            override_model=override_model,
+        )
+    )
     return {"table_id": table_id, "row_id": row_id, "column_id": column_id, "ok": True}
 
 
-async def _run(table_id: int, row_id: int, column_id: int) -> None:
+async def _run(
+    table_id: int,
+    row_id: int,
+    column_id: int,
+    *,
+    override_provider_code: str | None,
+    override_model: str | None,
+) -> None:
     settings = get_settings()
     engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
     SessionPerTask: async_sessionmaker[AsyncSession] = async_sessionmaker(
@@ -35,7 +60,12 @@ async def _run(table_id: int, row_id: int, column_id: int) -> None:
     try:
         async with SessionPerTask() as db:
             await generate_one_cell(
-                db, table_id=table_id, row_id=row_id, column_id=column_id
+                db,
+                table_id=table_id,
+                row_id=row_id,
+                column_id=column_id,
+                override_provider_code=override_provider_code,
+                override_model=override_model,
             )
     finally:
         await engine.dispose()
