@@ -67,6 +67,8 @@ export interface Domain {
   created_by_id: number | null;
   created_at: string;
   updated_at: string;
+  /** Non-null only on rows returned from /domains/trash. */
+  deleted_at?: string | null;
 }
 
 export interface DomainCreatePayload {
@@ -115,12 +117,70 @@ export function updateDomain(id: number, payload: DomainUpdatePayload) {
   return api<Domain>(`/domains/${id}`, { method: "PATCH", body: payload });
 }
 
+/** Soft-delete (move to trash). 409 if an in-flight bulk publish run targets this domain. */
 export function deleteDomain(id: number) {
   return api<void>(`/domains/${id}`, { method: "DELETE" });
 }
 
 export function testDomain(id: number) {
   return api<TestConnectionResult>(`/domains/${id}/test`, { method: "POST" });
+}
+
+// ----- Trash -----
+
+export function listDomainTrash() {
+  return api<Domain[]>("/domains/trash");
+}
+
+export function getDomainTrashCount() {
+  return api<{ count: number }>("/domains/trash/count");
+}
+
+export function previewTrashedDomain(id: number) {
+  return api<Domain>(`/domains/trash/${id}`);
+}
+
+export function restoreDomain(id: number) {
+  return api<Domain>(`/domains/${id}/restore`, { method: "POST" });
+}
+
+export function permanentlyDeleteDomain(id: number) {
+  return api<void>(`/domains/${id}/permanent`, { method: "DELETE" });
+}
+
+export function emptyDomainTrash() {
+  return api<{ deleted: number }>("/domains/trash", { method: "DELETE" });
+}
+
+export function bulkRestoreDomains(ids: number[]) {
+  return api<{ restored: number }>("/domains/trash/bulk-restore", {
+    method: "POST",
+    body: { ids },
+  });
+}
+
+export function bulkPermanentlyDeleteDomains(ids: number[]) {
+  return api<{ deleted: number }>("/domains/trash/bulk", {
+    method: "DELETE",
+    body: { ids },
+  });
+}
+
+export interface TrashRetention {
+  days: number;
+  default: number;
+  max: number;
+}
+
+export function getDomainTrashRetention() {
+  return api<TrashRetention>("/domains/trash/retention");
+}
+
+export function setDomainTrashRetention(days: number) {
+  return api<TrashRetention>("/domains/trash/retention", {
+    method: "PUT",
+    body: { days },
+  });
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";

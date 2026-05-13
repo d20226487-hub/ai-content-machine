@@ -32,6 +32,12 @@ class Prompt(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+    # NULL = active. Non-NULL = trashed (soft-deleted). Active list / get /
+    # patch / generation queries filter `deleted_at IS NULL`; the
+    # /prompts/trash surface is the only place trashed rows are visible.
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     versions: Mapped[list["PromptVersion"]] = relationship(
         back_populates="prompt",

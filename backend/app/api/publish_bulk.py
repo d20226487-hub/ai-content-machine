@@ -94,10 +94,25 @@ async def create_bulk_publish_run(
     if payload.mode == "single":
         # Pydantic validator already enforced domain_id is present.
         domain = await db.get(Domain, payload.domain_id)  # type: ignore[arg-type]
-        if domain is None:
+        if domain is None or domain.deleted_at is not None:
+            # Trashed domains are not pickable as publish targets.
             raise HTTPException(status_code=404, detail="Domain not found")
         domain_id = domain.id
         profile = _norm_profile(payload.profile_name)
+        # Update mode is WordPress-only. We block here in single mode so
+        # the user sees the rejection immediately at run creation instead
+        # of every row failing one by one. (Multi mode catches it per-row
+        # via resolve_row_target since each row might point at a different
+        # cms_type.)
+        if payload.operation == "update" and domain.cms_type != "wordpress":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Update mode is supported only for WordPress domains. "
+                    f"{domain.name!r} is configured as {domain.cms_type}; "
+                    "use Single mode + Create, or switch the domain's CMS type."
+                ),
+            )
     else:
         # Multi mode: domain_column_id required (Pydantic enforced); profile
         # column required when ANY domain in the table is WordPress. We can't
@@ -126,6 +141,38 @@ async def create_bulk_publish_run(
         domain_column_id = payload.domain_column_id
         profile_column_id = payload.profile_column_id
 
+    # Optional per-row language column. Works in BOTH single and multi
+    # mode: each row reads its language from the cell, the value is
+    # lowercase+trim normalized, and must match one of the resolved
+    # domain's `languages[]`. In single mode the domain is run-level; in
+    # multi mode it's per-row. Empty cells fail the row in strict mode.
+    language_column_id: int | None = None
+    if payload.language_column_id is not None:
+        if not await _column_belongs_to_table(
+            db, column_id=payload.language_column_id, table_id=table.id
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="language_column_id does not belong to this table",
+            )
+        language_column_id = payload.language_column_id
+
+    # Update mode: ensure the lookup column exists on this table. The
+    # Pydantic validator already asserted the field is present; here we
+    # check it actually refers to a column of this bulk table.
+    lookup_kind = payload.lookup_kind
+    lookup_column_id = payload.lookup_column_id
+    if payload.operation == "update":
+        if not await _column_belongs_to_table(
+            db,
+            column_id=payload.lookup_column_id,  # type: ignore[arg-type]
+            table_id=table.id,
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="lookup_column_id does not belong to this table",
+            )
+
     run = BulkPublishRun(
         table_id=table.id,
         mode=payload.mode,
@@ -133,6 +180,7 @@ async def create_bulk_publish_run(
         profile_name=profile,
         domain_column_id=domain_column_id,
         profile_column_id=profile_column_id,
+        language_column_id=language_column_id,
         language=payload.language,
         row_filter=payload.row_filter,
         selection=payload.selection,
@@ -141,6 +189,10 @@ async def create_bulk_publish_run(
         back_fill={k: int(v) for k, v in payload.back_fill.items()},
         status="queued",
         created_by_id=actor.id,
+        operation=payload.operation,
+        lookup_kind=lookup_kind,
+        lookup_column_id=lookup_column_id,
+        on_slug_conflict=payload.on_slug_conflict,
     )
     db.add(run)
     await db.commit()
@@ -160,6 +212,11 @@ async def create_bulk_publish_run(
             back_fill=run.back_fill,
             language=payload.language,
             actor_id=actor.id,
+            operation=payload.operation,
+            lookup_kind=lookup_kind,
+            lookup_column_id=lookup_column_id,
+            language_column_id=language_column_id,
+            on_slug_conflict=payload.on_slug_conflict,
         )
 
     seed_publish_run_task.delay(run.id)
@@ -270,9 +327,11 @@ async def rerun_failed_rows(
     candidate computation would otherwise still exclude these rows because
     they already have a 'failed' PublishJob).
 
-    Old failed PublishJob rows are kept for audit. Each retry inserts a new
-    PublishJob, so a row that's been retried N times will have N+1 rows in
-    publish_jobs for this (run_id, row_id).
+    The old failed PublishJob rows for those rows are deleted before the
+    new attempts go out. Without this the run-detail per-row table mixed
+    the old failures with the new in-flight rows and confused users —
+    the run-level counters are the source of truth, and the deeper audit
+    trail is captured by error_logs (which we don't touch here).
     """
     run = await db.get(BulkPublishRun, run_id)
     if run is None:
@@ -341,10 +400,25 @@ async def rerun_failed_rows(
     if not row_ids:
         raise HTTPException(status_code=409, detail="No failed rows to rerun.")
 
+    # Wipe the old failed publish_jobs for the rows we're about to retry so
+    # the run-detail per-row table only shows the new in-flight attempt.
+    # We intentionally only delete `failed` jobs for this run + these rows
+    # — posted/posting rows are untouched (and aren't in row_ids anyway via
+    # the earlier filter). The error_logs row that mirrored each failure
+    # stays put — that's the long-form audit trail.
+    str_row_ids = [str(r) for r in row_ids]
+    await db.execute(
+        sa_delete(PublishJob).where(
+            PublishJob.source_kind == "bulk_row",
+            PublishJob.status == "failed",
+            PublishJob.source_ref["run_id"].astext == str(run.id),
+            PublishJob.source_ref["row_id"].astext.in_(str_row_ids),
+        )
+    )
+
     # Reopen the run. Decrement the failed counter by the number of rows we're
     # about to retry so the finalizer math (done + failed + skipped >= total)
-    # works out when the new attempts complete. The old failed publish_jobs
-    # rows are left in place for audit.
+    # works out when the new attempts complete.
     run.status = "running"
     run.failed = max(0, run.failed - len(row_ids))
     run.finished_at = None
@@ -474,6 +548,10 @@ async def get_mapping_single(
         field_to_column=row.field_to_column or {},
         back_fill=row.back_fill or {},
         language=row.language,
+        operation=row.operation,
+        lookup_kind=row.lookup_kind,
+        lookup_column_id=row.lookup_column_id,
+        on_slug_conflict=row.on_slug_conflict,
     )
 
 
@@ -529,6 +607,11 @@ async def get_mapping_multi(
         language=row.language,
         domain_column_id=row.domain_column_id,
         profile_column_id=row.profile_column_id,
+        language_column_id=row.language_column_id,
+        operation=row.operation,
+        lookup_kind=row.lookup_kind,
+        lookup_column_id=row.lookup_column_id,
+        on_slug_conflict=row.on_slug_conflict,
     )
 
 
@@ -571,6 +654,11 @@ async def _save_mapping(
     back_fill: dict[str, int],
     language: str | None,
     actor_id: int | None,
+    operation: str = "create",
+    lookup_kind: str | None = None,
+    lookup_column_id: int | None = None,
+    language_column_id: int | None = None,
+    on_slug_conflict: str = "create",
 ) -> None:
     """Upsert a mapping memo. Two shapes coexist:
       single mode: keyed on (table_id, mode='single', domain_id, profile_name)
@@ -613,10 +701,15 @@ async def _save_mapping(
             db.add(existing)
         existing.domain_column_id = domain_column_id
         existing.profile_column_id = profile_column_id
+        existing.language_column_id = language_column_id
 
     existing.field_to_column = dict(field_to_column)
     existing.back_fill = dict(back_fill)
     existing.language = language
+    existing.operation = operation
+    existing.lookup_kind = lookup_kind
+    existing.lookup_column_id = lookup_column_id
+    existing.on_slug_conflict = on_slug_conflict
     existing.updated_by_id = actor_id
     await db.commit()
 
@@ -646,6 +739,11 @@ def _to_summary(
         skipped=run.skipped,
         error=run.error,
         created_by_id=run.created_by_id,
+        operation=run.operation,  # type: ignore[arg-type]
+        lookup_kind=run.lookup_kind,  # type: ignore[arg-type]
+        lookup_column_id=run.lookup_column_id,
+        language_column_id=run.language_column_id,
+        on_slug_conflict=run.on_slug_conflict,  # type: ignore[arg-type]
     )
 
 

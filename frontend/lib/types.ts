@@ -13,6 +13,8 @@ export interface User {
   is_active: boolean;
   role: Role;
   created_at: string;
+  /** Non-null only on rows returned from /users/trash. */
+  deleted_at?: string | null;
 }
 
 export interface TokenResponse {
@@ -84,6 +86,8 @@ export interface PromptListItem {
   created_by_email: string | null;
   created_at: string;
   updated_at: string;
+  /** Non-null only on rows returned from /prompts/trash. */
+  deleted_at?: string | null;
 }
 
 export interface PromptDetail {
@@ -200,6 +204,8 @@ export interface BulkTableListItem {
   updated_at: string;
   column_count: number;
   row_count: number;
+  /** Non-null only on rows returned from /library/trash. */
+  deleted_at?: string | null;
 }
 
 export interface BulkTable {
@@ -211,6 +217,8 @@ export interface BulkTable {
   created_by_name: string | null;
   created_at: string;
   updated_at: string;
+  /** Non-null only when fetched via /library/trash/{id}. */
+  deleted_at?: string | null;
   columns: BulkColumn[];
   rows: BulkRow[];
   cells: BulkCell[];

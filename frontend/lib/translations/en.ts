@@ -14,6 +14,9 @@ export const en = {
   "common.savedDot": "Saved.",
   "common.cancel": "Cancel",
   "common.close": "Close",
+  "modal.unsavedConfirm": "Unsaved changes — discard them?",
+  "modal.discard": "Discard",
+  "modal.keepEditing": "Keep editing",
   "common.delete": "Delete",
   "common.deleteFailed": "Delete failed",
   "common.edit": "Edit",
@@ -143,7 +146,8 @@ export const en = {
   "pricing.colOutput": "Output $/1M",
   "pricing.unitHint": "USD per 1M tokens. Decimals fine: 0.075, 1.25, etc.",
   "users.you": "you",
-  "users.confirmDelete": "Delete user {email}? This cannot be undone.",
+  "users.confirmDelete":
+    "Move {email} to Trash? They'll be signed out immediately and can't log back in. Restore from the Trash page within the retention window.",
   "users.modalNew": "New user",
   "users.modalEdit": "Edit {email}",
   "users.fieldFullName": "Full name",
@@ -365,7 +369,7 @@ export const en = {
   "promptDetail.revert": "Revert",
   "promptDetail.confirmRevert": "Revert to v{n}? A new version will be created.",
   "promptDetail.confirmDelete":
-    "Delete \"{name}\" and all its versions? This cannot be undone.",
+    "Move \"{name}\" to Trash? The full version history is preserved; restore it from the Trash page within the retention window.",
   "promptDetail.noteSaveFailed": "Failed to save note. See console for details.",
   "promptDetail.revertFailed": "Revert failed",
 
@@ -459,7 +463,127 @@ export const en = {
   "library.confirmDeleteFolder":
     "Delete folder \"{name}\"? It must be empty (move any tables out first).",
   "library.newTablePrompt": "New table name:",
-  "library.confirmDeleteTable": "Delete \"{name}\"? This cannot be undone.",
+  "library.confirmDeleteTable":
+    "Move \"{name}\" to Trash? You can restore it from the Trash page within the retention window.",
+  "library.deleteBlockedInflight":
+    "Cannot trash this table: a bulk publish run is currently using it. Cancel the run on /publish/runs first.",
+  "library.trashLink": "Trash",
+  "library.trashLinkWithCount": "Trash ({count})",
+  "library.trash.title": "Trash",
+  "library.trash.subtitle":
+    "Deleted tables are kept here for {days} days and then permanently removed.",
+  "library.trash.subtitleManual":
+    "Auto-empty is disabled. Tables stay here until you remove them manually.",
+  "library.trash.empty": "Trash is empty.",
+  "library.trash.deletedAt": "Trashed {time}",
+  "library.trash.preview": "Preview",
+  "library.trash.restore": "Restore",
+  "library.trash.deletePermanent": "Delete forever",
+  "library.trash.restoreSelected": "Restore selected",
+  "library.trash.deleteSelected": "Delete selected",
+  "library.trash.emptyAll": "Empty trash",
+  "library.trash.selectAll": "Select all on this page",
+  "library.trash.confirmDeletePermanent":
+    "Permanently delete \"{name}\"? This cannot be undone.",
+  "library.trash.confirmEmpty":
+    "Permanently delete all {count} table(s) in the trash? This cannot be undone.",
+  "library.trash.confirmDeleteSelected":
+    "Permanently delete {count} selected table(s)? This cannot be undone.",
+  "library.trash.restored": "Restored {count} table(s).",
+  "library.trash.deleted": "Permanently deleted {count} table(s).",
+  "library.trash.previewBanner":
+    "This table is in Trash (deleted {time}). It's read-only — restore it to edit.",
+  "library.trash.previewBack": "← Trash",
+  "library.trash.retentionLabel":
+    "Auto-empty trash after",
+  "library.trash.retentionDays": "days",
+  "library.trash.retentionHint":
+    "Set 0 to disable auto-empty (tables stay in Trash until manually removed).",
+  "library.trash.retentionSaved": "Saved.",
+  "library.trash.retentionTitle": "Bulk-table trash retention",
+  "settings.trashRetention.title": "Trash retention",
+  "settings.trashRetention.hint":
+    "How many days each entity stays in Trash before being permanently deleted by the daily cleanup task. Set 0 to disable auto-empty for that entity (manual emptying only).",
+  "settings.trashRetention.days": "days",
+  "settings.trashRetention.saved": "Saved.",
+  "settings.trashRetention.bulkTables": "Bulk tables",
+  "settings.trashRetention.domains": "Domains",
+  "settings.trashRetention.prompts": "Prompts",
+  "settings.trashRetention.users": "Users",
+  "users.trashLinkWithCount": "Trash ({count})",
+  "users.trash.title": "Trash",
+  "users.trash.subtitle":
+    "Deleted users are kept here for {days} days and then permanently removed. Non-admin trashed users are auto-purged by the daily cleanup task; admins are skipped and require a manual \"Delete forever\" click.",
+  "users.trash.subtitleManual":
+    "Auto-empty is disabled. Users stay here until you remove them manually.",
+  "users.trash.adminHint":
+    "Note: trashed users can't log in. Their session is invalidated immediately. Restoring puts them back in the active list — they have to log in fresh (their previous token isn't reissued).",
+  "users.trash.empty": "Trash is empty.",
+  "users.trash.deletedAt": "Trashed {time}",
+  "users.trash.restore": "Restore",
+  "users.trash.deletePermanent": "Delete forever",
+  "users.trash.restoreSelected": "Restore selected",
+  "users.trash.deleteSelected": "Delete selected",
+  "users.trash.emptyAll": "Empty trash",
+  "users.trash.selectAll": "Select all",
+  "users.trash.confirmDeletePermanent":
+    "Permanently delete {email}? Their attribution on prompts / domains / bulk tables becomes \"(deleted user)\". Spend history is preserved in the orphan bucket. This cannot be undone.",
+  "users.trash.confirmEmpty":
+    "Permanently delete all {count} user(s) in the trash? Admins are skipped (see the note above). This cannot be undone.",
+  "users.trash.confirmDeleteSelected":
+    "Permanently delete {count} selected user(s)? Admins in the selection are skipped.",
+  "users.trash.restored": "Restored {count} user(s).",
+  "users.trash.deleted": "Permanently deleted {count} user(s).",
+  "users.trash.skippedConflicts":
+    "Skipped {count} user(s) due to email conflicts with active accounts: {emails}",
+  "prompts.trashLinkWithCount": "Trash ({count})",
+  "prompts.trash.title": "Trash",
+  "prompts.trash.subtitle":
+    "Deleted prompts are kept here for {days} days and then permanently removed. The full version history is preserved until permanent deletion.",
+  "prompts.trash.subtitleManual":
+    "Auto-empty is disabled. Prompts stay here until you remove them manually.",
+  "prompts.trash.empty": "Trash is empty.",
+  "prompts.trash.deletedAt": "Trashed {time}",
+  "prompts.trash.restore": "Restore",
+  "prompts.trash.deletePermanent": "Delete forever",
+  "prompts.trash.restoreSelected": "Restore selected",
+  "prompts.trash.deleteSelected": "Delete selected",
+  "prompts.trash.emptyAll": "Empty trash",
+  "prompts.trash.selectAll": "Select all on this page",
+  "prompts.trash.confirmDeletePermanent":
+    "Permanently delete \"{name}\"? Its entire version history will be gone forever.",
+  "prompts.trash.confirmEmpty":
+    "Permanently delete all {count} prompt(s) in the trash? Version history for each is lost. This cannot be undone.",
+  "prompts.trash.confirmDeleteSelected":
+    "Permanently delete {count} selected prompt(s)? Version history for each is lost.",
+  "prompts.trash.restored": "Restored {count} prompt(s).",
+  "prompts.trash.deleted": "Permanently deleted {count} prompt(s).",
+  "domains.trashLinkWithCount": "Trash ({count})",
+  "domains.deleteBlockedInflight":
+    "Cannot trash this domain: a bulk publish run is currently using it. Cancel the run on /publish/runs first.",
+  "domains.confirmDelete":
+    "Move \"{name}\" to Trash? Credentials and publish profiles are preserved; restore from the Trash page.",
+  "domains.trash.title": "Trash",
+  "domains.trash.subtitle":
+    "Deleted domains are kept here for {days} days and then permanently removed. Their credentials, publish profiles, rate-limit overrides, and media cache survive until permanent deletion.",
+  "domains.trash.subtitleManual":
+    "Auto-empty is disabled. Domains stay here until you remove them manually.",
+  "domains.trash.empty": "Trash is empty.",
+  "domains.trash.deletedAt": "Trashed {time}",
+  "domains.trash.restore": "Restore",
+  "domains.trash.deletePermanent": "Delete forever",
+  "domains.trash.restoreSelected": "Restore selected",
+  "domains.trash.deleteSelected": "Delete selected",
+  "domains.trash.emptyAll": "Empty trash",
+  "domains.trash.selectAll": "Select all",
+  "domains.trash.confirmDeletePermanent":
+    "Permanently delete \"{name}\"? This cannot be undone — credentials and publish profiles will be lost.",
+  "domains.trash.confirmEmpty":
+    "Permanently delete all {count} domain(s) in the trash? This cannot be undone.",
+  "domains.trash.confirmDeleteSelected":
+    "Permanently delete {count} selected domain(s)? This cannot be undone.",
+  "domains.trash.restored": "Restored {count} domain(s).",
+  "domains.trash.deleted": "Permanently deleted {count} domain(s).",
   "library.movePickerNoFolder": "— no folder —",
   "library.breadcrumbRoot": "Library",
   "library.inFolder": "in",
@@ -713,7 +837,6 @@ export const en = {
   "domains.noCreds": "(no creds)",
   "domains.testButton": "Test",
   "domains.testing": "Testing…",
-  "domains.confirmDelete": "Delete domain \"{name}\"?",
   "domains.testFailed": "Test failed",
 
   // domain modal
@@ -845,6 +968,10 @@ export const en = {
   "bulkRuns.empty": "No bulk runs yet.",
   "bulkRuns.tableFallback": "Table #{id}",
   "bulkRuns.failedSuffix": "({count} failed)",
+  "bulkRuns.colLang": "Lang",
+  "bulkRuns.perRowLang": "per-row",
+  "bulkRuns.perRowLangHint": "Each row reads its language from a column.",
+  "bulkRun.colLang": "Lang",
   "bulkRuns.clearCompleted": "Clear completed",
   "bulkRuns.clearCompletedConfirm":
     "Delete every completed bulk run (done / failed / cancelled) and their publish jobs? This cannot be undone.",
@@ -886,6 +1013,12 @@ export const en = {
   "bulkRun.viewLink": "View",
   "bulkRun.modeSingle": "Single site",
   "bulkRun.modeMulti": "Multi site",
+  "bulkRun.opUpdate": "Update",
+  "bulkRun.opUpdateHint":
+    "This run patches existing posts (lookup by {kind}). Mapped fields with empty cells are left unchanged.",
+  "bulkRun.perRowLang": "Per-row lang",
+  "bulkRun.perRowLangHint":
+    "Each row's language was read from a column instead of using the run-level language.",
   "bulkRun.acrossDomains": "across {count} site(s)",
   "bulkRun.byDomainHeading": "By site ({count})",
   "bulkRun.colTotal": "Total",
@@ -917,6 +1050,10 @@ export const en = {
   "bulkPub.profileColumnDefault": "— use each domain's default profile —",
   "bulkPub.profileColumnHint":
     "If set, each row reads its profile name from this column. Profile names must match those configured on the destination domain.",
+  "bulkPub.fieldLanguageColumn": "Language column (optional)",
+  "bulkPub.languageColumnDefault": "— use the run-level language —",
+  "bulkPub.languageColumnHint":
+    "If set, each row reads its language from this column (case-insensitive). Must match one of the resolved domain's configured languages. Empty cells fail the row — fill every row if you turn this on.",
   "bulkPub.pickColumn": "— pick a column —",
   "bulkPub.fieldPostType": "Post type",
   "bulkPub.fieldLanguage": "Language",
@@ -945,6 +1082,50 @@ export const en = {
     "Remember this mapping for future runs to the same destination",
   "bulkPub.willPublish": "Will publish {count} row(s).",
   "bulkPub.willPublishAcross": "Will publish {count} row(s) across {domains} site(s).",
+  "bulkPub.willUpdate": "Will update {count} existing post(s).",
+  "bulkPub.willUpdateAcross": "Will update {count} existing post(s) across {domains} site(s).",
+  "bulkPub.operation": "Operation",
+  "bulkPub.opCreate": "Create",
+  "bulkPub.opUpdate": "Update",
+  "bulkPub.opCreateHint": "Post new content. Each row creates a new post.",
+  "bulkPub.opUpdateHint":
+    "Patch existing posts. Each row resolves an existing post (by id or slug) and updates it. WordPress only.",
+  "bulkPub.lookupKind": "Look up post by",
+  "bulkPub.lookupKindId": "Post ID",
+  "bulkPub.lookupKindSlug": "Slug",
+  "bulkPub.lookupColumn": "Lookup column",
+  "bulkPub.lookupColumnPlaceholder": "pick a column",
+  "bulkPub.lookupHintId":
+    "Each row's cell must be a numeric WordPress post ID. Rows with a non-numeric or missing value will fail.",
+  "bulkPub.lookupHintSlug":
+    "Each row's cell holds the WP post slug. Full URLs are also accepted — the worker extracts the slug from the last path segment, so the cms_post_url column works as a lookup. Looks up posts in any status.",
+  "bulkPub.updateBlankHint":
+    "Mapped fields with empty cells are left unchanged on the WordPress side. Map only the fields you want to overwrite.",
+  "bulkPub.updateWpOnly":
+    "Update mode is WordPress-only. {name} is not a WordPress domain — pick a WP domain or switch to Create.",
+  "bulkPub.updateLookupRequired":
+    "Pick a column that holds each row's existing post id or slug before starting an Update run.",
+  "bulkPub.updateMapAtLeastOne":
+    "Map at least one field to a column before starting an Update run (otherwise the PATCH has nothing to send).",
+  "bulkPub.startUpdate": "Start update ({count})",
+  "bulkPub.onSlugConflict": "If slug already exists",
+  "bulkPub.onSlugCreate": "Create anyway",
+  "bulkPub.onSlugSkip": "Skip",
+  "bulkPub.onSlugUpdate": "Update existing",
+  "bulkPub.onSlugCreateHint":
+    "Default. POST every row. If WordPress sees a slug collision in the same language, it auto-suffixes (e.g. 'canada' → 'canada-2').",
+  "bulkPub.onSlugSkipHint":
+    "Before each row, query WP for a post with the same slug in the row's language. If one exists, log the row as 'skipped' and don't publish. Adds one GET per row. Polylang/WPML: scoped per language — an EN 'canada' does NOT block a new RU 'canada'.",
+  "bulkPub.onSlugUpdateHint":
+    "Upsert. If a post with the same slug exists (in the row's language), PATCH it; otherwise POST a new one. Mapped fields with empty cells are left unchanged on existing posts. Adds one GET per row.",
+  "bulkPub.slugConflictNeedsSlug":
+    "This option requires the 'slug' field to be mapped to a column.",
+  "bulkRun.onSlugSkip": "Skip dupes",
+  "bulkRun.onSlugSkipHint":
+    "Rows whose slug already exists on the target are recorded as skipped (per-language).",
+  "bulkRun.onSlugUpsert": "Upsert",
+  "bulkRun.onSlugUpsertHint":
+    "Rows whose slug already exists on the target are patched instead of creating a new post (per-language).",
   "bulkPub.andMore": "…and {count} more",
   "bulkPub.missingRequired": "Missing column for required field(s): {fields}",
   "bulkPub.noRowsSelected": "No rows selected.",

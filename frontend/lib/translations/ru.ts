@@ -18,6 +18,9 @@ export const ru: Record<keyof typeof en, string> = {
   "common.savedDot": "Сохранено.",
   "common.cancel": "Отмена",
   "common.close": "Закрыть",
+  "modal.unsavedConfirm": "Есть несохранённые изменения — отменить их?",
+  "modal.discard": "Отменить",
+  "modal.keepEditing": "Продолжить редактирование",
   "common.delete": "Удалить",
   "common.deleteFailed": "Не удалось удалить",
   "common.edit": "Редактировать",
@@ -150,7 +153,7 @@ export const ru: Record<keyof typeof en, string> = {
     "USD за 1M токенов. Десятичные дроби допустимы: 0.075, 1.25 и т. п.",
   "users.you": "вы",
   "users.confirmDelete":
-    "Удалить пользователя {email}? Это действие нельзя отменить.",
+    "Переместить {email} в Корзину? Сессия сразу обрывается, войти заново нельзя. Восстановить можно со страницы Корзины в течение срока хранения.",
   "users.modalNew": "Новый пользователь",
   "users.modalEdit": "Редактирование {email}",
   "users.fieldFullName": "Полное имя",
@@ -380,7 +383,7 @@ export const ru: Record<keyof typeof en, string> = {
   "promptDetail.confirmRevert":
     "Откатить к v{n}? Будет создана новая версия.",
   "promptDetail.confirmDelete":
-    "Удалить «{name}» и все его версии? Это действие нельзя отменить.",
+    "Переместить «{name}» в Корзину? История версий сохранится; восстановить можно со страницы Корзины в течение срока хранения.",
   "promptDetail.noteSaveFailed":
     "Не удалось сохранить примечание. Подробности в консоли.",
   "promptDetail.revertFailed": "Откат не выполнен",
@@ -481,7 +484,126 @@ export const ru: Record<keyof typeof en, string> = {
     "Удалить папку «{name}»? Папка должна быть пустой (сначала переместите все таблицы).",
   "library.newTablePrompt": "Название новой таблицы:",
   "library.confirmDeleteTable":
-    "Удалить «{name}»? Это действие нельзя отменить.",
+    "Переместить «{name}» в Корзину? Восстановить можно со страницы Корзины в течение срока хранения.",
+  "library.deleteBlockedInflight":
+    "Нельзя переместить таблицу в Корзину: по ней идёт массовая публикация. Сначала отмените прогон на /publish/runs.",
+  "library.trashLink": "Корзина",
+  "library.trashLinkWithCount": "Корзина ({count})",
+  "library.trash.title": "Корзина",
+  "library.trash.subtitle":
+    "Удалённые таблицы хранятся здесь {days} дней, потом удаляются безвозвратно.",
+  "library.trash.subtitleManual":
+    "Автоочистка выключена. Таблицы остаются здесь, пока их не удалят вручную.",
+  "library.trash.empty": "Корзина пуста.",
+  "library.trash.deletedAt": "Удалена {time}",
+  "library.trash.preview": "Просмотр",
+  "library.trash.restore": "Восстановить",
+  "library.trash.deletePermanent": "Удалить навсегда",
+  "library.trash.restoreSelected": "Восстановить выбранные",
+  "library.trash.deleteSelected": "Удалить выбранные",
+  "library.trash.emptyAll": "Очистить корзину",
+  "library.trash.selectAll": "Выбрать все на странице",
+  "library.trash.confirmDeletePermanent":
+    "Удалить «{name}» безвозвратно? Это нельзя отменить.",
+  "library.trash.confirmEmpty":
+    "Безвозвратно удалить все {count} таблиц(ы) в корзине? Это нельзя отменить.",
+  "library.trash.confirmDeleteSelected":
+    "Безвозвратно удалить выбранные таблицы ({count})? Это нельзя отменить.",
+  "library.trash.restored": "Восстановлено таблиц: {count}.",
+  "library.trash.deleted": "Удалено безвозвратно: {count}.",
+  "library.trash.previewBanner":
+    "Эта таблица в Корзине (удалена {time}). Доступна только для чтения — восстановите для редактирования.",
+  "library.trash.previewBack": "← Корзина",
+  "library.trash.retentionLabel":
+    "Автоочистка корзины через",
+  "library.trash.retentionDays": "дней",
+  "library.trash.retentionHint":
+    "0 — отключить автоочистку (таблицы остаются в корзине до ручного удаления).",
+  "library.trash.retentionSaved": "Сохранено.",
+  "library.trash.retentionTitle": "Срок хранения корзины таблиц",
+  "settings.trashRetention.title": "Срок хранения корзин",
+  "settings.trashRetention.hint":
+    "Сколько дней сущности хранятся в Корзине, пока ежедневная задача очистки не удалит их безвозвратно. 0 — отключить автоочистку (только ручная).",
+  "settings.trashRetention.days": "дней",
+  "settings.trashRetention.saved": "Сохранено.",
+  "settings.trashRetention.bulkTables": "Bulk-таблицы",
+  "settings.trashRetention.domains": "Домены",
+  "settings.trashRetention.prompts": "Промпты",
+  "settings.trashRetention.users": "Пользователи",
+  "users.trashLinkWithCount": "Корзина ({count})",
+  "users.trash.title": "Корзина",
+  "users.trash.subtitle":
+    "Удалённые пользователи хранятся здесь {days} дней, потом удаляются безвозвратно. Не-админы вычищаются ежедневной фоновой задачей; админы пропускаются — их нужно «Удалить навсегда» вручную.",
+  "users.trash.subtitleManual":
+    "Автоочистка выключена. Пользователи остаются здесь, пока их не удалят вручную.",
+  "users.trash.adminHint":
+    "Замечание: трешированные пользователи не могут войти, их сессия сбрасывается мгновенно. Восстановление возвращает их в активный список — войти нужно заново (старый токен не воссоздаётся).",
+  "users.trash.empty": "Корзина пуста.",
+  "users.trash.deletedAt": "Удалён {time}",
+  "users.trash.restore": "Восстановить",
+  "users.trash.deletePermanent": "Удалить навсегда",
+  "users.trash.restoreSelected": "Восстановить выбранные",
+  "users.trash.deleteSelected": "Удалить выбранные",
+  "users.trash.emptyAll": "Очистить корзину",
+  "users.trash.selectAll": "Выбрать все",
+  "users.trash.confirmDeletePermanent":
+    "Удалить {email} безвозвратно? Атрибуция в промптах/доменах/таблицах станет «(удалённый пользователь)». История расходов сохранится в общей корзине. Это нельзя отменить.",
+  "users.trash.confirmEmpty":
+    "Безвозвратно удалить все {count} пользователей в корзине? Админы пропускаются (см. подсказку выше). Это нельзя отменить.",
+  "users.trash.confirmDeleteSelected":
+    "Безвозвратно удалить выбранных пользователей ({count})? Админы в выборке пропускаются.",
+  "users.trash.restored": "Восстановлено: {count}.",
+  "users.trash.deleted": "Удалено безвозвратно: {count}.",
+  "users.trash.skippedConflicts":
+    "Пропущено {count} пользователей из-за конфликтов email с активными аккаунтами: {emails}",
+  "prompts.trashLinkWithCount": "Корзина ({count})",
+  "prompts.trash.title": "Корзина",
+  "prompts.trash.subtitle":
+    "Удалённые промпты хранятся здесь {days} дней, потом удаляются безвозвратно. История версий сохраняется до окончательного удаления.",
+  "prompts.trash.subtitleManual":
+    "Автоочистка выключена. Промпты остаются здесь, пока их не удалят вручную.",
+  "prompts.trash.empty": "Корзина пуста.",
+  "prompts.trash.deletedAt": "Удалён {time}",
+  "prompts.trash.restore": "Восстановить",
+  "prompts.trash.deletePermanent": "Удалить навсегда",
+  "prompts.trash.restoreSelected": "Восстановить выбранные",
+  "prompts.trash.deleteSelected": "Удалить выбранные",
+  "prompts.trash.emptyAll": "Очистить корзину",
+  "prompts.trash.selectAll": "Выбрать все на странице",
+  "prompts.trash.confirmDeletePermanent":
+    "Удалить «{name}» безвозвратно? Вся история версий пропадёт навсегда.",
+  "prompts.trash.confirmEmpty":
+    "Безвозвратно удалить все {count} промпт(ов) в корзине? Истории версий пропадут. Это нельзя отменить.",
+  "prompts.trash.confirmDeleteSelected":
+    "Безвозвратно удалить выбранные промпты ({count})? Истории версий пропадут.",
+  "prompts.trash.restored": "Восстановлено промптов: {count}.",
+  "prompts.trash.deleted": "Удалено безвозвратно: {count}.",
+  "domains.trashLinkWithCount": "Корзина ({count})",
+  "domains.deleteBlockedInflight":
+    "Нельзя переместить домен в Корзину: по нему идёт массовая публикация. Сначала отмените прогон на /publish/runs.",
+  "domains.confirmDelete":
+    "Переместить «{name}» в Корзину? Учётные данные и профили публикации сохранятся — восстановить можно со страницы Корзины.",
+  "domains.trash.title": "Корзина",
+  "domains.trash.subtitle":
+    "Удалённые домены хранятся здесь {days} дней, потом удаляются безвозвратно. До этого момента учётные данные, профили публикации, лимиты и media-кэш сохраняются.",
+  "domains.trash.subtitleManual":
+    "Автоочистка выключена. Домены остаются здесь, пока их не удалят вручную.",
+  "domains.trash.empty": "Корзина пуста.",
+  "domains.trash.deletedAt": "Удалён {time}",
+  "domains.trash.restore": "Восстановить",
+  "domains.trash.deletePermanent": "Удалить навсегда",
+  "domains.trash.restoreSelected": "Восстановить выбранные",
+  "domains.trash.deleteSelected": "Удалить выбранные",
+  "domains.trash.emptyAll": "Очистить корзину",
+  "domains.trash.selectAll": "Выбрать все",
+  "domains.trash.confirmDeletePermanent":
+    "Удалить «{name}» безвозвратно? Учётные данные и профили публикации будут потеряны.",
+  "domains.trash.confirmEmpty":
+    "Безвозвратно удалить все {count} домен(ов) в корзине? Это нельзя отменить.",
+  "domains.trash.confirmDeleteSelected":
+    "Безвозвратно удалить выбранные домены ({count})? Это нельзя отменить.",
+  "domains.trash.restored": "Восстановлено доменов: {count}.",
+  "domains.trash.deleted": "Удалено безвозвратно: {count}.",
   "library.movePickerNoFolder": "— без папки —",
   "library.breadcrumbRoot": "Библиотека",
   "library.inFolder": "в",
@@ -760,7 +882,6 @@ export const ru: Record<keyof typeof en, string> = {
   "domains.noCreds": "(нет учётных данных)",
   "domains.testButton": "Проверить",
   "domains.testing": "Проверка…",
-  "domains.confirmDelete": "Удалить домен «{name}»?",
   "domains.testFailed": "Проверка не пройдена",
 
   // domain modal
@@ -905,6 +1026,10 @@ export const ru: Record<keyof typeof en, string> = {
   "bulkRuns.empty": "Массовых запусков пока нет.",
   "bulkRuns.tableFallback": "Таблица №{id}",
   "bulkRuns.failedSuffix": "(ошибок: {count})",
+  "bulkRuns.colLang": "Язык",
+  "bulkRuns.perRowLang": "из колонки",
+  "bulkRuns.perRowLangHint": "Каждая строка читает язык из колонки таблицы.",
+  "bulkRun.colLang": "Язык",
   "bulkRuns.clearCompleted": "Очистить завершённые",
   "bulkRuns.clearCompletedConfirm":
     "Удалить все завершённые прогоны (done / failed / cancelled) и их задачи публикации? Это действие необратимо.",
@@ -947,6 +1072,12 @@ export const ru: Record<keyof typeof en, string> = {
   "bulkRun.viewLink": "Открыть",
   "bulkRun.modeSingle": "Один сайт",
   "bulkRun.modeMulti": "Несколько сайтов",
+  "bulkRun.opUpdate": "Update",
+  "bulkRun.opUpdateHint":
+    "Прогон обновляет существующие посты (поиск по {kind}). Поля с пустыми ячейками остаются без изменений.",
+  "bulkRun.perRowLang": "Язык из колонки",
+  "bulkRun.perRowLangHint":
+    "Язык каждой строки берётся из колонки таблицы, а не из общего параметра прогона.",
   "bulkRun.acrossDomains": "по {count} сайтам",
   "bulkRun.byDomainHeading": "По сайтам ({count})",
   "bulkRun.colTotal": "Всего",
@@ -978,6 +1109,10 @@ export const ru: Record<keyof typeof en, string> = {
   "bulkPub.profileColumnDefault": "— использовать профиль по умолчанию для каждого домена —",
   "bulkPub.profileColumnHint":
     "Если задано — каждая строка берёт имя профиля из этой колонки. Имя должно совпадать с настроенным на целевом домене.",
+  "bulkPub.fieldLanguageColumn": "Колонка с языком (необязательно)",
+  "bulkPub.languageColumnDefault": "— использовать язык всего прогона —",
+  "bulkPub.languageColumnHint":
+    "Если задано — каждая строка берёт язык из этой колонки (регистр не важен). Значение должно совпадать с одним из языков, настроенных на целевом домене. Пустая ячейка → строка падает. Если включаете эту колонку — заполните её во всех строках.",
   "bulkPub.pickColumn": "— выберите колонку —",
   "bulkPub.fieldPostType": "Тип записи",
   "bulkPub.fieldLanguage": "Язык",
@@ -1006,6 +1141,50 @@ export const ru: Record<keyof typeof en, string> = {
     "Запомнить это сопоставление для будущих запусков на это назначение",
   "bulkPub.willPublish": "Будет опубликовано строк: {count}.",
   "bulkPub.willPublishAcross": "Будет опубликовано строк: {count} по {domains} сайтам.",
+  "bulkPub.willUpdate": "Будет обновлено существующих постов: {count}.",
+  "bulkPub.willUpdateAcross": "Будет обновлено постов: {count} по {domains} сайтам.",
+  "bulkPub.operation": "Операция",
+  "bulkPub.opCreate": "Создать",
+  "bulkPub.opUpdate": "Обновить",
+  "bulkPub.opCreateHint": "Публикация новых постов. Каждая строка создаёт пост.",
+  "bulkPub.opUpdateHint":
+    "Обновление существующих постов. Для каждой строки ищется существующий пост (по id или slug) и патчится. Только для WordPress.",
+  "bulkPub.lookupKind": "Искать пост по",
+  "bulkPub.lookupKindId": "ID поста",
+  "bulkPub.lookupKindSlug": "Slug",
+  "bulkPub.lookupColumn": "Колонка для поиска",
+  "bulkPub.lookupColumnPlaceholder": "выберите колонку",
+  "bulkPub.lookupHintId":
+    "Ячейка в каждой строке должна быть числовым ID поста WordPress. Строки с нечисловым/пустым значением упадут.",
+  "bulkPub.lookupHintSlug":
+    "Ячейка содержит slug поста WordPress. Принимаются также полные URL — slug берётся как последний сегмент пути, так что колонку cms_post_url можно использовать для поиска. Ищется по постам любых статусов.",
+  "bulkPub.updateBlankHint":
+    "Поля с пустыми ячейками не отправляются — на стороне WP они остаются без изменений. Маппьте только то, что хотите перезаписать.",
+  "bulkPub.updateWpOnly":
+    "Update-режим работает только с WordPress. {name} — не WP-домен; выберите WP-домен или переключитесь на Create.",
+  "bulkPub.updateLookupRequired":
+    "Выберите колонку, в которой лежит id или slug существующего поста — без неё Update нельзя запустить.",
+  "bulkPub.updateMapAtLeastOne":
+    "Нужно замаппить хотя бы одно поле на колонку — иначе в PATCH нечего отправлять.",
+  "bulkPub.startUpdate": "Запустить обновление ({count})",
+  "bulkPub.onSlugConflict": "Если slug уже занят",
+  "bulkPub.onSlugCreate": "Создать всё равно",
+  "bulkPub.onSlugSkip": "Пропустить",
+  "bulkPub.onSlugUpdate": "Обновить существующий",
+  "bulkPub.onSlugCreateHint":
+    "По умолчанию. POST для каждой строки. Если slug совпал на той же языке, WordPress автоматически добавит суффикс ('canada' → 'canada-2').",
+  "bulkPub.onSlugSkipHint":
+    "Перед каждой строкой проверяем WP на наличие поста с таким slug в языке этой строки. Если есть — статус 'skipped', не публикуем. +1 GET на строку. Polylang/WPML: проверка по языку — EN 'canada' НЕ блокирует новый RU 'canada'.",
+  "bulkPub.onSlugUpdateHint":
+    "Upsert. Если пост с таким slug есть (в языке строки) — PATCH; иначе — POST нового. Поля с пустыми ячейками не меняют существующее. +1 GET на строку.",
+  "bulkPub.slugConflictNeedsSlug":
+    "Этот режим требует, чтобы поле 'slug' было сопоставлено с колонкой.",
+  "bulkRun.onSlugSkip": "Skip dupes",
+  "bulkRun.onSlugSkipHint":
+    "Строки с уже существующим slug помечаются как skipped (по языкам).",
+  "bulkRun.onSlugUpsert": "Upsert",
+  "bulkRun.onSlugUpsertHint":
+    "Строки с уже существующим slug обновляют существующий пост вместо создания нового (по языкам).",
   "bulkPub.andMore": "…и ещё {count}",
   "bulkPub.missingRequired":
     "Не выбрана колонка для обязательных полей: {fields}",

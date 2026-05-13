@@ -103,7 +103,7 @@ export default function RunsPage() {
             type="button"
             onClick={onClearCompleted}
             disabled={busy}
-            className="rounded-md border border-red-300 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-800/60 dark:text-red-400 dark:hover:bg-red-950/40"
+            className="px-2 py-1 text-xs text-red-500/60 underline-offset-2 hover:text-red-700 hover:underline disabled:opacity-50 dark:text-red-400/40 dark:hover:text-red-300"
           >
             {t("bulkRuns.clearCompleted")}
           </button>
@@ -125,6 +125,7 @@ export default function RunsPage() {
               <th className="px-3 py-2">{t("bulkRuns.colDomain")}</th>
               <th className="px-3 py-2">{t("bulkRuns.colProfile")}</th>
               <th className="px-3 py-2">{t("bulkRuns.colStatus")}</th>
+              <th className="px-3 py-2">{t("bulkRuns.colLang")}</th>
               <th className="px-3 py-2">{t("bulkRuns.colProgress")}</th>
               <th className="px-3 py-2 w-10"></th>
             </tr>
@@ -132,14 +133,14 @@ export default function RunsPage() {
           <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
             {runs === null && (
               <tr>
-                <td colSpan={7} className="px-3 py-8 text-center text-neutral-500">
+                <td colSpan={8} className="px-3 py-8 text-center text-neutral-500">
                   {t("common.loading")}
                 </td>
               </tr>
             )}
             {runs !== null && runs.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-3 py-8 text-center text-neutral-500">
+                <td colSpan={8} className="px-3 py-8 text-center text-neutral-500">
                   {t("bulkRuns.empty")}
                 </td>
               </tr>
@@ -177,6 +178,18 @@ export default function RunsPage() {
                     >
                       {r.status}
                     </span>
+                  </td>
+                  <td className="px-3 py-2 text-xs text-neutral-700 dark:text-neutral-300">
+                    {r.language_column_id != null ? (
+                      <span
+                        className="italic text-sky-700 dark:text-sky-400"
+                        title={t("bulkRuns.perRowLangHint")}
+                      >
+                        {t("bulkRuns.perRowLang")}
+                      </span>
+                    ) : (
+                      r.language ?? "—"
+                    )}
                   </td>
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-2">

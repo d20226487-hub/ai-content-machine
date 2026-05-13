@@ -15,6 +15,7 @@ import {
   deleteFolder,
   deleteTable,
   duplicateTable,
+  getTrashCount,
   listFolders,
   listTables,
   renameFolder,
@@ -55,6 +56,20 @@ export default function LibraryPage() {
   const [items, setItems] = useState<BulkTableListItem[] | null>(null);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<unknown>(null);
+  const [trashCount, setTrashCount] = useState<number>(0);
+
+  const refreshTrashCount = useCallback(async () => {
+    try {
+      const { count } = await getTrashCount();
+      setTrashCount(count);
+    } catch {
+      // non-critical — the badge just won't show. Don't surface to the user.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshTrashCount();
+  }, [refreshTrashCount]);
 
   const [searchDraft, setSearchDraft] = useState(q);
   const [debouncedSearch, setDebouncedSearch] = useState(q);
@@ -187,8 +202,14 @@ export default function LibraryPage() {
       await deleteTable(tab.id);
       await refreshTables();
       await refreshFolders();
+      await refreshTrashCount();
     } catch (e) {
-      setError(e);
+      // 409 = in-flight publish run is using this table. Surface clean message.
+      if (e instanceof ApiError && e.status === 409) {
+        alert(e.message || t("library.deleteBlockedInflight"));
+      } else {
+        setError(e);
+      }
     }
   }
 
@@ -243,6 +264,14 @@ export default function LibraryPage() {
         </div>
 
         <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {trashCount > 0 && (
+            <Link
+              href="/library/trash"
+              className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-600 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800"
+            >
+              {t("library.trashLinkWithCount", { count: trashCount })}
+            </Link>
+          )}
           <button
             onClick={onCreateFolder}
             className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"

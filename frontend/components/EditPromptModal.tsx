@@ -77,11 +77,10 @@ export function EditPromptModal({
     );
   }
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
+  async function doSave(): Promise<boolean> {
     if (!contentChanged && !metaChanged) {
       onClose();
-      return;
+      return true;
     }
     setSubmitting(true);
     setError(null);
@@ -106,15 +105,33 @@ export function EditPromptModal({
 
       onSaved(updated);
       onClose();
+      return true;
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t("users.saveFailed"));
+      return false;
     } finally {
       setSubmitting(false);
     }
   }
 
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    await doSave();
+  }
+
+  const dirty = contentChanged || metaChanged;
+  // Valid means the primary action would accept submission now. Mirrors the
+  // existing disabled-state on the Save button so outside-click matches it.
+  const valid = !submitting && dirty && name.trim().length > 0 && content.length > 0;
+
   return (
-    <Modal onClose={onClose} size="max-w-2xl">
+    <Modal
+      onClose={onClose}
+      size="max-w-2xl"
+      dirty={dirty}
+      valid={valid}
+      onSaveAndClose={() => void doSave()}
+    >
       <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">{t("editPrompt.title")}</h2>
       <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
         {t("editPrompt.subtitle")}

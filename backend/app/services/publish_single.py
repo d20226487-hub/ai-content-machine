@@ -58,6 +58,19 @@ async def process_single_job(db: AsyncSession, *, job_id: int) -> None:
         job.finished_at = datetime.now(timezone.utc)
         await db.commit()
         return
+    if domain.deleted_at is not None:
+        # Race: the job was queued while the domain was active, then
+        # the domain got trashed before the worker picked us up.
+        # Surface a clear message so the user knows where to look.
+        job.status = "failed"
+        job.error = (
+            f"Domain {domain.name!r} was moved to Trash before this "
+            "job ran. Restore the domain from /publish/domains/trash "
+            "and retry."
+        )
+        job.finished_at = datetime.now(timezone.utc)
+        await db.commit()
+        return
 
     # Flip queued → posting so a duplicate redelivery sees it and short-circuits.
     job.status = "posting"

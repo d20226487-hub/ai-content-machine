@@ -31,6 +31,9 @@ interface Props {
  */
 export function ColumnConfigModal({ table, column, onClose, onSaved }: Props) {
   const { t } = useT();
+  // First-touch guard: flips true on any input change inside the form so
+  // an accidental backdrop click can't lose prompt/variable mappings.
+  const [touched, setTouched] = useState(false);
   const [prompts, setPrompts] = useState<PromptListItem[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [search, setSearch] = useState("");
@@ -218,7 +221,7 @@ export function ColumnConfigModal({ table, column, onClose, onSaved }: Props) {
   }
 
   return (
-    <Modal onClose={onClose} size="max-w-3xl">
+    <Modal onClose={onClose} size="max-w-3xl" dirty={touched}>
       <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
         {t("colCfg.title")} <span className="font-mono">{column.name}</span>
       </h2>
@@ -226,7 +229,13 @@ export function ColumnConfigModal({ table, column, onClose, onSaved }: Props) {
         {t("colCfg.subtitle")}
       </p>
 
-      <form onSubmit={onSubmit} className="mt-5 space-y-5">
+      <form
+        onSubmit={onSubmit}
+        onChange={() => {
+          if (!touched) setTouched(true);
+        }}
+        className="mt-5 space-y-5"
+      >
         {/* Prompt picker */}
         <div>
           <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">

@@ -20,7 +20,10 @@ import {
   getMappingSingle,
   type BulkPublishPayload,
   type CellFilter,
+  type OnSlugConflict,
+  type PublishLookupKind,
   type PublishMode,
+  type PublishOperation,
   type RowFilter,
 } from "@/lib/publishBulk";
 import type { BulkColumn, BulkTable } from "@/lib/types";
@@ -40,6 +43,11 @@ interface FieldSlot {
 export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
   const { t } = useT();
   const router = useRouter();
+  // Outside-click guard: flips true on the first form interaction. We
+  // intentionally don't auto-save on outside-click here — submitting kicks
+  // off a real publish run, and that's not the kind of side effect we want
+  // a stray click to commit.
+  const [touched, setTouched] = useState(false);
 
   // Mode is the top-level switch. Soft preserve on toggle: mapping/filters/
   // back-fill carry across modes; only the mode-specific target fields reset.
@@ -52,6 +60,10 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
   // Multi-mode targets
   const [domainColumnId, setDomainColumnId] = useState<number | "">("");
   const [profileColumnId, setProfileColumnId] = useState<number | "">("");
+  // Multi-mode optional per-row language column. When set, the run-level
+  // language picker only acts as a label / fallback display — every row
+  // must have a value (strict mode: empty cell fails the row).
+  const [languageColumnId, setLanguageColumnId] = useState<number | "">("");
 
   const [language, setLanguage] = useState<string | null>(null);
 
@@ -70,6 +82,18 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  // Create vs Update. Update mode resolves each row to an existing WP post
+  // (via lookupColumnId + lookupKind) and PATCHes it. WP-only — Custom CMS
+  // is blocked at submit time in single mode and per-row at runtime in multi.
+  const [operation, setOperation] = useState<PublishOperation>("create");
+  const [lookupKind, setLookupKind] = useState<PublishLookupKind>("id");
+  const [lookupColumnId, setLookupColumnId] = useState<number | "">("");
+
+  // Create-mode only: what to do when the row's slug already exists on
+  // the target (in the row's effective language).
+  const [onSlugConflict, setOnSlugConflict] =
+    useState<OnSlugConflict>("create");
 
   useEffect(() => {
     listDomains()
@@ -159,12 +183,62 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
   // and clobber whatever the user had just filled in. Tracked via a ref so
   // we can detect "previous mode != current mode" without that creating yet
   // another effect dep.
+  //
+  // Domain-switch preserve: when the user picks a different site/profile, any
+  // mappings they've already typed for fields that exist in the new schema
+  // are kept (merged on field-key). Only fields the new domain doesn't expose
+  // get dropped. Without this, every domain re-pick wiped the entire mapping
+  // section above the picker — the "annoying refresh" complaint.
   const prevModeRef = useRef<PublishMode>(mode);
+  // `slotsRef` lets the async server-load callback see the slots from the
+  // SAME render that triggered the effect (the new domain's fields), so it
+  // can drop mappings that no longer have a matching slot.
+  const slotsRef = useRef(slots);
+  slotsRef.current = slots;
+  // Tracks whether the user has explicitly touched the Create/Update toggle,
+  // lookup-kind, or on-slug-conflict knob. Without this, picking a different
+  // domain would replay the server's saved value over the user's intent —
+  // e.g. you set Update, switch sites, and the toggle flips back to Create
+  // because the new (table, domain, profile) triple has 'create' on file.
+  const userTouchedRef = useRef({
+    operation: false,
+    lookupKind: false,
+    onSlugConflict: false,
+  });
+  function setOperationTouched(op: PublishOperation): void {
+    userTouchedRef.current.operation = true;
+    setOperation(op);
+  }
+  function setLookupKindTouched(k: PublishLookupKind): void {
+    userTouchedRef.current.lookupKind = true;
+    setLookupKind(k);
+  }
+  function setOnSlugConflictTouched(o: OnSlugConflict): void {
+    userTouchedRef.current.onSlugConflict = true;
+    setOnSlugConflict(o);
+  }
   useEffect(() => {
     const modeChanged = prevModeRef.current !== mode;
     prevModeRef.current = mode;
     // Soft preserve: a mode toggle alone never refetches.
     if (modeChanged) return;
+
+    // Merge helper: prefer user-current entry for every field key that
+    // still exists in the new schema; fill the rest from the server.
+    const mergeFieldMap = (
+      serverMap: Record<string, number> | undefined,
+    ) => {
+      setFieldToColumn((current) => {
+        const next: Record<string, number> = {};
+        const slotKeys = new Set(slotsRef.current.map((s) => s.key));
+        // Belt: keep user-typed mappings for any slot still in the schema.
+        for (const k of slotKeys) {
+          if (current[k] != null) next[k] = current[k];
+          else if (serverMap && serverMap[k] != null) next[k] = serverMap[k];
+        }
+        return next;
+      });
+    };
 
     if (mode === "single") {
       if (!selected) {
@@ -175,25 +249,85 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
       }
       getMappingSingle(table.id, selected.id, profileName)
         .then((m) => {
-          setFieldToColumn(m.field_to_column ?? {});
-          setPostIdTarget((m.back_fill?.post_id_target as number | undefined) ?? "");
-          setPostUrlTarget((m.back_fill?.post_url_target as number | undefined) ?? "");
+          mergeFieldMap(m.field_to_column);
+          // Back-fill target columns: keep user's current pick if any —
+          // column IDs are table-scoped, not domain-scoped, so they
+          // remain valid across domain switches.
+          setPostIdTarget((cur) =>
+            cur !== ""
+              ? cur
+              : (m.back_fill?.post_id_target as number | undefined) ?? "",
+          );
+          setPostUrlTarget((cur) =>
+            cur !== ""
+              ? cur
+              : (m.back_fill?.post_url_target as number | undefined) ?? "",
+          );
           if (m.language) setLanguage(m.language);
+          // Restore the last operation + lookup choice for this (table,
+          // domain, profile) so re-running an update on the same triple
+          // doesn't need re-picking the column.
+          // Only seed these from the server when the user hasn't explicitly
+          // touched them in this modal session. Once they pick "Update" by
+          // hand, switching domains shouldn't roll it back to "Create".
+          if (m.operation && !userTouchedRef.current.operation) {
+            setOperation(m.operation);
+          }
+          if (m.lookup_kind && !userTouchedRef.current.lookupKind) {
+            setLookupKind(m.lookup_kind);
+          }
+          setLookupColumnId((cur) =>
+            cur !== ""
+              ? cur
+              : typeof m.lookup_column_id === "number" ? m.lookup_column_id : "",
+          );
+          if (m.on_slug_conflict && !userTouchedRef.current.onSlugConflict) {
+            setOnSlugConflict(m.on_slug_conflict);
+          }
         })
         .catch(() => {
-          setFieldToColumn({});
-          setPostIdTarget("");
-          setPostUrlTarget("");
+          // Server lookup failed — still drop fields that don't exist in
+          // the new schema, but keep everything the user typed for slots
+          // that DO exist. Passing `undefined` here is intentional.
+          mergeFieldMap(undefined);
         });
     } else {
       getMappingMulti(table.id)
         .then((m) => {
-          setFieldToColumn(m.field_to_column ?? {});
-          setPostIdTarget((m.back_fill?.post_id_target as number | undefined) ?? "");
-          setPostUrlTarget((m.back_fill?.post_url_target as number | undefined) ?? "");
+          mergeFieldMap(m.field_to_column);
+          setPostIdTarget((cur) =>
+            cur !== ""
+              ? cur
+              : (m.back_fill?.post_id_target as number | undefined) ?? "",
+          );
+          setPostUrlTarget((cur) =>
+            cur !== ""
+              ? cur
+              : (m.back_fill?.post_url_target as number | undefined) ?? "",
+          );
           if (m.language) setLanguage(m.language);
           if (typeof m.domain_column_id === "number") setDomainColumnId(m.domain_column_id);
           if (typeof m.profile_column_id === "number") setProfileColumnId(m.profile_column_id);
+          setLanguageColumnId(
+            typeof m.language_column_id === "number" ? m.language_column_id : "",
+          );
+          // Only seed these from the server when the user hasn't explicitly
+          // touched them in this modal session. Once they pick "Update" by
+          // hand, switching domains shouldn't roll it back to "Create".
+          if (m.operation && !userTouchedRef.current.operation) {
+            setOperation(m.operation);
+          }
+          if (m.lookup_kind && !userTouchedRef.current.lookupKind) {
+            setLookupKind(m.lookup_kind);
+          }
+          setLookupColumnId((cur) =>
+            cur !== ""
+              ? cur
+              : typeof m.lookup_column_id === "number" ? m.lookup_column_id : "",
+          );
+          if (m.on_slug_conflict && !userTouchedRef.current.onSlugConflict) {
+            setOnSlugConflict(m.on_slug_conflict);
+          }
         })
         .catch(() => {
           // No saved multi mapping yet — fine.
@@ -214,6 +348,8 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
       // reset to the first credentialled option already-loaded in `domains`.
       setDomainColumnId("");
       setProfileColumnId("");
+      // languageColumnId stays: per-row language column works in both
+      // modes now, so flipping single↔multi shouldn't drop the picker.
     }
     // Mapping / filters / back-fill stay (intentional — soft preserve).
   }
@@ -303,7 +439,21 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
       if (mode === "multi") {
         setDomainColumnId("");
         setProfileColumnId("");
+        setLanguageColumnId("");
       }
+      // Reset the operation knob to defaults too, since "Clear saved mapping"
+      // means "forget everything I remembered for this target". Also clear
+      // the touched flags so a subsequent domain switch can seed from the
+      // (now-empty) server state instead of sticking on these defaults.
+      userTouchedRef.current = {
+        operation: false,
+        lookupKind: false,
+        onSlugConflict: false,
+      };
+      setOperation("create");
+      setLookupKind("id");
+      setLookupColumnId("");
+      setOnSlugConflict("create");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t("domainMod.clearCacheFailed"));
     }
@@ -315,8 +465,44 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
 
     if (mode === "single" && !selected) return;
 
-    // Validate required slots are mapped
-    const missing = slots.filter((s) => s.required && fieldToColumn[s.key] == null);
+    // Update mode is WP-only. Catch single-mode + Custom CMS here so the
+    // user gets a clear message before the request goes out.
+    if (
+      operation === "update" &&
+      mode === "single" &&
+      selected &&
+      selected.cms_type !== "wordpress"
+    ) {
+      setError(t("bulkPub.updateWpOnly", { name: selected.name }));
+      return;
+    }
+
+    if (operation === "update" && lookupColumnId === "") {
+      setError(t("bulkPub.updateLookupRequired"));
+      return;
+    }
+
+    if (
+      operation === "create" &&
+      onSlugConflict !== "create" &&
+      !("slug" in fieldToColumn)
+    ) {
+      setError(t("bulkPub.slugConflictNeedsSlug"));
+      return;
+    }
+
+    // Validate required slots are mapped. In Update mode required slots are
+    // softer ("title" doesn't have to be set when you're patching just the
+    // content) but we still want the user to have mapped at least one field
+    // worth sending.
+    if (operation === "update" && Object.keys(fieldToColumn).length === 0) {
+      setError(t("bulkPub.updateMapAtLeastOne"));
+      return;
+    }
+    const missing =
+      operation === "create"
+        ? slots.filter((s) => s.required && fieldToColumn[s.key] == null)
+        : [];
     if (missing.length > 0) {
       setError(
         t("bulkPub.missingRequired", { fields: missing.map((m) => m.label).join(", ") }),
@@ -352,7 +538,18 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
       field_to_column: fieldToColumn,
       back_fill,
       save_mapping: saveMapping,
+      operation,
     };
+
+    if (operation === "update") {
+      payload.lookup_kind = lookupKind;
+      payload.lookup_column_id = Number(lookupColumnId);
+    } else {
+      // Slug-conflict handling lives on Create only. Server rejects
+      // mixing this with operation='update', so we just don't send it
+      // for Update runs.
+      payload.on_slug_conflict = onSlugConflict;
+    }
 
     if (mode === "single") {
       payload.domain_id = selected!.id;
@@ -362,6 +559,11 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
       payload.profile_column_id =
         profileColumnId !== "" ? Number(profileColumnId) : null;
     }
+    // Per-row language column works in both modes — read the cell and
+    // validate against the resolved domain's languages[]. Sent always
+    // when set; the server uses run.language as fallback when null.
+    payload.language_column_id =
+      languageColumnId !== "" ? Number(languageColumnId) : null;
 
     setBusy(true);
     try {
@@ -384,8 +586,14 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
     (mode === "multi" && domainColumnId === "");
 
   return (
-    <Modal onClose={onClose} size="max-w-3xl">
-      <form onSubmit={onSubmit} className="space-y-4">
+    <Modal onClose={onClose} size="max-w-3xl" dirty={touched}>
+      <form
+        onSubmit={onSubmit}
+        onChange={() => {
+          if (!touched) setTouched(true);
+        }}
+        className="space-y-4"
+      >
         <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
           {t("bulkPub.title")}
         </h2>
@@ -425,6 +633,129 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
             {mode === "single" ? t("bulkPub.modeSingleHint") : t("bulkPub.modeMultiHint")}
           </p>
         </div>
+
+        {/* Operation toggle: Create vs Update. */}
+        <div>
+          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+            {t("bulkPub.operation")}
+          </span>
+          <div className="inline-flex rounded-md border border-neutral-300 p-0.5 dark:border-neutral-700">
+            {(["create", "update"] as const).map((op) => (
+              <button
+                key={op}
+                type="button"
+                onClick={() => setOperationTouched(op)}
+                className={
+                  "rounded px-3 py-1 text-sm font-medium transition-colors " +
+                  (operation === op
+                    ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                    : "text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100")
+                }
+              >
+                {op === "create"
+                  ? t("bulkPub.opCreate")
+                  : t("bulkPub.opUpdate")}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+            {operation === "create"
+              ? t("bulkPub.opCreateHint")
+              : t("bulkPub.opUpdateHint")}
+          </p>
+        </div>
+
+        {/* Create mode: what to do when a row's slug already exists. */}
+        {operation === "create" && (
+          <div className="rounded-md border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-800/30">
+            <Field label={t("bulkPub.onSlugConflict")}>
+              <div className="inline-flex rounded-md border border-neutral-300 bg-white p-0.5 dark:border-neutral-700 dark:bg-neutral-900">
+                {(["create", "skip", "update"] as const).map((opt) => (
+                  <button
+                    key={opt}
+                    type="button"
+                    onClick={() => setOnSlugConflictTouched(opt)}
+                    className={
+                      "rounded px-3 py-1 text-xs font-medium transition-colors " +
+                      (onSlugConflict === opt
+                        ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                        : "text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100")
+                    }
+                  >
+                    {opt === "create"
+                      ? t("bulkPub.onSlugCreate")
+                      : opt === "skip"
+                      ? t("bulkPub.onSlugSkip")
+                      : t("bulkPub.onSlugUpdate")}
+                  </button>
+                ))}
+              </div>
+            </Field>
+            <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+              {onSlugConflict === "create"
+                ? t("bulkPub.onSlugCreateHint")
+                : onSlugConflict === "skip"
+                ? t("bulkPub.onSlugSkipHint")
+                : t("bulkPub.onSlugUpdateHint")}
+            </p>
+            {onSlugConflict !== "create" && !("slug" in fieldToColumn) && (
+              <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                {t("bulkPub.slugConflictNeedsSlug")}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Update mode: look-up controls. */}
+        {operation === "update" && (
+          <div className="rounded-md border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-800/30">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label={t("bulkPub.lookupKind")}>
+                <div className="inline-flex rounded-md border border-neutral-300 bg-white p-0.5 dark:border-neutral-700 dark:bg-neutral-900">
+                  {(["id", "slug"] as const).map((k) => (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => setLookupKindTouched(k)}
+                      className={
+                        "rounded px-3 py-1 text-xs font-medium transition-colors " +
+                        (lookupKind === k
+                          ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                          : "text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100")
+                      }
+                    >
+                      {k === "id" ? t("bulkPub.lookupKindId") : t("bulkPub.lookupKindSlug")}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+              <Field label={t("bulkPub.lookupColumn")}>
+                <select
+                  value={lookupColumnId}
+                  onChange={(e) =>
+                    setLookupColumnId(e.target.value === "" ? "" : Number(e.target.value))
+                  }
+                  className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+                >
+                  <option value="">— {t("bulkPub.lookupColumnPlaceholder")} —</option>
+                  {table.columns.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            <p className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
+              {lookupKind === "id"
+                ? t("bulkPub.lookupHintId")
+                : t("bulkPub.lookupHintSlug")}
+            </p>
+            <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+              {t("bulkPub.updateBlankHint")}
+            </p>
+          </div>
+        )}
 
         {/* Single-mode: Domain + Profile dropdowns */}
         {mode === "single" && (
@@ -475,6 +806,35 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
                 </select>
               </Field>
             )}
+
+            {/* Optional per-row language column for Single mode. Shown only
+                when the selected domain advertises >1 language — for a
+                single-language site this is just clutter. When set, the
+                run-level Language picker above becomes the fallback for
+                display; the actual language per row comes from the cell.
+                Same strict semantics as multi-mode: empty cell fails the
+                row, unknown value fails the row. */}
+            {selected && selected.languages.length > 1 && (
+              <Field label={t("bulkPub.fieldLanguageColumn")}>
+                <select
+                  value={languageColumnId}
+                  onChange={(e) =>
+                    setLanguageColumnId(e.target.value ? Number(e.target.value) : "")
+                  }
+                  className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+                >
+                  <option value="">{t("bulkPub.languageColumnDefault")}</option>
+                  {eligibleColumns.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+                  {t("bulkPub.languageColumnHint")}
+                </p>
+              </Field>
+            )}
           </div>
         )}
 
@@ -514,6 +874,25 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
               </select>
               <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
                 {t("bulkPub.profileColumnHint")}
+              </p>
+            </Field>
+            <Field label={t("bulkPub.fieldLanguageColumn")}>
+              <select
+                value={languageColumnId}
+                onChange={(e) =>
+                  setLanguageColumnId(e.target.value ? Number(e.target.value) : "")
+                }
+                className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+              >
+                <option value="">{t("bulkPub.languageColumnDefault")}</option>
+                {eligibleColumns.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+                {t("bulkPub.languageColumnHint")}
               </p>
             </Field>
           </div>
@@ -714,10 +1093,15 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
           {mode === "multi" && multiBreakdown ? (
             <div>
               <div className="font-medium">
-                {t("bulkPub.willPublishAcross", {
-                  count: candidatePreview,
-                  domains: multiBreakdown.length,
-                })}
+                {operation === "update"
+                  ? t("bulkPub.willUpdateAcross", {
+                      count: candidatePreview,
+                      domains: multiBreakdown.length,
+                    })
+                  : t("bulkPub.willPublishAcross", {
+                      count: candidatePreview,
+                      domains: multiBreakdown.length,
+                    })}
               </div>
               {multiBreakdown.length > 0 && (
                 <ul className="mt-1 max-h-32 overflow-auto text-xs">
@@ -735,6 +1119,8 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
                 </ul>
               )}
             </div>
+          ) : operation === "update" ? (
+            t("bulkPub.willUpdate", { count: candidatePreview })
           ) : (
             t("bulkPub.willPublish", { count: candidatePreview })
           )}
@@ -759,7 +1145,11 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
             disabled={publishDisabled}
             className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-60 dark:bg-neutral-100 dark:text-neutral-900"
           >
-            {busy ? t("bulkPub.starting") : t("bulkPub.start", { count: candidatePreview })}
+            {busy
+              ? t("bulkPub.starting")
+              : operation === "update"
+              ? t("bulkPub.startUpdate", { count: candidatePreview })
+              : t("bulkPub.start", { count: candidatePreview })}
           </button>
         </div>
       </form>

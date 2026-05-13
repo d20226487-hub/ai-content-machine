@@ -113,6 +113,24 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
   const [pendingTick, setPendingTick] = useState(0);
   void pendingTick; // read so React knows the render depends on it
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Serializes flushes: while a flush is in-flight, scheduleFlush re-arms
+  // the timer instead of starting a parallel POST. Two overlapping POSTs
+  // could return out of order — POST-1 finishing AFTER POST-2 would write
+  // the older snapshot into cellMap, briefly wiping the user's newer text
+  // from the visible textarea ("auto save deletes my writings"). One in
+  // flight at a time eliminates the race entirely.
+  // Tracks the in-flight POST as a promise so that `await flushPending()`
+  // from drain sites (queue open, publish, unmount, cell-editor save) waits
+  // for the running save to settle rather than returning early. A plain
+  // boolean would prevent overlap but not allow drain-sites to actually
+  // block — they'd open the queue with stale state on the server.
+  const inFlightPromiseRef = useRef<Promise<void> | null>(null);
+  // Holds the "rowId:colId" key of whichever cell's textarea currently has
+  // the cursor. flushPending leaves this key behind in pendingRef instead of
+  // saving it, so the server can't echo back a stale value mid-keystroke
+  // and wipe what the user is typing. Cleared on blur, where we also fire
+  // an immediate flush so the just-left cell saves promptly.
+  const focusedCellRef = useRef<string | null>(null);
   // Refs to the latest table + cellMap so flushPending merges into current state
   // even when called from an unmount cleanup or a long-pending timer.
   const tableRef = useRef(table);
@@ -295,12 +313,38 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
     flushTimer.current = setTimeout(() => void flushPending(), AUTOSAVE_DEBOUNCE_MS);
   }
 
-  async function flushPending() {
+  async function flushPending(): Promise<void> {
     flushTimer.current = null;
-    const snapshot = pendingRef.current;
+    // Wait for any in-flight save to settle before starting our own. This
+    // serializes POSTs (so they can't return out of order and clobber
+    // cellMap) AND makes `await flushPending()` from drain sites actually
+    // wait for the running save instead of returning instantly.
+    while (inFlightPromiseRef.current) {
+      try {
+        await inFlightPromiseRef.current;
+      } catch {
+        /* the in-flight branch handles its own errors */
+      }
+    }
+
+    // Skip the currently-focused cell's pending write. Saving it while the
+    // user is still typing risks the server echoing a stale value back into
+    // cellMap and wiping the textarea. Its entry stays in pendingRef and
+    // gets flushed on blur (or unmount, which clears the focus marker).
+    const focusedKey = focusedCellRef.current;
+    const snapshot = new Map<string, string | null>();
+    for (const [k, v] of pendingRef.current) {
+      if (k === focusedKey) continue;
+      snapshot.set(k, v);
+    }
     if (snapshot.size === 0) return;
-    // Optimistically clear so further typing doesn't get re-saved twice.
-    pendingRef.current = new Map();
+    // Move the to-be-flushed entries out of pendingRef. The focused entry
+    // (if any) stays so the user's in-progress text survives.
+    const nextPending = new Map<string, string | null>();
+    if (focusedKey && pendingRef.current.has(focusedKey)) {
+      nextPending.set(focusedKey, pendingRef.current.get(focusedKey)!);
+    }
+    pendingRef.current = nextPending;
 
     const writes = Array.from(snapshot.entries()).map(([key, value]) => {
       const [rowIdStr, colIdStr] = key.split(":");
@@ -311,47 +355,72 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
       };
     });
 
-    onSavingChangeRef.current(true, null);
-    try {
-      const written = await upsertCells(tableRef.current.id, writes);
-      const newCellMap = new Map(cellMapRef.current);
-      for (const w of written) {
-        const key = `${w.row_id}:${w.column_id}`;
-        const existing = newCellMap.get(key);
-        newCellMap.set(key, {
-          id: w.id,
-          row_id: w.row_id,
-          column_id: w.column_id,
-          value: w.value,
-          status: w.status as CellStatus,
-          error: existing?.error ?? null,
-          model_used: existing?.model_used ?? null,
-          generated_at: existing?.generated_at ?? null,
-          updated_at: w.updated_at,
+    const promise = (async () => {
+      onSavingChangeRef.current(true, null);
+      try {
+        const written = await upsertCells(tableRef.current.id, writes);
+        const newCellMap = new Map(cellMapRef.current);
+        for (const w of written) {
+          const key = `${w.row_id}:${w.column_id}`;
+          // Skip cells where the user has typed something new since we
+          // snapshotted. Writing the server's (now-stale) value here would
+          // briefly clobber the textarea on the next render — the typing
+          // in pendingRef is the truth and will flush on the next tick.
+          if (pendingRef.current.has(key)) continue;
+          const existing = newCellMap.get(key);
+          newCellMap.set(key, {
+            id: w.id,
+            row_id: w.row_id,
+            column_id: w.column_id,
+            value: w.value,
+            status: w.status as CellStatus,
+            error: existing?.error ?? null,
+            model_used: existing?.model_used ?? null,
+            generated_at: existing?.generated_at ?? null,
+            updated_at: w.updated_at,
+          });
+        }
+        onTableChangeRef.current({
+          ...tableRef.current,
+          cells: Array.from(newCellMap.values()),
         });
+        onSavingChangeRef.current(false, Date.now());
+      } catch (err) {
+        console.error("[Bulk] cell save failed", err);
+        // Restore the unsaved writes (don't clobber anything the user has typed since).
+        for (const [k, v] of snapshot.entries()) {
+          if (!pendingRef.current.has(k)) pendingRef.current.set(k, v);
+        }
+        setPendingTick((n) => n + 1);
+        onSavingChangeRef.current(false, null);
       }
-      onTableChangeRef.current({
-        ...tableRef.current,
-        cells: Array.from(newCellMap.values()),
-      });
-      onSavingChangeRef.current(false, Date.now());
-    } catch (err) {
-      console.error("[Bulk] cell save failed", err);
-      // Restore the unsaved writes (don't clobber anything the user has typed since).
-      for (const [k, v] of snapshot.entries()) {
-        if (!pendingRef.current.has(k)) pendingRef.current.set(k, v);
+    })();
+    inFlightPromiseRef.current = promise;
+    try {
+      await promise;
+    } finally {
+      if (inFlightPromiseRef.current === promise) {
+        inFlightPromiseRef.current = null;
       }
-      setPendingTick((n) => n + 1);
-      onSavingChangeRef.current(false, null);
     }
+
+    // If non-focused pending writes accumulated during the await, kick off
+    // another flush so they get saved on the autosave cadence.
+    const stillPending = Array.from(pendingRef.current.keys()).filter(
+      (k) => k !== focusedCellRef.current,
+    );
+    if (stillPending.length > 0) scheduleFlush();
   }
 
-  // Flush on unmount
+  // Flush on unmount. Clear the focus marker first so the unmount drain
+  // includes whatever the user was typing at the moment of teardown —
+  // otherwise flushPending would skip the focused cell and lose it.
   useEffect(() => {
     return () => {
       if (flushTimer.current) {
         clearTimeout(flushTimer.current);
       }
+      focusedCellRef.current = null;
       void flushPending();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -787,7 +856,13 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
                           <textarea
                             value={value}
                             onChange={(e) => setCell(row.id, col.id, e.target.value)}
-                            onBlur={() => void flushPending()}
+                            onFocus={() => {
+                              focusedCellRef.current = `${row.id}:${col.id}`;
+                            }}
+                            onBlur={() => {
+                              focusedCellRef.current = null;
+                              void flushPending();
+                            }}
                             placeholder={col.kind === "output" ? t("bulkGrid.outputPlaceholder") : ""}
                             style={{ height: rowHeightPx }}
                             className="block w-full resize-none border-0 bg-transparent px-2 py-1 pr-6 text-xs text-neutral-900 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:text-neutral-100 [&::-webkit-scrollbar]:hidden [scrollbar-width:none]"

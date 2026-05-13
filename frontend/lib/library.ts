@@ -93,12 +93,76 @@ export function deleteFolder(id: number): Promise<void> {
   return api<void>(`/library/folders/${id}`, { method: "DELETE" });
 }
 
+/** Soft-delete (move to trash). Refuses with 409 if a bulk publish run
+ *  is in flight against this table. */
 export function deleteTable(id: number): Promise<void> {
   return api<void>(`/library/tables/${id}`, { method: "DELETE" });
 }
 
 export function duplicateTable(id: number): Promise<BulkTable> {
   return api<BulkTable>(`/library/tables/${id}/duplicate`, { method: "POST" });
+}
+
+// ----- Trash -----
+
+export function listTrash(opts: { q?: string; page?: number; page_size?: number } = {}): Promise<TableListResponse> {
+  const sp = new URLSearchParams();
+  if (opts.q && opts.q.trim()) sp.set("q", opts.q.trim());
+  if (opts.page) sp.set("page", String(opts.page));
+  if (opts.page_size) sp.set("page_size", String(opts.page_size));
+  const qs = sp.toString();
+  return api<TableListResponse>(`/library/trash${qs ? "?" + qs : ""}`);
+}
+
+export function getTrashCount(): Promise<{ count: number }> {
+  return api<{ count: number }>("/library/trash/count");
+}
+
+export function previewTrashedTable(id: number): Promise<BulkTable> {
+  return api<BulkTable>(`/library/trash/${id}`);
+}
+
+export function restoreTable(id: number): Promise<BulkTableListItem> {
+  return api<BulkTableListItem>(`/library/tables/${id}/restore`, { method: "POST" });
+}
+
+export function permanentlyDeleteTable(id: number): Promise<void> {
+  return api<void>(`/library/tables/${id}/permanent`, { method: "DELETE" });
+}
+
+export function emptyTrash(): Promise<{ deleted: number }> {
+  return api<{ deleted: number }>("/library/trash", { method: "DELETE" });
+}
+
+export function bulkRestoreTrash(ids: number[]): Promise<{ restored: number }> {
+  return api<{ restored: number }>("/library/trash/bulk-restore", {
+    method: "POST",
+    body: { ids },
+  });
+}
+
+export function bulkPermanentlyDelete(ids: number[]): Promise<{ deleted: number }> {
+  return api<{ deleted: number }>("/library/trash/bulk", {
+    method: "DELETE",
+    body: { ids },
+  });
+}
+
+export interface TrashRetention {
+  days: number;
+  default: number;
+  max: number;
+}
+
+export function getTrashRetention(): Promise<TrashRetention> {
+  return api<TrashRetention>("/library/trash/retention");
+}
+
+export function setTrashRetention(days: number): Promise<TrashRetention> {
+  return api<TrashRetention>("/library/trash/retention", {
+    method: "PUT",
+    body: { days },
+  });
 }
 
 // ----- Columns -----

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { BackupCard } from "@/components/BackupCard";
 import { PricingCard } from "@/components/PricingCard";
+import { TrashRetentionCard } from "@/components/TrashRetentionCard";
 import { ProviderCard } from "@/components/ProviderCard";
 import { PublishDefaultsCard } from "@/components/PublishDefaultsCard";
 import { ApiError } from "@/lib/api";
@@ -79,6 +80,10 @@ export default function SettingsPage() {
 
       <div className="mt-10">
         <BackupCard />
+      </div>
+
+      <div className="mt-10">
+        <TrashRetentionCard />
       </div>
     </main>
   );

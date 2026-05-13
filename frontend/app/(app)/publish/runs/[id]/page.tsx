@@ -24,6 +24,7 @@ const STATUS_BADGE: Record<string, string> = {
   cancelled: "bg-neutral-100 text-neutral-700 ring-neutral-600/10 dark:bg-neutral-800 dark:text-neutral-300 dark:ring-neutral-500/30",
   queued: "bg-violet-50 text-violet-700 ring-violet-600/10 dark:bg-violet-950/40 dark:text-violet-400 dark:ring-violet-400/30",
   posted: "bg-green-50 text-green-700 ring-green-600/10 dark:bg-green-950/40 dark:text-green-400 dark:ring-green-400/30",
+  skipped: "bg-neutral-100 text-neutral-600 ring-neutral-500/10 dark:bg-neutral-800 dark:text-neutral-400 dark:ring-neutral-500/30",
 };
 
 export default function RunDetailPage() {
@@ -160,6 +161,38 @@ export default function RunDetailPage() {
             >
               {isMulti ? t("bulkRun.modeMulti") : t("bulkRun.modeSingle")}
             </span>
+            {run.operation === "update" && (
+              <span
+                className="inline-flex items-center rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+                title={t("bulkRun.opUpdateHint", { kind: run.lookup_kind ?? "" })}
+              >
+                {t("bulkRun.opUpdate")}
+              </span>
+            )}
+            {run.language_column_id != null && (
+              <span
+                className="inline-flex items-center rounded bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-sky-800 dark:bg-sky-950/40 dark:text-sky-300"
+                title={t("bulkRun.perRowLangHint")}
+              >
+                {t("bulkRun.perRowLang")}
+              </span>
+            )}
+            {run.on_slug_conflict === "skip" && (
+              <span
+                className="inline-flex items-center rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
+                title={t("bulkRun.onSlugSkipHint")}
+              >
+                {t("bulkRun.onSlugSkip")}
+              </span>
+            )}
+            {run.on_slug_conflict === "update" && (
+              <span
+                className="inline-flex items-center rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-violet-800 dark:bg-violet-950/40 dark:text-violet-300"
+                title={t("bulkRun.onSlugUpsertHint")}
+              >
+                {t("bulkRun.onSlugUpsert")}
+              </span>
+            )}
           </h1>
           <p className="mt-0.5 text-sm text-neutral-500 dark:text-neutral-400">
             <b>{run.table_name ?? t("bulkRuns.tableFallback", { id: run.table_id })}</b>
@@ -384,6 +417,7 @@ export default function RunDetailPage() {
               <th className="px-3 py-2">{t("bulkRun.colRow")}</th>
               <th className="px-3 py-2">{t("bulkRun.colDomain")}</th>
               <th className="px-3 py-2">{t("bulkRun.colProfile")}</th>
+              <th className="px-3 py-2">{t("bulkRun.colLang")}</th>
               <th className="px-3 py-2">{t("bulkRun.colStatus")}</th>
               <th className="px-3 py-2">{t("bulkRun.colPost")}</th>
               <th className="px-3 py-2">{t("bulkRun.colError")}</th>
@@ -392,7 +426,7 @@ export default function RunDetailPage() {
           <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
             {jobs.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-3 py-6 text-center text-neutral-500">
+                <td colSpan={8} className="px-3 py-6 text-center text-neutral-500">
                   {t("bulkRun.empty")}
                 </td>
               </tr>
@@ -410,6 +444,9 @@ export default function RunDetailPage() {
                 </td>
                 <td className="px-3 py-2 text-xs text-neutral-700 dark:text-neutral-300">
                   {j.profile_name ?? <span className="text-neutral-500">—</span>}
+                </td>
+                <td className="px-3 py-2 text-xs text-neutral-700 dark:text-neutral-300">
+                  {j.language ?? <span className="text-neutral-500">—</span>}
                 </td>
                 <td className="px-3 py-2">
                   <span

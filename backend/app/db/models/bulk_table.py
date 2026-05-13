@@ -54,6 +54,12 @@ class BulkTable(Base, TimestampMixin):
         nullable=True,
         index=True,
     )
+    # NULL = active. Non-NULL = trashed (soft-deleted). All "normal" endpoints
+    # filter `deleted_at IS NULL`; the /library/trash surface is the only
+    # place trashed rows are reachable.
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     columns: Mapped[list["BulkTableColumn"]] = relationship(
         back_populates="table",

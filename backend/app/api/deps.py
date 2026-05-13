@@ -34,7 +34,11 @@ async def get_current_user(
         )
 
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
-    if user is None or not user.is_active:
+    if user is None or not user.is_active or user.deleted_at is not None:
+        # Trashed users get the same 401 as inactive users — the next
+        # request after they're moved to Trash kicks them out instead of
+        # waiting for their JWT to expire. Restored users have to log in
+        # fresh (we don't reissue their old token).
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive user")
     return user
 

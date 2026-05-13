@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
@@ -10,6 +11,7 @@ import { useAuth } from "@/lib/auth-context";
 import { useT } from "@/lib/i18n-context";
 import {
   deleteDomain,
+  getDomainTrashCount,
   listDomains,
   testDomain,
   type Domain,
@@ -32,8 +34,22 @@ export default function DomainsPage() {
   const [modal, setModal] = useState<ModalState>({ kind: "closed" });
   const [testing, setTesting] = useState<Set<number>>(new Set());
   const [testResults, setTestResults] = useState<Record<number, TestConnectionResult>>({});
+  const [trashCount, setTrashCount] = useState(0);
 
   const isAuthorized = user && ["admin", "manager"].includes(user.role.name);
+
+  const refreshTrashCount = useCallback(async () => {
+    try {
+      const { count } = await getDomainTrashCount();
+      setTrashCount(count);
+    } catch {
+      // non-critical; the badge just won't show
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isAuthorized) void refreshTrashCount();
+  }, [isAuthorized, refreshTrashCount]);
 
   useEffect(() => {
     if (!authLoading && user && !isAuthorized) router.replace("/dashboard");
@@ -71,8 +87,14 @@ export default function DomainsPage() {
     try {
       await deleteDomain(target.id);
       setDomains((list) => (list ? list.filter((x) => x.id !== target.id) : list));
+      await refreshTrashCount();
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : t("common.deleteFailed"));
+      // 409 = in-flight bulk publish run targets this domain.
+      if (err instanceof ApiError && err.status === 409) {
+        alert(err.message || t("domains.deleteBlockedInflight"));
+      } else {
+        alert(err instanceof ApiError ? err.message : t("common.deleteFailed"));
+      }
     }
   }
 
@@ -112,6 +134,14 @@ export default function DomainsPage() {
           </p>
         </div>
         <div className="flex gap-2">
+          {trashCount > 0 && (
+            <Link
+              href="/publish/domains/trash"
+              className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-600 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-800"
+            >
+              {t("domains.trashLinkWithCount", { count: trashCount })}
+            </Link>
+          )}
           <button
             onClick={() => setModal({ kind: "import" })}
             className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800"

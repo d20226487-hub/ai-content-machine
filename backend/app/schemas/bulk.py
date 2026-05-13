@@ -99,6 +99,8 @@ class TableListItem(BaseModel):
     updated_at: datetime
     column_count: int = 0
     row_count: int = 0
+    # Populated by the trash list endpoint only; null on the normal list.
+    deleted_at: datetime | None = None
 
 
 class TableListResponse(BaseModel):
@@ -121,9 +123,16 @@ class TableRead(BaseModel):
     created_by_name: str | None = None
     created_at: datetime
     updated_at: datetime
+    deleted_at: datetime | None = None
     columns: list[ColumnRead] = []
     rows: list[RowRead] = []
     cells: list[CellRead] = []
+
+
+class TrashBulkIds(BaseModel):
+    """Body for POST /library/trash/bulk-restore and DELETE /library/trash/bulk."""
+
+    ids: list[int] = Field(default_factory=list, min_length=1, max_length=500)
 
 
 # ----- Folders (bulk-table organization) -----

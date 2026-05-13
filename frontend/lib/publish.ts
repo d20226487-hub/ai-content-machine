@@ -1,6 +1,6 @@
 import { api } from "@/lib/api";
 
-export type JobStatus = "queued" | "posting" | "posted" | "failed";
+export type JobStatus = "queued" | "posting" | "posted" | "failed" | "skipped";
 export type SourceKind = "single" | "bulk_cell";
 
 export interface PublishJob {

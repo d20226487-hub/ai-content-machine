@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -14,6 +15,28 @@ from app.core.ssrf import (
     stream_to_buffer,
     validate_public_url,
 )
+
+# Sent with every WP request. A realistic UA bypasses most Cloudflare /
+# WAF "block known bots" rules that flag the default ``python-httpx/...``
+# string. Includes a project identifier so admins reading server logs can
+# trace the traffic back to us.
+_USER_AGENT = (
+    "Mozilla/5.0 (compatible; AI-Content-Machine/1.0; "
+    "+bulk-publisher)"
+)
+
+
+@dataclass
+class LookupResult:
+    """Outcome of `find_post`. ``post_id`` is set on a hit; ``error`` is
+    set when the lookup failed for reasons other than "no results found"
+    (HTTP error, WAF block, malformed JSON). Both None means the request
+    succeeded but returned zero results — the typical "slug doesn't
+    exist" case.
+    """
+
+    post_id: int | None = None
+    error: str | None = None
 
 # Standard WP REST fields (i.e. NOT custom meta). Anything not in this set
 # OR not flagged as is_meta=True falls into the meta dict.
@@ -55,10 +78,13 @@ class WordPressClient(CmsClient):
 
     def _auth_header(self) -> dict[str, str]:
         if not self.credentials:
-            return {}
+            return {"User-Agent": _USER_AGENT}
         # Stored as "user:application_password"
         token = base64.b64encode(self.credentials.encode("utf-8")).decode("ascii")
-        return {"Authorization": f"Basic {token}"}
+        return {
+            "Authorization": f"Basic {token}",
+            "User-Agent": _USER_AGENT,
+        }
 
     async def test_connection(self) -> TestResult:
         url = f"{self.base_url}/wp-json/wp/v2/posts?per_page=1&context=edit"
@@ -143,6 +169,185 @@ class WordPressClient(CmsClient):
         # Legacy shape, or empty config.
         return (cfg.get("post_type") or "posts", cfg.get("fields") or [])
 
+    async def find_post(
+        self,
+        *,
+        post_type: str,
+        lookup_kind: str,
+        value: str,
+        language: str | None = None,
+    ) -> LookupResult:
+        """Resolve an existing WP post to its numeric ID.
+
+        Returns a ``LookupResult`` so the caller can distinguish "no rows
+        found" (the slug really doesn't exist) from "the request was
+        blocked / errored out" (Cloudflare WAF, 5xx, malformed JSON).
+
+        - ``lookup_kind='id'`` — accept a numeric value as-is (no HTTP call).
+        - ``lookup_kind='slug'`` — extract the slug from the value (URL or
+          plain slug both accepted), then query
+          ``GET /wp-json/wp/v2/{post_type}?slug=…&status=any&_fields=id``
+          and return the first hit's id. We try ``context=view`` first
+          (works without elevated caps + is friendlier to WAF rules) and
+          only fall back to ``context=edit`` when zero rows come back —
+          ``context=edit`` is what lets us see non-publish statuses.
+        """
+        v = (value or "").strip()
+        if not v:
+            return LookupResult(error="empty lookup value")
+        if lookup_kind == "id":
+            try:
+                n = int(v)
+            except (TypeError, ValueError):
+                return LookupResult(error=f"value {v!r} is not a numeric id")
+            return LookupResult(post_id=n) if n >= 0 else LookupResult(
+                error=f"negative id {n}"
+            )
+
+        # ----- slug -----
+        slug = _extract_slug(v)
+        if not slug:
+            return LookupResult(error=f"could not extract a slug from {v!r}")
+
+        url = f"{self.base_url}/wp-json/wp/v2/{post_type}"
+        # Polylang accepts `?lang=` like the publish path does. Without it,
+        # a site with same-slug-in-different-languages would return the
+        # default-language post, and Update mode would PATCH the wrong one.
+        # WPML 4.x also respects `?lang=` (older versions ignore it — best
+        # effort). For domains with multilingual_plugin='none' we skip
+        # the param entirely.
+        extra_params: dict[str, str] = {}
+        if language and self.multilingual_plugin in {"polylang", "wpml"}:
+            extra_params["lang"] = language
+        # First pass — view context, no auth-elevated fields. Less likely
+        # to trip Cloudflare WAF rules that flag authenticated requests.
+        first = await self._slug_query(
+            url, slug=slug, context="view", extra_params=extra_params,
+        )
+        if first.post_id is not None or first.error is not None:
+            return first
+        # Zero rows. Retry with context=edit so drafts / private posts
+        # become visible. This needs the Basic auth cap; if Cloudflare
+        # blocks it, we surface that error instead of falling through
+        # silently as "not found".
+        return await self._slug_query(
+            url, slug=slug, context="edit", extra_params=extra_params,
+        )
+
+    async def _slug_query(
+        self,
+        url: str,
+        *,
+        slug: str,
+        context: str,
+        extra_params: dict[str, str] | None = None,
+    ) -> LookupResult:
+        """Do one GET to /wp/v2/{type}?slug=... and classify the result.
+
+        - 200 + non-empty list → ``post_id`` set.
+        - 200 + empty list      → both None (call site distinguishes
+                                  "retry with elevated context" from
+                                  "really not found").
+        - anything else         → ``error`` set with status + body
+                                  excerpt so the user sees the real
+                                  reason (e.g. "Cloudflare 403 — bot
+                                  challenge").
+        """
+        try:
+            validate_public_url(url)
+            async with httpx.AsyncClient(
+                timeout=15.0, transport=SafeAsyncTransport()
+            ) as client:
+                resp = await client.get(
+                    url,
+                    params={
+                        "slug": slug,
+                        "status": "any",
+                        "_fields": "id",
+                        "per_page": 1,
+                        "context": context,
+                        **(extra_params or {}),
+                    },
+                    headers=self._auth_header(),
+                )
+        except UnsafeUrlError as e:
+            return LookupResult(error=f"URL rejected: {e}")
+        except httpx.HTTPError as e:
+            return LookupResult(error=f"network error: {e}")
+
+        if resp.status_code != 200:
+            excerpt = ""
+            try:
+                # Try JSON first — WP errors are usually structured.
+                j = resp.json()
+                if isinstance(j, dict):
+                    excerpt = str(j.get("message") or j.get("code") or "")
+            except ValueError:
+                # Probably an HTML error page (Cloudflare, WAF, nginx).
+                excerpt = (resp.text or "")[:200].strip().replace("\n", " ")
+            # Cloudflare returns 403 with a CF-Ray header — surface that
+            # so users can paste it into Cloudflare support if needed.
+            cf_ray = resp.headers.get("CF-Ray") or resp.headers.get("cf-ray")
+            extras = f" (CF-Ray: {cf_ray})" if cf_ray else ""
+            return LookupResult(
+                error=(
+                    f"HTTP {resp.status_code} from /wp-json/wp/v2 "
+                    f"(context={context}){extras}. "
+                    + (
+                        f"Cloudflare / WAF block — request never reached "
+                        f"WordPress. Allowlist the API server's outbound IP "
+                        f"in Cloudflare, disable Bot Fight Mode on /wp-json/*, "
+                        f"or relax the 'WordPress' managed ruleset. "
+                        if resp.status_code == 403
+                        else ""
+                    )
+                    + (f"Body: {excerpt!r}" if excerpt else "")
+                ).strip()
+            )
+        try:
+            data = resp.json()
+        except ValueError:
+            return LookupResult(
+                error=f"HTTP 200 but non-JSON response (context={context})"
+            )
+        if not isinstance(data, list) or not data:
+            # Real "not found" — both None lets the caller decide whether
+            # to retry with a different context.
+            return LookupResult()
+        first = data[0]
+        if not isinstance(first, dict):
+            return LookupResult()
+        pid = first.get("id")
+        return (
+            LookupResult(post_id=int(pid))
+            if isinstance(pid, int)
+            else LookupResult()
+        )
+
+    async def update_post(
+        self,
+        *,
+        post_id: int,
+        fields: dict[str, Any],
+        language: str | None = None,
+        profile_name: str | None = None,
+    ) -> PublishResult:
+        """PATCH an existing WP post.
+
+        WP REST uses ``POST /wp/v2/{post_type}/{id}`` with PATCH-merge
+        semantics: keys you send overwrite, keys you omit are unchanged.
+
+        Empty / None field values are filtered out at body-build time
+        (same as create), so "blank cell = leave unchanged" works
+        naturally on the spreadsheet side.
+        """
+        return await self._send_post(
+            fields=fields,
+            language=language,
+            profile_name=profile_name,
+            existing_post_id=post_id,
+        )
+
     async def publish_post(
         self,
         *,
@@ -163,6 +368,31 @@ class WordPressClient(CmsClient):
           - everything else with key in STANDARD_WP_FIELDS → top-level.
           - any other key → silently dropped (custom non-meta fields aren't
             supported by stock WP REST without registering them).
+        """
+        return await self._send_post(
+            fields=fields,
+            language=language,
+            profile_name=profile_name,
+            existing_post_id=None,
+        )
+
+    async def _send_post(
+        self,
+        *,
+        fields: dict[str, Any],
+        language: str | None,
+        profile_name: str | None,
+        existing_post_id: int | None,
+    ) -> PublishResult:
+        """Shared body-build + HTTP call for create + update.
+
+        When ``existing_post_id`` is None the target is
+        ``POST /wp-json/wp/v2/{post_type}`` (create).
+        When it's set the target is ``POST /wp-json/wp/v2/{post_type}/{id}``
+        which WP treats as PATCH-merge (omitted keys are preserved on the
+        server). Field-mapping logic is identical in both cases — the only
+        difference is the URL and that a 200 with the existing id is
+        considered success.
         """
         post_type, field_defs = self._resolve_profile(profile_name)
         defs_by_key = {f["key"]: f for f in field_defs if isinstance(f, dict) and f.get("key")}
@@ -231,7 +461,10 @@ class WordPressClient(CmsClient):
             params["lang"] = language
         # WPML translation linking is Phase 4.
 
-        url = f"{self.base_url}/wp-json/wp/v2/{post_type}"
+        if existing_post_id is not None:
+            url = f"{self.base_url}/wp-json/wp/v2/{post_type}/{existing_post_id}"
+        else:
+            url = f"{self.base_url}/wp-json/wp/v2/{post_type}"
         try:
             validate_public_url(url)
             async with httpx.AsyncClient(
@@ -388,6 +621,34 @@ class WordPressClient(CmsClient):
                     pass
 
             return mid
+
+
+def _extract_slug(value: str) -> str:
+    """Turn a URL or path into a bare WP slug.
+
+    Accepts ``https://site.com/category/foo-bar/``, ``/foo-bar``, or a
+    plain ``foo-bar`` — all return ``foo-bar``. Query strings and trailing
+    slashes are dropped. Returns "" when the input is empty or whitespace
+    so the caller can surface a "not found" failure consistently.
+    """
+    from urllib.parse import urlparse
+
+    v = (value or "").strip()
+    if not v:
+        return ""
+    # Strip a query string if any.
+    v = v.split("?", 1)[0].split("#", 1)[0]
+    # If it looks like a URL, take just the path. Otherwise treat the whole
+    # thing as a path.
+    if "://" in v:
+        try:
+            v = urlparse(v).path
+        except ValueError:
+            return ""
+    # Walk path segments from the end, returning the first non-empty one.
+    # This handles "/foo-bar", "/foo-bar/", "/category/foo-bar/", etc.
+    parts = [p for p in v.split("/") if p]
+    return parts[-1] if parts else ""
 
 
 def _coerce_id_list(value: Any) -> list[int]:

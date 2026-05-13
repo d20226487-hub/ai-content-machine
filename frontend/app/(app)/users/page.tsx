@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { UserModal } from "@/components/UserModal";
@@ -12,7 +13,12 @@ import {
   listUserSpend,
   type UserSpendSummary,
 } from "@/lib/spend";
-import { deleteUser, listRoles, listUsers } from "@/lib/users";
+import {
+  deleteUser,
+  getUserTrashCount,
+  listRoles,
+  listUsers,
+} from "@/lib/users";
 import type { Role, User } from "@/lib/types";
 
 type ModalState =
@@ -31,6 +37,16 @@ export default function UsersPage() {
   const [orphanSpend, setOrphanSpend] = useState<UserSpendSummary | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState>({ kind: "closed" });
+  const [trashCount, setTrashCount] = useState(0);
+
+  const refreshTrashCount = useCallback(async () => {
+    try {
+      const { count } = await getUserTrashCount();
+      setTrashCount(count);
+    } catch {
+      // non-critical; the badge just won't show
+    }
+  }, []);
 
   useEffect(() => {
     if (!authLoading && actor && !["admin", "manager"].includes(actor.role.name)) {
@@ -59,10 +75,11 @@ export default function UsersPage() {
         if (ignored) return;
         setLoadError(err instanceof ApiError ? err.message : t("common.failedToLoad"));
       });
+    void refreshTrashCount();
     return () => {
       ignored = true;
     };
-  }, [actor, t]);
+  }, [actor, t, refreshTrashCount]);
 
   if (authLoading || !actor) return null;
 
@@ -82,6 +99,7 @@ export default function UsersPage() {
     try {
       await deleteUser(target.id);
       setUsers((list) => (list ? list.filter((u) => u.id !== target.id) : list));
+      await refreshTrashCount();
     } catch (err) {
       alert(err instanceof ApiError ? err.message : t("common.deleteFailed"));
     }
@@ -108,12 +126,22 @@ export default function UsersPage() {
             {t("users.subtitle")}
           </p>
         </div>
-        <button
-          onClick={() => setModal({ kind: "create" })}
-          className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 dark:hover:bg-neutral-200"
-        >
-          {t("users.newButton")}
-        </button>
+        <div className="flex items-center gap-2">
+          {trashCount > 0 && (
+            <Link
+              href="/users/trash"
+              className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-600 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800"
+            >
+              {t("users.trashLinkWithCount", { count: trashCount })}
+            </Link>
+          )}
+          <button
+            onClick={() => setModal({ kind: "create" })}
+            className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 dark:hover:bg-neutral-200"
+          >
+            {t("users.newButton")}
+          </button>
+        </div>
       </div>
 
       {loadError && (

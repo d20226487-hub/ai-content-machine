@@ -46,12 +46,67 @@ from app.services.rate_limit import get_rate_limiter
 class ResolvedTarget:
     domain: Domain
     profile_name: str  # '' for Custom CMS or "use default" in WP
+    # Per-row resolved language (multi mode + language_column_id set).
+    # None means "use the run-level language" — single mode always ends
+    # up here, and multi mode without a language column also.
+    language: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ResolveError:
     message: str  # surfaced to the publish_jobs.error column
     domain_id: int | None = None  # set if we resolved domain but failed later
+
+
+async def _resolve_row_language(
+    db: AsyncSession, *, run: BulkPublishRun, row_id: int, domain: Domain
+) -> str | None | ResolveError:
+    """Resolve the per-row language when ``run.language_column_id`` is set.
+
+    Returns:
+      * the canonical language string from ``domain.languages`` on success,
+      * ``None`` when no language column is configured (caller falls back
+        to ``run.language``),
+      * ``ResolveError`` when the cell is empty or the value isn't in
+        the domain's configured languages (strict mode — empty fails).
+
+    Works the same way for single + multi mode runs since both end up
+    here with a resolved ``domain``.
+    """
+    if run.language_column_id is None:
+        return None
+    lang_raw = await _read_cell_value(
+        db, row_id=row_id, column_id=run.language_column_id
+    )
+    if not lang_raw:
+        return ResolveError(
+            message=(
+                "Language column is empty for this row. When a per-row "
+                "Language column is set, every row must have a value "
+                "(no fallback to the run-level language in strict mode)."
+            ),
+            domain_id=domain.id,
+        )
+    # Normalize: lowercase + trim. Domain.languages stores codes as
+    # the operator entered them; match case-insensitively, then
+    # return the canonical form from the domain config so downstream
+    # comparisons / display use the same string.
+    normalized = lang_raw.strip().lower()
+    domain_langs = domain.languages or []
+    canonical = next(
+        (l for l in domain_langs if (l or "").strip().lower() == normalized),
+        None,
+    )
+    if canonical is None:
+        available = ", ".join(repr(l) for l in domain_langs) or "(none configured)"
+        return ResolveError(
+            message=(
+                f"Language {lang_raw!r} is not configured on domain "
+                f"{domain.name!r}. Available: {available}."
+            ),
+            domain_id=domain.id,
+        )
+    return canonical
 
 
 async def resolve_row_target(
@@ -63,6 +118,11 @@ async def resolve_row_target(
     Multi mode: reads cells from run.domain_column_id / .profile_column_id,
     looks up domain by name, validates it isn't Custom-CMS (not supported
     in multi mode v1).
+
+    In BOTH modes, if ``run.language_column_id`` is set, the per-row
+    language is read from the cell and validated against the resolved
+    domain's ``languages[]`` — empty cell or unknown language fails the
+    row.
     """
     if run.mode == "single":
         if run.domain_id is None:
@@ -70,7 +130,26 @@ async def resolve_row_target(
         domain = await db.get(Domain, run.domain_id)
         if domain is None:
             return ResolveError(message="Domain has been deleted; cannot publish.")
-        return ResolvedTarget(domain=domain, profile_name=run.profile_name or "")
+        if domain.deleted_at is not None:
+            # Race: the run was created while the domain was active,
+            # then the domain got trashed before the worker reached us.
+            # The trash endpoint blocks this for in-flight runs, but
+            # defense-in-depth here keeps us from publishing to a
+            # trashed domain even if the race window slipped through.
+            return ResolveError(
+                message=f"Domain {domain.name!r} has been moved to Trash; cannot publish.",
+                domain_id=domain.id,
+            )
+        lang_result = await _resolve_row_language(
+            db, run=run, row_id=row_id, domain=domain
+        )
+        if isinstance(lang_result, ResolveError):
+            return lang_result
+        return ResolvedTarget(
+            domain=domain,
+            profile_name=run.profile_name or "",
+            language=lang_result,
+        )
 
     # ---- multi ----
     if run.domain_column_id is None:
@@ -84,9 +163,16 @@ async def resolve_row_target(
     if not domain_value:
         return ResolveError(message="Domain column is empty for this row.")
 
-    # Lookup by exact name. The migration enforces uniqueness so at most one row.
+    # Lookup by exact name among ACTIVE domains only. Trashed domains
+    # with the same name are invisible — the partial unique index added
+    # in migration 0023 lets a trashed and an active domain share a name
+    # (e.g. you trashed "Site A" and recreated a new "Site A").
     domain = (
-        await db.execute(select(Domain).where(Domain.name == domain_value))
+        await db.execute(
+            select(Domain).where(
+                Domain.name == domain_value, Domain.deleted_at.is_(None)
+            )
+        )
     ).scalar_one_or_none()
     if domain is None:
         return ResolveError(message=f"Domain not found: {domain_value!r}.")
@@ -124,7 +210,15 @@ async def resolve_row_target(
             )
         profile_name = profile_value
 
-    return ResolvedTarget(domain=domain, profile_name=profile_name)
+    lang_result = await _resolve_row_language(
+        db, run=run, row_id=row_id, domain=domain
+    )
+    if isinstance(lang_result, ResolveError):
+        return lang_result
+
+    return ResolvedTarget(
+        domain=domain, profile_name=profile_name, language=lang_result,
+    )
 
 
 async def _read_cell_value(
@@ -289,6 +383,26 @@ async def publish_one_row(
 
     domain = target.domain
     profile_name = target.profile_name
+    # Effective per-row language: when the run has a language_column_id,
+    # resolver returns the resolved cell value (already validated against
+    # domain.languages). Otherwise fall back to the run-level language.
+    effective_language = target.language if target.language is not None else run.language
+
+    # Update mode is WP-only. resolve_row_target already blocks Custom CMS
+    # in multi mode; single mode is blocked at API creation. This guard is
+    # defense in depth in case a domain's cms_type changed under us.
+    if run.operation == "update" and domain.cms_type != "wordpress":
+        await _record_failure(
+            db,
+            run=run,
+            row_id=row_id,
+            error=(
+                f"Update mode is supported only for WordPress domains "
+                f"(domain {domain.name!r} is {domain.cms_type})."
+            ),
+            domain_id_override=domain.id,
+        )
+        return "failed"
 
     fields = await _build_fields(db, run=run, row_id=row_id)
 
@@ -305,6 +419,146 @@ async def publish_one_row(
         )
         return "failed"
 
+    # ===== Create mode: optional pre-check for slug duplicates =====
+    #
+    # When the operator turned on `on_slug_conflict` (skip / update), we
+    # peek at the WP side BEFORE allocating a publish_job. The pre-check
+    # uses the same find_post call we use in Update mode, so it's
+    # language-aware via Polylang/WPML ?lang=… — an EN canada doesn't
+    # block a new RU canada.
+    update_post_id: int | None = None
+    if run.operation == "create" and run.on_slug_conflict != "create":
+        slug_value = str(fields.get("slug") or "").strip()
+        if slug_value and domain.cms_type == "wordpress":
+            # Reuse the WP client (already built above) — it has the
+            # correct auth + UA + transport. find_post handles URL-style
+            # slugs and the view→edit context fallback.
+            post_type, _defs = client._resolve_profile(profile_name)
+            try:
+                pre = await client.find_post(
+                    post_type=post_type,
+                    lookup_kind="slug",
+                    value=slug_value,
+                    language=effective_language,
+                )
+            except Exception:  # noqa: BLE001 — last-resort guard
+                pre = None  # treat lookup crash as "no duplicate", same as 'find_post' returning a structured error
+            # On a structured failure (WAF block, etc.) we don't know if a
+            # duplicate exists. Fall through to the normal POST — at worst
+            # WP auto-suffixes. The user sees the WAF errors elsewhere
+            # (Update mode) and can fix Cloudflare first.
+            if pre is not None and pre.post_id is not None:
+                if run.on_slug_conflict == "skip":
+                    # Record as a skipped publish_job (status='skipped'
+                    # is a valid value — see JobStatus literal). The run
+                    # detail per-row table shows it with a neutral badge.
+                    job = PublishJob(
+                        domain_id=domain.id,
+                        source_kind="bulk_row",
+                        source_ref={
+                            "run_id": run.id,
+                            "table_id": run.table_id,
+                            "row_id": row_id,
+                            "skipped_reason": "slug_exists",
+                            "existing_post_id": pre.post_id,
+                        },
+                        status="skipped",
+                        language=effective_language,
+                        profile_name=profile_name or None,
+                        error=(
+                            f"Slug {slug_value!r} already exists on "
+                            f"{domain.name} (post #{pre.post_id}) — skipped"
+                        ),
+                        finished_at=datetime.now(timezone.utc),
+                        created_by_id=run.created_by_id,
+                    )
+                    db.add(job)
+                    await db.commit()
+                    await _bump_counter(db, run_id=run.id, field="skipped")
+                    return "skipped"
+                else:
+                    # on_slug_conflict='update' → switch to PATCH on the
+                    # existing post. The rest of publish_one_row already
+                    # branches on `update_post_id is not None`.
+                    update_post_id = pre.post_id
+
+    # Update mode: resolve the existing post id before we allocate the
+    # publish_job row. A lookup miss is a per-row failure and the row never
+    # reaches WP — keeping the failed row out of `posting` simplifies the
+    # state machine and shortens the audit trail.
+    if run.operation == "update":
+        if run.lookup_column_id is None or run.lookup_kind is None:
+            await _record_failure(
+                db,
+                run=run,
+                row_id=row_id,
+                error=(
+                    "Update run is missing lookup_kind or lookup_column_id "
+                    "(column may have been deleted). Cancel the run and "
+                    "start a new one."
+                ),
+                domain_id_override=domain.id,
+            )
+            return "failed"
+        lookup_value = await _read_cell_value(
+            db, row_id=row_id, column_id=run.lookup_column_id
+        )
+        if not lookup_value:
+            await _record_failure(
+                db,
+                run=run,
+                row_id=row_id,
+                error=f"Update lookup column is empty for this row ({run.lookup_kind}).",
+                domain_id_override=domain.id,
+            )
+            return "failed"
+        post_type, _defs = client._resolve_profile(profile_name)
+        try:
+            lookup = await client.find_post(
+                post_type=post_type,
+                lookup_kind=run.lookup_kind,
+                value=lookup_value,
+                # Pass language so Polylang / WPML filter the lookup. Without
+                # this a site with the same slug in two languages (e.g. EN
+                # `canada` + RU `canada`) would silently update whichever
+                # one Polylang surfaced first — usually the default language.
+                # `effective_language` honors a per-row language_column_id
+                # when set, otherwise falls back to the run-level language.
+                language=effective_language,
+            )
+        except Exception as e:  # noqa: BLE001 — last-resort guard
+            await _record_failure(
+                db,
+                run=run,
+                row_id=row_id,
+                error=(
+                    f"Lookup crashed on {domain.name} "
+                    f"({run.lookup_kind}={lookup_value!r}): "
+                    f"{type(e).__name__}: {e}"
+                ),
+                domain_id_override=domain.id,
+            )
+            return "failed"
+        if lookup.post_id is None:
+            if lookup.error:
+                # Structured failure: WAF block, HTTP error, malformed
+                # JSON. Surface the real reason instead of "not found".
+                msg = (
+                    f"Lookup failed on {domain.name} "
+                    f"({run.lookup_kind}={lookup_value!r}): {lookup.error}"
+                )
+            else:
+                msg = (
+                    f"Existing post not found on {domain.name} "
+                    f"({run.lookup_kind}={lookup_value!r})."
+                )
+            await _record_failure(
+                db, run=run, row_id=row_id, error=msg,
+                domain_id_override=domain.id,
+            )
+            return "failed"
+        update_post_id = lookup.post_id
+
     limits = await resolve_for_domain(db, domain)
     limiter = get_rate_limiter()
 
@@ -315,9 +569,10 @@ async def publish_one_row(
             "run_id": run.id,
             "table_id": run.table_id,
             "row_id": row_id,
+            **({"operation": "update", "post_id": update_post_id} if update_post_id else {}),
         },
         status="posting",
-        language=run.language,
+        language=effective_language,
         profile_name=profile_name or None,
         created_by_id=run.created_by_id,
     )
@@ -332,11 +587,19 @@ async def publish_one_row(
             requests_per_minute=limits.requests_per_minute,
             inter_request_delay_ms=limits.inter_request_delay_ms,
         ):
-            result = await client.publish_post(
-                fields=fields,
-                language=run.language,
-                profile_name=profile_name or None,
-            )
+            if update_post_id is not None:
+                result = await client.update_post(
+                    post_id=update_post_id,
+                    fields=fields,
+                    language=effective_language,
+                    profile_name=profile_name or None,
+                )
+            else:
+                result = await client.publish_post(
+                    fields=fields,
+                    language=effective_language,
+                    profile_name=profile_name or None,
+                )
     except Exception as e:  # noqa: BLE001 — last-resort guard
         result = None
         crash_msg = f"{type(e).__name__}: {e}"

@@ -49,7 +49,13 @@ export function CellEditorModal({ title, initialValue, onSave, onClose }: Props)
   }
 
   return (
-    <Modal onClose={onClose} size="max-w-3xl">
+    <Modal
+      onClose={onClose}
+      size="max-w-3xl"
+      dirty={dirty}
+      valid={true}
+      onSaveAndClose={() => void commit()}
+    >
       <div className="flex items-start justify-between gap-4">
         <h3 className="truncate text-sm font-medium text-neutral-900 dark:text-neutral-100">
           {title}

@@ -13,6 +13,7 @@ import {
   createCategory,
   deleteCategory,
   getPrompt,
+  getPromptTrashCount,
   listCategories,
   listPrompts,
   listTags,
@@ -74,6 +75,20 @@ export default function PromptsPage() {
   const [refreshTick, setRefreshTick] = useState(0);
   const [testingPrompt, setTestingPrompt] = useState<PromptDetail | null>(null);
   const [testLoadingId, setTestLoadingId] = useState<number | null>(null);
+  const [trashCount, setTrashCount] = useState(0);
+
+  const refreshTrashCount = useCallback(async () => {
+    try {
+      const { count } = await getPromptTrashCount();
+      setTrashCount(count);
+    } catch {
+      // non-critical — badge just won't show
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshTrashCount();
+  }, [refreshTrashCount, refreshTick]);
 
   async function onOpenTest(promptId: number) {
     setTestLoadingId(promptId);
@@ -252,6 +267,14 @@ export default function PromptsPage() {
               />
               {t("prompts.includeSubfolders")}
             </label>
+          )}
+          {trashCount > 0 && (
+            <Link
+              href="/prompts/trash"
+              className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-600 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800"
+            >
+              {t("prompts.trashLinkWithCount", { count: trashCount })}
+            </Link>
           )}
           <button
             onClick={onCreateFolder}

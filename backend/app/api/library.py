@@ -18,8 +18,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import get_current_user
+from datetime import datetime, timezone
+
+from app.api.deps import get_current_user, require_role
 from app.db.models import (
+    AppSetting,
+    BulkPublishRun,
     BulkTable,
     BulkTableCell,
     BulkTableColumn,
@@ -46,6 +50,7 @@ from app.schemas.bulk import (
     TableListResponse,
     TableRead,
     TableUpdate,
+    TrashBulkIds,
 )
 from app.tasks.bulk_generation import generate_bulk_cell
 
@@ -85,8 +90,18 @@ async def _get_table_or_404(
     *,
     level: AccessLevel = "write",
     full: bool = False,
+    include_trashed: bool = False,
 ) -> BulkTable:
+    """Fetch a table by id, enforcing ACL.
+
+    By default `deleted_at IS NULL` is required — trashed tables are invisible
+    to every endpoint except the trash surface. Pass ``include_trashed=True``
+    when you intentionally want the trashed view (preview, restore,
+    permanent delete).
+    """
     stmt = select(BulkTable).where(BulkTable.id == table_id)
+    if not include_trashed:
+        stmt = stmt.where(BulkTable.deleted_at.is_(None))
     if full:
         stmt = stmt.options(
             selectinload(BulkTable.columns),
@@ -101,6 +116,58 @@ async def _get_table_or_404(
 # Back-compat alias kept in case anything still imports the old name; new code
 # should use `_get_table_or_404` with an explicit `level=`.
 _get_owned_table_or_404 = _get_table_or_404
+
+
+async def _get_trashed_table_or_404(
+    db: AsyncSession,
+    table_id: int,
+    actor: User,
+    *,
+    level: AccessLevel = "delete",
+    full: bool = False,
+) -> BulkTable:
+    """Same shape as ``_get_table_or_404`` but for the trash surface.
+
+    Forces ``deleted_at IS NOT NULL`` so the active editor never sees a
+    trashed row. Default level is 'delete' since the typical use is
+    restore / permanent-delete — read-only preview overrides to 'read'.
+    """
+    stmt = select(BulkTable).where(
+        BulkTable.id == table_id, BulkTable.deleted_at.is_not(None)
+    )
+    if full:
+        stmt = stmt.options(
+            selectinload(BulkTable.columns),
+            selectinload(BulkTable.rows),
+        )
+    t = (await db.execute(stmt)).unique().scalar_one_or_none()
+    if t is None or not _can_access(actor, t, level):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return t
+
+
+_ACTIVE_BULK_RUN_STATUSES = ("queued", "running", "paused")
+
+
+async def _has_active_publish_run(db: AsyncSession, table_id: int) -> int | None:
+    """Return the id of an in-flight bulk publish run for this table, if any.
+
+    Used to block soft-delete: trashing a table while it's actively being
+    published is too easy a footgun (the run keeps reading the rows, but the
+    table is suddenly hidden from /library and from the user). Resolve the
+    run first — cancel or wait — then trash.
+    """
+    rid = (
+        await db.execute(
+            select(BulkPublishRun.id)
+            .where(
+                BulkPublishRun.table_id == table_id,
+                BulkPublishRun.status.in_(_ACTIVE_BULK_RUN_STATUSES),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return int(rid) if rid is not None else None
 
 
 def _default_status_for(value: str | None) -> str:
@@ -214,7 +281,10 @@ async def list_folders(
         (
             await db.execute(
                 select(BulkTable.folder_id, func.count(BulkTable.id))
-                .where(BulkTable.folder_id.is_not(None))
+                .where(
+                    BulkTable.folder_id.is_not(None),
+                    BulkTable.deleted_at.is_(None),
+                )
                 .group_by(BulkTable.folder_id)
             )
         ).all()
@@ -271,9 +341,18 @@ async def delete_folder(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
     # Delete only when empty (FK is ON DELETE RESTRICT). Surface a clean error
     # so the user knows to move tables out first.
+    # Trashed tables don't count — the folder is "empty" if every remaining
+    # table in it has been trashed. The trashed tables still carry the
+    # folder_id, which is fine: restore puts them back into the same folder
+    # (creating the folder again if it was deleted in the meantime would be a
+    # separate problem; today we just SET NULL on restore if the folder is
+    # gone, see _normalize_folder_on_restore).
     in_use = (
         await db.execute(
-            select(func.count(BulkTable.id)).where(BulkTable.folder_id == folder_id)
+            select(func.count(BulkTable.id)).where(
+                BulkTable.folder_id == folder_id,
+                BulkTable.deleted_at.is_(None),
+            )
         )
     ).scalar_one()
     if int(in_use) > 0:
@@ -309,8 +388,14 @@ async def list_tables(
     role = _role_name(actor)
     sees_all = role in {"admin", "manager"}
 
-    base = select(BulkTable).order_by(BulkTable.updated_at.desc())
-    count_stmt = select(func.count(BulkTable.id))
+    base = (
+        select(BulkTable)
+        .where(BulkTable.deleted_at.is_(None))
+        .order_by(BulkTable.updated_at.desc())
+    )
+    count_stmt = select(func.count(BulkTable.id)).where(
+        BulkTable.deleted_at.is_(None)
+    )
     if not sees_all:
         base = base.where(BulkTable.created_by_id == actor.id)
         count_stmt = count_stmt.where(BulkTable.created_by_id == actor.id)
@@ -460,9 +545,354 @@ async def delete_table(
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    """Move a table to trash (soft-delete).
+
+    Sets ``deleted_at = now()`` so the table disappears from /library and
+    from all editor / generation / publish routes — but the data stays
+    intact. Restorable from /library/trash. Auto-emptied by the cleanup
+    Celery task after ``bulk_table_trash_retention_days`` (default 50,
+    admin-configurable; 0 disables auto-empty).
+
+    Refuses (409) when an in-flight bulk publish run is using this table:
+    queued / running / paused. Cancel the run first.
+    """
     t = await _get_table_or_404(db, table_id, actor, level="delete")
+    blocking_run_id = await _has_active_publish_run(db, t.id)
+    if blocking_run_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Cannot trash this table while bulk publish run "
+                f"#{blocking_run_id} is in flight. Pause/cancel the run "
+                f"first (see /publish/runs/{blocking_run_id})."
+            ),
+        )
+    t.deleted_at = datetime.now(timezone.utc)
+    await db.commit()
+
+
+# ---------- trash ----------
+#
+# The trash surface is parallel to the tables surface: list, preview, and
+# (per-id + bulk) restore/permanent-delete. Trashed rows are hidden from
+# every other endpoint. Visibility mirrors the active list: content_generator
+# sees own; manager/admin see all.
+
+
+@router.get("/trash", response_model=TableListResponse)
+async def list_trashed_tables(
+    q: str | None = Query(default=None, description="Case-insensitive name search"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=500),
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TableListResponse:
+    role = _role_name(actor)
+    sees_all = role in {"admin", "manager"}
+
+    base = (
+        select(BulkTable)
+        .where(BulkTable.deleted_at.is_not(None))
+        .order_by(BulkTable.deleted_at.desc())
+    )
+    count_stmt = select(func.count(BulkTable.id)).where(
+        BulkTable.deleted_at.is_not(None)
+    )
+    if not sees_all:
+        base = base.where(BulkTable.created_by_id == actor.id)
+        count_stmt = count_stmt.where(BulkTable.created_by_id == actor.id)
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        base = base.where(BulkTable.name.ilike(like))
+        count_stmt = count_stmt.where(BulkTable.name.ilike(like))
+
+    total = int((await db.execute(count_stmt)).scalar_one())
+    base = base.offset((page - 1) * page_size).limit(page_size)
+    rows = (await db.execute(base)).scalars().all()
+
+    creator_ids = {t.created_by_id for t in rows if t.created_by_id is not None}
+    creator_names: dict[int, str] = {}
+    if creator_ids:
+        creator_rows = (
+            await db.execute(
+                select(User.id, User.full_name, User.email).where(
+                    User.id.in_(creator_ids)
+                )
+            )
+        ).all()
+        for uid, full_name, email in creator_rows:
+            creator_names[int(uid)] = (full_name or email) or ""
+
+    ids_or_zero = [r.id for r in rows] or [0]
+    col_counts = dict(
+        (
+            await db.execute(
+                select(BulkTableColumn.table_id, func.count(BulkTableColumn.id))
+                .where(BulkTableColumn.table_id.in_(ids_or_zero))
+                .group_by(BulkTableColumn.table_id)
+            )
+        ).all()
+    )
+    row_counts = dict(
+        (
+            await db.execute(
+                select(BulkTableRow.table_id, func.count(BulkTableRow.id))
+                .where(BulkTableRow.table_id.in_(ids_or_zero))
+                .group_by(BulkTableRow.table_id)
+            )
+        ).all()
+    )
+    items = [
+        TableListItem(
+            id=t.id,
+            name=t.name,
+            description=t.description,
+            folder_id=t.folder_id,
+            created_by_id=t.created_by_id,
+            created_by_name=creator_names.get(t.created_by_id) if t.created_by_id else None,
+            created_at=t.created_at,
+            updated_at=t.updated_at,
+            column_count=int(col_counts.get(t.id, 0)),
+            row_count=int(row_counts.get(t.id, 0)),
+            deleted_at=t.deleted_at,
+        )
+        for t in rows
+    ]
+    return TableListResponse(items=items, total=total, page=page, page_size=page_size)
+
+
+_TRASH_RETENTION_KEY = "bulk_table_trash_retention_days"
+_TRASH_RETENTION_DEFAULT = 50
+_TRASH_RETENTION_MAX = 3650  # ~10 years; anything above this is a typo.
+
+
+@router.get("/trash/retention", response_model=dict)
+async def get_trash_retention(
+    db: AsyncSession = Depends(get_db),
+    _viewer: User = Depends(require_role("admin", "manager")),
+) -> dict:
+    row = (
+        await db.execute(
+            select(AppSetting.value).where(AppSetting.key == _TRASH_RETENTION_KEY)
+        )
+    ).scalar_one_or_none()
+    try:
+        days = max(0, int(row)) if row is not None else _TRASH_RETENTION_DEFAULT
+    except (TypeError, ValueError):
+        days = _TRASH_RETENTION_DEFAULT
+    return {"days": days, "default": _TRASH_RETENTION_DEFAULT, "max": _TRASH_RETENTION_MAX}
+
+
+@router.put("/trash/retention", response_model=dict)
+async def set_trash_retention(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_role("admin")),
+) -> dict:
+    raw = payload.get("days")
+    try:
+        days = int(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="`days` must be an integer (0 disables auto-empty).",
+        )
+    if days < 0 or days > _TRASH_RETENTION_MAX:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"`days` must be between 0 and {_TRASH_RETENTION_MAX}.",
+        )
+    existing = await db.get(AppSetting, _TRASH_RETENTION_KEY)
+    if existing is None:
+        db.add(AppSetting(key=_TRASH_RETENTION_KEY, value=days))
+    else:
+        existing.value = days
+    await db.commit()
+    # In-process app_settings cache invalidate. The trash cleanup task reads
+    # via direct query (no cache), but other future readers might use the
+    # cache — invalidating here keeps it consistent.
+    try:
+        from app.services.app_settings_cache import invalidate
+        invalidate(_TRASH_RETENTION_KEY)
+    except Exception:
+        pass
+    return {"days": days, "default": _TRASH_RETENTION_DEFAULT, "max": _TRASH_RETENTION_MAX}
+
+
+@router.get("/trash/count", response_model=dict)
+async def trash_count(
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Cheap count for the 'Trash (N)' badge in the library toolbar."""
+    role = _role_name(actor)
+    sees_all = role in {"admin", "manager"}
+    stmt = select(func.count(BulkTable.id)).where(BulkTable.deleted_at.is_not(None))
+    if not sees_all:
+        stmt = stmt.where(BulkTable.created_by_id == actor.id)
+    n = int((await db.execute(stmt)).scalar_one())
+    return {"count": n}
+
+
+@router.get("/trash/{table_id}", response_model=TableRead)
+async def preview_trashed_table(
+    table_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TableRead:
+    """Read-only preview of a trashed table.
+
+    Returns the same shape as ``GET /library/tables/{id}`` so the frontend
+    can render a read-only version of the grid. All write endpoints
+    (cells, columns, rows, generation, publish) refuse to find this row
+    because they use ``_get_table_or_404`` with ``include_trashed=False``.
+    """
+    t = await _get_trashed_table_or_404(db, table_id, actor, level="read", full=True)
+    out = await _table_to_read(db, t)
+    out.deleted_at = t.deleted_at
+    return out
+
+
+@router.post("/tables/{table_id}/restore", response_model=TableListItem)
+async def restore_table(
+    table_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TableListItem:
+    """Move a trashed table back to the active library.
+
+    Clears `deleted_at`. If the original folder has been deleted in the
+    meantime, the table is restored uncategorized (`folder_id=NULL`) so
+    the FK doesn't break — we don't auto-recreate the folder.
+    """
+    t = await _get_trashed_table_or_404(db, table_id, actor, level="delete")
+    if t.folder_id is not None:
+        # Folder may have been deleted while this table was in trash.
+        folder = await db.get(BulkTableFolder, t.folder_id)
+        if folder is None:
+            t.folder_id = None
+    t.deleted_at = None
+    # Bump updated_at so it sorts to the top of the library list as
+    # "recently changed".
+    await _bump_table_updated(db, t.id)
+    await db.commit()
+    await db.refresh(t)
+    return TableListItem(
+        id=t.id,
+        name=t.name,
+        description=t.description,
+        folder_id=t.folder_id,
+        created_by_id=t.created_by_id,
+        created_by_name=await _resolve_creator_name(db, t.created_by_id),
+        created_at=t.created_at,
+        updated_at=t.updated_at,
+        deleted_at=None,
+    )
+
+
+@router.delete(
+    "/tables/{table_id}/permanent", status_code=status.HTTP_204_NO_CONTENT
+)
+async def permanently_delete_table(
+    table_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Hard-delete a trashed table.
+
+    Only callable from the trash surface (`deleted_at IS NOT NULL`). The
+    cascades on `bulk_table_columns`, `bulk_table_rows`, `bulk_table_cells`,
+    `bulk_publish_runs` (table_id FK ON DELETE CASCADE) and
+    `bulk_table_publish_mappings` (table_id FK ON DELETE CASCADE) clean up
+    everything that pointed at this table.
+    """
+    t = await _get_trashed_table_or_404(db, table_id, actor, level="delete")
     await db.delete(t)
     await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/trash", status_code=status.HTTP_200_OK)
+async def empty_trash(
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Permanently delete every trashed table the actor can see.
+
+    Visibility mirrors the trash list: content_generator empties only their
+    own; manager / admin empty everyone's.
+    """
+    role = _role_name(actor)
+    sees_all = role in {"admin", "manager"}
+    stmt = select(BulkTable).where(BulkTable.deleted_at.is_not(None))
+    if not sees_all:
+        stmt = stmt.where(BulkTable.created_by_id == actor.id)
+    rows = (await db.execute(stmt)).scalars().all()
+    if not rows:
+        return {"deleted": 0}
+    for t in rows:
+        await db.delete(t)
+    await db.commit()
+    return {"deleted": len(rows)}
+
+
+@router.post("/trash/bulk-restore", response_model=dict)
+async def bulk_restore(
+    payload: TrashBulkIds,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Restore many trashed tables in one call.
+
+    Tables the actor can't access (or that aren't actually trashed) are
+    silently skipped so a half-stale UI never 404s the whole batch.
+    """
+    rows = (
+        await db.execute(
+            select(BulkTable).where(
+                BulkTable.id.in_(payload.ids),
+                BulkTable.deleted_at.is_not(None),
+            )
+        )
+    ).scalars().all()
+    restored = 0
+    for t in rows:
+        if not _can_access(actor, t, "delete"):
+            continue
+        if t.folder_id is not None:
+            folder = await db.get(BulkTableFolder, t.folder_id)
+            if folder is None:
+                t.folder_id = None
+        t.deleted_at = None
+        await _bump_table_updated(db, t.id)
+        restored += 1
+    await db.commit()
+    return {"restored": restored}
+
+
+@router.delete("/trash/bulk", response_model=dict)
+async def bulk_permanent_delete(
+    payload: TrashBulkIds,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Permanently delete many trashed tables in one call."""
+    rows = (
+        await db.execute(
+            select(BulkTable).where(
+                BulkTable.id.in_(payload.ids),
+                BulkTable.deleted_at.is_not(None),
+            )
+        )
+    ).scalars().all()
+    deleted = 0
+    for t in rows:
+        if not _can_access(actor, t, "delete"):
+            continue
+        await db.delete(t)
+        deleted += 1
+    await db.commit()
+    return {"deleted": deleted}
 
 
 @router.post("/tables/{table_id}/duplicate", response_model=TableRead, status_code=status.HTTP_201_CREATED)

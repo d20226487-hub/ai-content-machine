@@ -51,6 +51,12 @@ interface Props {
 export function DomainModal({ domain, onClose, onSaved }: Props) {
   const { t } = useT();
   const isEdit = !!domain;
+  // Flips true the first time any input/select/textarea inside the form fires
+  // an onChange (captured by the form-level handler below). Drives the
+  // outside-click guard: pristine modal closes immediately, touched modal
+  // pops the "discard?" strip. The form is too sprawling to snapshot every
+  // field, so first-edit is a good-enough proxy for "user has work to lose".
+  const [touched, setTouched] = useState(false);
 
   const [name, setName] = useState(domain?.name ?? "");
   const [baseUrl, setBaseUrl] = useState(domain?.base_url ?? "");
@@ -373,8 +379,14 @@ export function DomainModal({ domain, onClose, onSaved }: Props) {
   }
 
   return (
-    <Modal onClose={onClose} size="max-w-2xl">
-      <form onSubmit={onSubmit} className="space-y-4">
+    <Modal onClose={onClose} size="max-w-2xl" dirty={touched}>
+      <form
+        onSubmit={onSubmit}
+        onChange={() => {
+          if (!touched) setTouched(true);
+        }}
+        className="space-y-4"
+      >
         <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
           {isEdit ? t("domainMod.editTitle", { name: domain!.name }) : t("domainMod.addTitle")}
         </h2>

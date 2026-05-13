@@ -52,8 +52,14 @@ async def login(
 
     # 2. Look up the user. Always run the bcrypt verify even on miss so the
     # response time is the same in both cases (timing-attack mitigation).
+    # Filter `deleted_at IS NULL` at the query: the partial-unique index on
+    # email allows one trashed + one active row to share an address, so
+    # without this filter `.scalar_one_or_none()` would raise
+    # MultipleResultsFound → 500. Trashed rows can't log in regardless.
     user = (
-        await db.execute(select(User).where(User.email == email))
+        await db.execute(
+            select(User).where(User.email == email, User.deleted_at.is_(None))
+        )
     ).scalar_one_or_none()
 
     # bcrypt is CPU-heavy (~100–300 ms per verify). Off-load to a worker
@@ -80,7 +86,9 @@ async def login(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password"
         )
-    if not user.is_active:
+    if not user.is_active or user.deleted_at is not None:
+        # Trashed users can't log back in; their account is only
+        # recoverable by an admin via /users/trash → Restore.
         await login_throttle.record_failure(ip=ip, email=email)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive user")
 

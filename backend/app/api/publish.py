@@ -69,7 +69,8 @@ async def publish_single(
     handler made user-retries (refresh, double-submit) duplicate posts.
     """
     domain = await db.get(Domain, payload.domain_id)
-    if domain is None:
+    if domain is None or domain.deleted_at is not None:
+        # Trashed domains are not pickable as publish targets.
         raise HTTPException(status_code=404, detail="Domain not found")
 
     # Validate required fields up front (per the chosen profile when WP).

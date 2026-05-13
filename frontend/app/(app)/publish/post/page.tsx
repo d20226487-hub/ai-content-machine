@@ -83,7 +83,7 @@ export default function PostPage() {
             type="button"
             onClick={onClearCompleted}
             disabled={busy}
-            className="rounded-md border border-red-300 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-800/60 dark:text-red-400 dark:hover:bg-red-950/40"
+            className="px-2 py-1 text-xs text-red-500/60 underline-offset-2 hover:text-red-700 hover:underline disabled:opacity-50 dark:text-red-400/40 dark:hover:text-red-300"
           >
             {t("pubHistory.clearCompleted")}
           </button>

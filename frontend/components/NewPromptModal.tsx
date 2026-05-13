@@ -123,8 +123,7 @@ export function NewPromptModal({
     }
   }
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
+  async function doSave(): Promise<boolean> {
     setSubmitting(true);
     setError(null);
     try {
@@ -137,15 +136,41 @@ export function NewPromptModal({
       });
       onCreated(created);
       onClose();
+      return true;
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t("newPrompt.failedCreate"));
+      return false;
     } finally {
       setSubmitting(false);
     }
   }
 
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    await doSave();
+  }
+
+  // Dirty = the user has typed anything that would survive a discard.
+  const dirty =
+    name.trim().length > 0 ||
+    content.length > 0 ||
+    selectedTagIds.length > 0 ||
+    changeNote.trim().length > 0 ||
+    aiDescription.trim().length > 0;
+  // Valid mirrors the Save button's enabled state: in Manual mode the
+  // backend rejects empty name/content, so don't auto-save from
+  // outside-click until both are filled.
+  const valid =
+    !submitting && mode === "manual" && name.trim().length > 0 && content.length > 0;
+
   return (
-    <Modal onClose={onClose} size="max-w-2xl">
+    <Modal
+      onClose={onClose}
+      size="max-w-2xl"
+      dirty={dirty}
+      valid={valid}
+      onSaveAndClose={() => void doSave()}
+    >
       <div className="flex items-start justify-between">
         <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">{t("newPrompt.title")}</h2>
         <div className="flex rounded-md border border-neutral-200 dark:border-neutral-800 p-0.5 text-xs">

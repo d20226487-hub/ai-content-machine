@@ -11,6 +11,10 @@ export type BulkRunStatus =
 export type RowFilter = "all" | "selected" | "range";
 export type CellFilter = "all" | "unpublished" | "failed";
 export type PublishMode = "single" | "multi";
+export type PublishOperation = "create" | "update";
+export type PublishLookupKind = "id" | "slug";
+/** What to do in Create mode when a row's slug already exists on the target. */
+export type OnSlugConflict = "create" | "skip" | "update";
 
 export interface BulkRunSummary {
   id: number;
@@ -31,6 +35,11 @@ export interface BulkRunSummary {
   skipped: number;
   error: string | null;
   created_by_id: number | null;
+  operation: PublishOperation;
+  lookup_kind: PublishLookupKind | null;
+  lookup_column_id: number | null;
+  language_column_id: number | null;
+  on_slug_conflict: OnSlugConflict;
 }
 
 export interface ByDomainStat {
@@ -63,6 +72,10 @@ export interface BulkPublishPayload {
   // multi mode
   domain_column_id?: number | null;
   profile_column_id?: number | null;
+  /** Multi mode only: per-row language. When set, each row's cell must
+   *  hold a value that matches the resolved domain's `languages[]`.
+   *  Empty cells fail the row. */
+  language_column_id?: number | null;
 
   language?: string | null;
   row_filter: RowFilter;
@@ -71,6 +84,20 @@ export interface BulkPublishPayload {
   field_to_column: Record<string, number>;
   back_fill: Record<string, number>;
   save_mapping?: boolean;
+
+  /** "create" (POST new posts) or "update" (PATCH existing posts). Default "create".
+   *  Update is WP-only. */
+  operation?: PublishOperation;
+  /** Required when operation="update". "id" treats the cell as a numeric post id;
+   *  "slug" looks up the post via /wp-json/wp/v2/{type}?slug=… */
+  lookup_kind?: PublishLookupKind | null;
+  /** Required when operation="update". Column whose cells hold the lookup value. */
+  lookup_column_id?: number | null;
+  /** Create-mode only. "create" (default) = always POST and let WP auto-suffix.
+   *  "skip" = if a post with the same slug exists in the row's language, log
+   *  the row as skipped. "update" = PATCH the existing post instead.
+   *  Requires `slug` to be in field_to_column. */
+  on_slug_conflict?: OnSlugConflict;
 }
 
 export interface PublishMapping {
@@ -79,6 +106,11 @@ export interface PublishMapping {
   language: string | null;
   domain_column_id?: number | null;
   profile_column_id?: number | null;
+  language_column_id?: number | null;
+  operation?: PublishOperation;
+  lookup_kind?: PublishLookupKind | null;
+  lookup_column_id?: number | null;
+  on_slug_conflict?: OnSlugConflict;
 }
 
 export interface BulkRunListResponse {

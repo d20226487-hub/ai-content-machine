@@ -194,6 +194,15 @@ class DomainRead(BaseModel):
     created_by_id: int | None
     created_at: datetime
     updated_at: datetime
+    # Populated only on rows returned from /domains/trash. Null on the
+    # normal /domains list.
+    deleted_at: datetime | None = None
+
+
+class TrashBulkIds(BaseModel):
+    """Body for /domains/trash/bulk-restore and /domains/trash/bulk."""
+
+    ids: list[int] = Field(default_factory=list, min_length=1, max_length=500)
 
 
 class TestConnectionResult(BaseModel):

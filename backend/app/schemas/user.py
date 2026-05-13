@@ -20,6 +20,15 @@ class UserRead(BaseModel):
     is_active: bool
     role: RoleRead
     created_at: datetime
+    # Populated only on rows returned from /users/trash. Null on the
+    # normal /users list.
+    deleted_at: datetime | None = None
+
+
+class TrashBulkIds(BaseModel):
+    """Body for /users/trash/bulk-restore and /users/trash/bulk."""
+
+    ids: list[int] = Field(default_factory=list, min_length=1, max_length=500)
 
 
 class UserCreate(BaseModel):

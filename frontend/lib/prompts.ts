@@ -193,8 +193,71 @@ export function revertPrompt(
   });
 }
 
+/** Soft-delete (move to trash). Version history preserved until permanent delete. */
 export function deletePrompt(id: number): Promise<void> {
   return api<void>(`/prompts/${id}`, { method: "DELETE" });
+}
+
+// ---- Trash ----
+
+export function listPromptTrash(opts: { q?: string; page?: number; page_size?: number } = {}): Promise<PromptListResponse> {
+  const sp = new URLSearchParams();
+  if (opts.q && opts.q.trim()) sp.set("q", opts.q.trim());
+  if (opts.page) sp.set("page", String(opts.page));
+  if (opts.page_size) sp.set("page_size", String(opts.page_size));
+  const qs = sp.toString();
+  return api<PromptListResponse>(`/prompts/trash${qs ? "?" + qs : ""}`);
+}
+
+export function getPromptTrashCount(): Promise<{ count: number }> {
+  return api<{ count: number }>("/prompts/trash/count");
+}
+
+export function previewTrashedPrompt(id: number): Promise<PromptDetail> {
+  return api<PromptDetail>(`/prompts/trash/${id}`);
+}
+
+export function restorePrompt(id: number): Promise<PromptDetail> {
+  return api<PromptDetail>(`/prompts/${id}/restore`, { method: "POST" });
+}
+
+export function permanentlyDeletePrompt(id: number): Promise<void> {
+  return api<void>(`/prompts/${id}/permanent`, { method: "DELETE" });
+}
+
+export function emptyPromptTrash(): Promise<{ deleted: number }> {
+  return api<{ deleted: number }>("/prompts/trash", { method: "DELETE" });
+}
+
+export function bulkRestorePrompts(ids: number[]): Promise<{ restored: number }> {
+  return api<{ restored: number }>("/prompts/trash/bulk-restore", {
+    method: "POST",
+    body: { ids },
+  });
+}
+
+export function bulkPermanentlyDeletePrompts(ids: number[]): Promise<{ deleted: number }> {
+  return api<{ deleted: number }>("/prompts/trash/bulk", {
+    method: "DELETE",
+    body: { ids },
+  });
+}
+
+export interface TrashRetention {
+  days: number;
+  default: number;
+  max: number;
+}
+
+export function getPromptTrashRetention(): Promise<TrashRetention> {
+  return api<TrashRetention>("/prompts/trash/retention");
+}
+
+export function setPromptTrashRetention(days: number): Promise<TrashRetention> {
+  return api<TrashRetention>("/prompts/trash/retention", {
+    method: "PUT",
+    body: { days },
+  });
 }
 
 // ---- AI assist ----

@@ -53,6 +53,9 @@ class PromptListItem(BaseModel):
     created_by_email: str | None = None
     created_at: datetime
     updated_at: datetime
+    # Populated only on rows returned from /prompts/trash. Null on the
+    # normal /prompts list.
+    deleted_at: datetime | None = None
 
 
 class PromptListResponse(BaseModel):
@@ -62,6 +65,12 @@ class PromptListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class TrashBulkIds(BaseModel):
+    """Body for /prompts/trash/bulk-restore and /prompts/trash/bulk."""
+
+    ids: list[int] = Field(default_factory=list, min_length=1, max_length=500)
 
 
 class PromptDetail(BaseModel):
@@ -81,6 +90,7 @@ class PromptDetail(BaseModel):
     created_by_email: str | None = None
     created_at: datetime
     updated_at: datetime
+    deleted_at: datetime | None = None
 
 
 class PromptCreate(BaseModel):

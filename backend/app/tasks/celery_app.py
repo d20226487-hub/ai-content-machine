@@ -29,6 +29,7 @@ celery_app = Celery(
         "app.tasks.publish_bulk",
         "app.tasks.publish_single",
         "app.tasks.backup",
+        "app.tasks.trash_cleanup",
     ],
 )
 
@@ -49,6 +50,14 @@ celery_app.conf.update(
             "task": "backup.run",
             "schedule": crontab(minute=0),
             "args": ("scheduled",),
+        },
+        # Trash auto-empty. Reads `app_settings.bulk_table_trash_retention_days`
+        # (default 50, 0 disables). Once a day at 03:15 UTC — retention is
+        # measured in days so hourly would be wasted ticks. The 15-minute
+        # offset keeps it from piling onto the top-of-hour backup task.
+        "daily-trash-cleanup": {
+            "task": "trash.cleanup",
+            "schedule": crontab(hour=3, minute=15),
         },
     },
 )

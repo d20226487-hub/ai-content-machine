@@ -68,7 +68,7 @@ export function ErrorDetailDrawer({
             {onDelete && detail && (
               <button
                 onClick={() => onDelete(detail.id)}
-                className="rounded-md border border-red-300 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-800/60 dark:text-red-400 dark:hover:bg-red-950/40"
+                className="px-2 py-1 text-xs text-red-500/60 underline-offset-2 hover:text-red-700 hover:underline dark:text-red-400/40 dark:hover:text-red-300"
               >
                 {t("common.delete")}
               </button>

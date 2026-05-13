@@ -8,8 +8,10 @@ import csv
 import io
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
-from sqlalchemy import select
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from sqlalchemy import delete as sa_delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,7 +23,7 @@ from app.api.deps import get_current_user, require_role
 from app.cms.registry import UnsupportedCms, get_cms_client
 from app.core.crypto import decrypt, encrypt
 from app.core.ssrf import SafeAsyncTransport, UnsafeUrlError, validate_public_url
-from app.db.models import Domain, User
+from app.db.models import AppSetting, BulkPublishRun, Domain, User
 from app.db.session import get_db
 from app.services.media_cache import clear_for_domain, count_for_domain
 from app.schemas.domain import (
@@ -30,6 +32,7 @@ from app.schemas.domain import (
     DomainRead,
     DomainUpdate,
     TestConnectionResult,
+    TrashBulkIds,
     normalize_publish_config,
 )
 
@@ -63,16 +66,260 @@ def _to_read(d: Domain) -> DomainRead:
             "created_by_id": d.created_by_id,
             "created_at": d.created_at,
             "updated_at": d.updated_at,
+            "deleted_at": d.deleted_at,
         }
     )
 
 
 @router.get("", response_model=list[DomainRead])
 async def list_domains(db: AsyncSession = Depends(get_db)) -> list[DomainRead]:
+    """List active domains. Trashed rows are hidden — see /domains/trash."""
     rows = (
-        await db.execute(select(Domain).order_by(Domain.id))
+        await db.execute(
+            select(Domain).where(Domain.deleted_at.is_(None)).order_by(Domain.id)
+        )
     ).scalars().all()
     return [_to_read(d) for d in rows]
+
+
+# ---------- trash ----------
+#
+# All endpoints under /domains/trash/* mirror the bulk_tables trash surface.
+# The literal "trash" path segments come before the dynamic
+# /domains/{domain_id} routes so FastAPI doesn't try to coerce "trash"/
+# "count"/"retention" into int domain_ids.
+
+_DOMAIN_TRASH_RETENTION_KEY = "domain_trash_retention_days"
+_DOMAIN_TRASH_RETENTION_DEFAULT = 50
+_DOMAIN_TRASH_RETENTION_MAX = 3650
+
+
+@router.get("/trash/count", response_model=dict)
+async def trash_count(db: AsyncSession = Depends(get_db)) -> dict:
+    n = int(
+        (
+            await db.execute(
+                select(func.count(Domain.id)).where(Domain.deleted_at.is_not(None))
+            )
+        ).scalar_one()
+    )
+    return {"count": n}
+
+
+@router.get("/trash/retention", response_model=dict)
+async def get_trash_retention(
+    db: AsyncSession = Depends(get_db),
+    _viewer: User = Depends(require_role("admin", "manager")),
+) -> dict:
+    row = (
+        await db.execute(
+            select(AppSetting.value).where(
+                AppSetting.key == _DOMAIN_TRASH_RETENTION_KEY
+            )
+        )
+    ).scalar_one_or_none()
+    try:
+        days = (
+            max(0, int(row))
+            if row is not None
+            else _DOMAIN_TRASH_RETENTION_DEFAULT
+        )
+    except (TypeError, ValueError):
+        days = _DOMAIN_TRASH_RETENTION_DEFAULT
+    return {
+        "days": days,
+        "default": _DOMAIN_TRASH_RETENTION_DEFAULT,
+        "max": _DOMAIN_TRASH_RETENTION_MAX,
+    }
+
+
+@router.put("/trash/retention", response_model=dict)
+async def set_trash_retention(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_role("admin")),
+) -> dict:
+    raw = payload.get("days")
+    try:
+        days = int(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=400,
+            detail="`days` must be an integer (0 disables auto-empty).",
+        )
+    if days < 0 or days > _DOMAIN_TRASH_RETENTION_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"`days` must be between 0 and {_DOMAIN_TRASH_RETENTION_MAX}.",
+        )
+    existing = await db.get(AppSetting, _DOMAIN_TRASH_RETENTION_KEY)
+    if existing is None:
+        db.add(AppSetting(key=_DOMAIN_TRASH_RETENTION_KEY, value=days))
+    else:
+        existing.value = days
+    await db.commit()
+    try:
+        from app.services.app_settings_cache import invalidate
+        invalidate(_DOMAIN_TRASH_RETENTION_KEY)
+    except Exception:
+        pass
+    return {
+        "days": days,
+        "default": _DOMAIN_TRASH_RETENTION_DEFAULT,
+        "max": _DOMAIN_TRASH_RETENTION_MAX,
+    }
+
+
+@router.get("/trash", response_model=list[DomainRead])
+async def list_trashed_domains(
+    db: AsyncSession = Depends(get_db),
+) -> list[DomainRead]:
+    rows = (
+        await db.execute(
+            select(Domain)
+            .where(Domain.deleted_at.is_not(None))
+            .order_by(Domain.deleted_at.desc())
+        )
+    ).scalars().all()
+    return [_to_read(d) for d in rows]
+
+
+@router.get("/trash/{domain_id}", response_model=DomainRead)
+async def preview_trashed_domain(
+    domain_id: int, db: AsyncSession = Depends(get_db)
+) -> DomainRead:
+    """Read-only preview of a trashed domain. Active surfaces 404 it."""
+    d = (
+        await db.execute(
+            select(Domain).where(
+                Domain.id == domain_id, Domain.deleted_at.is_not(None)
+            )
+        )
+    ).scalar_one_or_none()
+    if d is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return _to_read(d)
+
+
+@router.post("/{domain_id}/restore", response_model=DomainRead)
+async def restore_domain(
+    domain_id: int, db: AsyncSession = Depends(get_db)
+) -> DomainRead:
+    """Restore a trashed domain to the active set.
+
+    The partial-unique indexes ``uq_domains_name_active`` /
+    ``uq_domains_base_url_active`` skip trashed rows, so while the
+    domain was in trash someone may have created a new active domain
+    with the same name or base_url. Check that explicitly before
+    flipping deleted_at — a clean 409 is better than the IntegrityError
+    that would otherwise come out of the partial index when we commit.
+    """
+    d = (
+        await db.execute(
+            select(Domain).where(
+                Domain.id == domain_id, Domain.deleted_at.is_not(None)
+            )
+        )
+    ).scalar_one_or_none()
+    if d is None:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    clash = (
+        await db.execute(
+            select(Domain.id, Domain.name, Domain.base_url).where(
+                Domain.deleted_at.is_(None),
+                Domain.id != d.id,
+                (Domain.name == d.name) | (Domain.base_url == d.base_url),
+            )
+        )
+    ).first()
+    if clash is not None:
+        _, clash_name, clash_url = clash
+        which = "name" if clash_name == d.name else "base_url"
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot restore: an active domain with the same {which} "
+                f"already exists. Rename or trash the conflicting domain first."
+            ),
+        )
+
+    d.deleted_at = None
+    await db.commit()
+    await db.refresh(d)
+    return _to_read(d)
+
+
+@router.delete(
+    "/{domain_id}/permanent",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def permanently_delete_domain(
+    domain_id: int, db: AsyncSession = Depends(get_db)
+) -> Response:
+    """Hard-delete a trashed domain. Related publish_jobs.domain_id is
+    set NULL via the existing FK (publish_jobs jobs survive, just lose
+    the domain back-reference and render as '(deleted)' in history)."""
+    d = (
+        await db.execute(
+            select(Domain).where(
+                Domain.id == domain_id, Domain.deleted_at.is_not(None)
+            )
+        )
+    ).scalar_one_or_none()
+    if d is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.delete(d)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/trash", response_model=dict)
+async def empty_trash(db: AsyncSession = Depends(get_db)) -> dict:
+    rows = (
+        await db.execute(
+            select(Domain).where(Domain.deleted_at.is_not(None))
+        )
+    ).scalars().all()
+    for d in rows:
+        await db.delete(d)
+    await db.commit()
+    return {"deleted": len(rows)}
+
+
+@router.post("/trash/bulk-restore", response_model=dict)
+async def bulk_restore_domains(
+    payload: TrashBulkIds, db: AsyncSession = Depends(get_db)
+) -> dict:
+    rows = (
+        await db.execute(
+            select(Domain).where(
+                Domain.id.in_(payload.ids), Domain.deleted_at.is_not(None)
+            )
+        )
+    ).scalars().all()
+    for d in rows:
+        d.deleted_at = None
+    await db.commit()
+    return {"restored": len(rows)}
+
+
+@router.delete("/trash/bulk", response_model=dict)
+async def bulk_permanent_delete_domains(
+    payload: TrashBulkIds, db: AsyncSession = Depends(get_db)
+) -> dict:
+    rows = (
+        await db.execute(
+            select(Domain).where(
+                Domain.id.in_(payload.ids), Domain.deleted_at.is_not(None)
+            )
+        )
+    ).scalars().all()
+    for d in rows:
+        await db.delete(d)
+    await db.commit()
+    return {"deleted": len(rows)}
 
 
 @router.post("", response_model=DomainRead, status_code=status.HTTP_201_CREATED)
@@ -122,13 +369,28 @@ async def create_domain(
     return _to_read(domain)
 
 
+async def _get_active_domain_or_404(
+    db: AsyncSession, domain_id: int
+) -> Domain:
+    """Fetch a domain that hasn't been trashed. Active surfaces never
+    see trashed rows — they have to go through /domains/trash/{id}."""
+    d = (
+        await db.execute(
+            select(Domain).where(
+                Domain.id == domain_id, Domain.deleted_at.is_(None)
+            )
+        )
+    ).scalar_one_or_none()
+    if d is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return d
+
+
 @router.get("/{domain_id}", response_model=DomainRead)
 async def get_domain(
     domain_id: int, db: AsyncSession = Depends(get_db)
 ) -> DomainRead:
-    d = await db.get(Domain, domain_id)
-    if d is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    d = await _get_active_domain_or_404(db, domain_id)
     return _to_read(d)
 
 
@@ -138,9 +400,7 @@ async def update_domain(
     payload: DomainUpdate,
     db: AsyncSession = Depends(get_db),
 ) -> DomainRead:
-    d = await db.get(Domain, domain_id)
-    if d is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    d = await _get_active_domain_or_404(db, domain_id)
 
     data = payload.model_dump(exclude_unset=True)
 
@@ -184,14 +444,44 @@ async def update_domain(
     return _to_read(d)
 
 
+_ACTIVE_BULK_RUN_STATUSES = ("queued", "running", "paused")
+
+
 @router.delete("/{domain_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 async def delete_domain(
     domain_id: int, db: AsyncSession = Depends(get_db)
 ) -> Response:
-    d = await db.get(Domain, domain_id)
-    if d is None:
-        raise HTTPException(status_code=404, detail="Not found")
-    await db.delete(d)
+    """Move a domain to trash (soft-delete).
+
+    Sets ``deleted_at = now()`` so the domain disappears from
+    /publish/domains and from every publish picker. The credentials,
+    publish profiles, rate-limit overrides, and media cache all survive
+    — Restore brings them back intact.
+
+    Refuses (409) when an in-flight bulk publish run targets this
+    domain (queued / running / paused). Cancel the run first.
+    """
+    d = await _get_active_domain_or_404(db, domain_id)
+    blocking_run_id = (
+        await db.execute(
+            select(BulkPublishRun.id)
+            .where(
+                BulkPublishRun.domain_id == d.id,
+                BulkPublishRun.status.in_(_ACTIVE_BULK_RUN_STATUSES),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if blocking_run_id is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot trash this domain while bulk publish run "
+                f"#{int(blocking_run_id)} is in flight against it. "
+                f"Cancel the run first (/publish/runs/{int(blocking_run_id)})."
+            ),
+        )
+    d.deleted_at = datetime.now(timezone.utc)
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

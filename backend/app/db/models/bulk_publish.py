@@ -52,6 +52,12 @@ class BulkPublishRun(Base):
     profile_column_id: Mapped[int | None] = mapped_column(
         ForeignKey("bulk_table_columns.id", ondelete="SET NULL"), nullable=True
     )
+    # Per-row language column (multi mode only). When set, each row's
+    # language is read from this cell (lowercase + trim, must match the
+    # resolved domain's `languages[]`); empty cell → row fails.
+    language_column_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bulk_table_columns.id", ondelete="SET NULL"), nullable=True
+    )
 
     language: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
@@ -72,6 +78,29 @@ class BulkPublishRun(Base):
     failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     skipped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # 'create' (POST a new post) | 'update' (PATCH an existing post resolved
+    # via lookup_kind + lookup_column_id). Default 'create' preserves v1
+    # behavior for rows that predate migration 0020.
+    operation: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="create"
+    )
+    # 'id' | 'slug' — only meaningful when operation='update'.
+    lookup_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # The bulk-table column whose cell value identifies the existing post for
+    # each row. SET NULL on column delete so a missing column doesn't dangle
+    # the FK; the resolver will fail per-row with a clear message.
+    lookup_column_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bulk_table_columns.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # What to do in Create mode when a post with the same slug (in the
+    # row's target language) already exists. 'create' = always POST (WP
+    # auto-suffixes), 'skip' = record as skipped, 'update' = PATCH the
+    # existing post. Only meaningful when operation='create'.
+    on_slug_conflict: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="create"
+    )
 
     created_by_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
@@ -136,10 +165,28 @@ class BulkTablePublishMapping(Base):
     profile_column_id: Mapped[int | None] = mapped_column(
         ForeignKey("bulk_table_columns.id", ondelete="SET NULL"), nullable=True
     )
+    language_column_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bulk_table_columns.id", ondelete="SET NULL"), nullable=True
+    )
 
     field_to_column: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     back_fill: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     language: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # Mirrors the same three fields on BulkPublishRun so the saved mapping
+    # remembers the user's last operation + lookup choice. Modal pre-fills
+    # both on open. Independent per (table, mode) — single + multi can each
+    # hold their own create-vs-update memory.
+    operation: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="create"
+    )
+    lookup_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    lookup_column_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bulk_table_columns.id", ondelete="SET NULL"), nullable=True
+    )
+    on_slug_conflict: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="create"
+    )
 
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

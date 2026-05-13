@@ -3,7 +3,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-JobStatus = Literal["queued", "posting", "posted", "failed"]
+JobStatus = Literal["queued", "posting", "posted", "failed", "skipped"]
 SourceKind = Literal["single", "bulk_row"]
 BulkRunStatus = Literal[
     "queued", "running", "paused", "cancelled", "done", "failed"
@@ -11,6 +11,15 @@ BulkRunStatus = Literal[
 RowFilter = Literal["all", "selected", "range"]
 CellFilter = Literal["all", "unpublished", "failed"]
 PublishMode = Literal["single", "multi"]
+# 'create' = POST a new post; 'update' = resolve an existing post via
+# lookup_kind+lookup_column_id and PATCH it. WP-only.
+PublishOperation = Literal["create", "update"]
+PublishLookupKind = Literal["id", "slug"]
+# How to react when a Create row's slug already exists on the target
+# (in its language, per the find_post language filter). 'create' = always
+# POST (WP auto-suffixes); 'skip' = log as skipped; 'update' = PATCH the
+# existing post.
+OnSlugConflict = Literal["create", "skip", "update"]
 
 
 class BulkPublishRequest(BaseModel):
@@ -26,6 +35,11 @@ class BulkPublishRequest(BaseModel):
     # Multi-mode column refs — required when mode='multi', ignored otherwise.
     domain_column_id: int | None = None
     profile_column_id: int | None = None
+    # Per-row language column (multi mode only). Cell value is lowercased
+    # + trimmed and matched against the resolved domain's languages.
+    # Run-level `language` becomes the fallback when this column is unset
+    # OR not in multi mode.
+    language_column_id: int | None = None
 
     language: str | None = None
 
@@ -37,6 +51,19 @@ class BulkPublishRequest(BaseModel):
     back_fill: dict[str, int] = Field(default_factory=dict)
 
     save_mapping: bool = True
+
+    # Create vs Update. Update mode resolves each row to an existing WP post
+    # via (lookup_kind, lookup_column_id) and PATCHes it instead of posting
+    # a new one. WP-only — Custom CMS in update mode is rejected at run
+    # creation by the API layer (it has no PATCH/find convention).
+    operation: PublishOperation = "create"
+    lookup_kind: PublishLookupKind | None = None
+    lookup_column_id: int | None = None
+
+    # Slug-conflict handling on Create. Pre-checks each row's slug via the
+    # WP REST API and either skips a duplicate or PATCHes it. Adds one GET
+    # per row, language-aware via find_post.
+    on_slug_conflict: OnSlugConflict = "create"
 
     @model_validator(mode="after")
     def _validate_mode(self) -> "BulkPublishRequest":
@@ -50,6 +77,36 @@ class BulkPublishRequest(BaseModel):
             # profile_column_id required for WP; we can't validate per-CMS here
             # (need the resolved domain), so the API validates after looking
             # up domains. profile_column_id presence is checked there.
+
+        if self.operation == "update":
+            if self.lookup_kind is None:
+                raise ValueError(
+                    "lookup_kind is required when operation='update' "
+                    "(pick 'id' or 'slug')"
+                )
+            if self.lookup_column_id is None:
+                raise ValueError(
+                    "lookup_column_id is required when operation='update' "
+                    "(the bulk-table column that holds the existing post id or slug)"
+                )
+        if self.on_slug_conflict != "create":
+            # Skip / Update behaviors only apply to Create-mode runs. In
+            # Update mode every row already targets an existing post; a
+            # second pre-check is redundant and likely a UI mistake.
+            if self.operation != "create":
+                raise ValueError(
+                    "on_slug_conflict applies only when operation='create'. "
+                    "Update-mode runs already target an existing post."
+                )
+            # Without `slug` in field_to_column there's nothing to pre-check
+            # (WP would derive the slug from the title server-side). Fail
+            # explicitly so the user knows the toggle has no effect.
+            if "slug" not in self.field_to_column:
+                raise ValueError(
+                    "on_slug_conflict requires 'slug' to be mapped in "
+                    "field_to_column. Map a column to the slug field, or "
+                    "set on_slug_conflict='create'."
+                )
         return self
 
 
@@ -74,6 +131,11 @@ class BulkRunSummary(BaseModel):
     skipped: int
     error: str | None
     created_by_id: int | None
+    operation: PublishOperation = "create"
+    lookup_kind: PublishLookupKind | None = None
+    lookup_column_id: int | None = None
+    language_column_id: int | None = None
+    on_slug_conflict: OnSlugConflict = "create"
 
 
 class ByDomainStat(BaseModel):
@@ -114,6 +176,13 @@ class PublishMapping(BaseModel):
     # for single-mode mappings; the UI ignores them in that case.
     domain_column_id: int | None = None
     profile_column_id: int | None = None
+    language_column_id: int | None = None
+    # Remembered Create/Update choice + lookup target, so the modal restores
+    # the same shape next time the user opens it for this (table, mode).
+    operation: PublishOperation = "create"
+    lookup_kind: PublishLookupKind | None = None
+    lookup_column_id: int | None = None
+    on_slug_conflict: OnSlugConflict = "create"
 
 
 class PublishDefaults(BaseModel):
