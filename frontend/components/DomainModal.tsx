@@ -249,7 +249,9 @@ export function DomainModal({ domain, onClose, onSaved }: Props) {
     if (cmsType === "wordpress") {
       creds = credentials.trim() || null;
     } else if (cmsType === "custom") {
-      if (authType === "bearer") {
+      if (authType === "bearer" || authType === "basic_auth") {
+        // basic_auth uses the same single-string field as bearer; the user
+        // pastes "login:password" exactly like a WP Application Password.
         creds = credentials.trim() || null;
       } else if (authType === "api_key_header") {
         if (apiKeyHeader.trim() && apiKeyValue.trim()) {
@@ -679,6 +681,7 @@ export function DomainModal({ domain, onClose, onSaved }: Props) {
               >
                 <option value="bearer">{t("domainMod.authBearer")}</option>
                 <option value="api_key_header">{t("domainMod.authApiKey")}</option>
+                <option value="basic_auth">{t("domainMod.authBasic")}</option>
               </select>
             </Field>
 
@@ -696,6 +699,25 @@ export function DomainModal({ domain, onClose, onSaved }: Props) {
                   onChange={(e) => setCredentials(e.target.value)}
                   className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm font-mono dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
                   placeholder={t("domainMod.bearerPlaceholder")}
+                  autoComplete="off"
+                />
+              </Field>
+            )}
+
+            {authType === "basic_auth" && (
+              <Field
+                label={t("domainMod.fieldBasicCreds")}
+                hint={
+                  isEdit && domain?.has_credentials
+                    ? t("domainMod.basicHintEdit")
+                    : t("domainMod.basicHint")
+                }
+              >
+                <input
+                  value={credentials}
+                  onChange={(e) => setCredentials(e.target.value)}
+                  className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm font-mono dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+                  placeholder="login:password"
                   autoComplete="off"
                 />
               </Field>

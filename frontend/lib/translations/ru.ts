@@ -869,6 +869,25 @@ export const ru: Record<keyof typeof en, string> = {
   "domains.subtitle":
     "Подключённые сайты, на которые можно публиковать.",
   "domains.import": "Импорт CSV",
+  "domains.importJson": "Импорт JSON",
+  "domains.importJsonHint":
+    "Массовое создание доменов с полным вложенным publish_config (post-типы + поля). Используйте, когда плоских колонок CSV недостаточно.",
+  "domainJson.title": "Импорт доменов из JSON",
+  "domainJson.subtitle":
+    "Вставьте или загрузите JSON-массив объектов. Каждый элемент — та же структура, что в POST /domains: вложенный publish_config (профили + поля) и custom_config поддерживаются. Лимит 500 элементов за вызов.",
+  "domainJson.sample": "Пример (Site A, Site B, Custom Site)",
+  "domainJson.sampleStart": "Разверните и используйте как отправную точку.",
+  "domainJson.loadSample": "Загрузить пример в редактор",
+  "domainJson.downloadSample": "Скачать пример",
+  "domainJson.uploadLabel": "Загрузить .json-файл",
+  "domainJson.pasteLabel": "Или вставьте JSON напрямую",
+  "domainJson.parseOk": "Похоже на корректный JSON — {count} доменов готовы к импорту.",
+  "domainJson.parseErr": "Не удалось распарсить: {detail}",
+  "domainJson.errNotArray": "На верхнем уровне должен быть JSON-массив.",
+  "domainJson.errEmpty": "Массив пуст.",
+  "domainJson.errParse": "Не удалось распарсить JSON.",
+  "domainJson.summary": "Импортировано: {inserted}, пропущено: {skipped}.",
+  "domainJson.rowError": "Строка {row}: {detail}",
   "domains.add": "Добавить домен",
   "domains.colName": "Название",
   "domains.colBaseUrl": "Базовый URL",
@@ -934,10 +953,16 @@ export const ru: Record<keyof typeof en, string> = {
   "domainMod.fieldAuthType": "Тип авторизации",
   "domainMod.authBearer": "Bearer-токен",
   "domainMod.authApiKey": "API-ключ в заголовке",
+  "domainMod.authBasic": "Логин + пароль (Basic auth)",
   "domainMod.fieldBearerToken": "Bearer-токен",
   "domainMod.bearerHintEdit":
     "Оставьте пустым, чтобы сохранить текущий токен.",
   "domainMod.bearerPlaceholder": "вставьте токен",
+  "domainMod.fieldBasicCreds": "Логин : пароль",
+  "domainMod.basicHint":
+    "Формат: login:password (одна строка, одно двоеточие). Отправляется как HTTP Basic auth.",
+  "domainMod.basicHintEdit":
+    "Оставьте пустым, чтобы сохранить текущие учётные данные.",
   "domainMod.fieldHeaderName": "Имя заголовка",
   "domainMod.fieldHeaderValue": "Значение заголовка",
   "domainMod.headerValueHintEdit":

@@ -1,8 +1,11 @@
 """Custom CMS client.
 
-Phase 1 supports two auth schemes:
+Supported auth schemes:
   - bearer:           Authorization: Bearer {credentials}
   - api_key_header:   credentials JSON {"header": "X-API-Key", "value": "..."}
+  - basic_auth:       Authorization: Basic base64(login:password)
+                      credentials stored as the plain "login:password" string,
+                      same wire format as WP Application Passwords.
 
 test_connection() v1: HEAD against base_url. Per-domain `test_endpoint_path`
 override is reserved for a future iteration.
@@ -13,6 +16,7 @@ ID and URL using the configured dot-paths.
 """
 from __future__ import annotations
 
+import base64
 import json
 import re
 import time
@@ -56,6 +60,11 @@ class CustomCmsClient(CmsClient):
             if not header or not value:
                 return {}
             return {header: value}
+        if self.auth_type == "basic_auth":
+            # credentials stored as "login:password" — same shape as WP App
+            # Password creds, so the encoding logic mirrors WordPressClient.
+            token = base64.b64encode(self.credentials.encode("utf-8")).decode("ascii")
+            return {"Authorization": f"Basic {token}"}
         return {}
 
     async def test_connection(self) -> TestResult:
@@ -115,10 +124,13 @@ class CustomCmsClient(CmsClient):
         body_template = cfg.get("body_template") or {}
 
         # Bake the placeholder substitution map. `language` is exposed as
-        # {{language}} so the template can route on it.
+        # both {{language}} and {{lang}} so templates can use whichever name
+        # matches the target API (some upstreams — like the mrba CRM — use
+        # the short `lang` key in their body).
         values = dict(fields)
-        if language is not None and "language" not in values:
-            values["language"] = language
+        if language is not None:
+            values.setdefault("language", language)
+            values.setdefault("lang", language)
 
         body = _substitute(body_template, values)
 

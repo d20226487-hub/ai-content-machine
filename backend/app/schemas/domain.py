@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.core.ssrf import UnsafeUrlError, validate_public_url
 
 CmsType = Literal["wordpress", "custom"]
-AuthType = Literal["wp_app_password", "bearer", "api_key_header"]
+AuthType = Literal["wp_app_password", "bearer", "api_key_header", "basic_auth"]
 MultilingualPlugin = Literal["none", "polylang", "wpml"]
 
 
@@ -65,6 +65,79 @@ def normalize_publish_config(raw: dict | None) -> dict | None:
             ]
         }
     return raw
+
+
+def default_wp_profiles() -> dict:
+    """Default ``publish_config`` for a freshly added WordPress site.
+
+    Seeds two standard profiles — Post and Page — so a user can publish
+    immediately after import without having to define a profile by hand.
+    Categories/tags are exposed as ``taxonomy_ids`` fields on the Post
+    profile; bulk-creating taxonomy terms themselves is not in scope.
+    Featured image is a ``media_url`` field: a numeric WP media ID is
+    used directly, a URL is downloaded and uploaded to WP first.
+
+    Users are free to delete, rename, or edit any of these from the
+    domain edit modal — the seed only runs on create when no
+    ``publish_config`` was supplied.
+    """
+    status_options = ["publish", "draft", "pending", "private"]
+    return {
+        "profiles": [
+            {
+                "name": "Post",
+                "post_type": "posts",
+                "fields": [
+                    {"key": "title", "label": "Title", "type": "text", "required": True},
+                    {"key": "content", "label": "Content", "type": "textarea", "required": True},
+                    {"key": "excerpt", "label": "Excerpt", "type": "textarea"},
+                    {"key": "slug", "label": "Slug", "type": "text"},
+                    {
+                        "key": "status",
+                        "label": "Status",
+                        "type": "select",
+                        "options": status_options,
+                        "required": True,
+                    },
+                    {"key": "categories", "label": "Categories", "type": "taxonomy_ids", "taxonomy": "categories"},
+                    {"key": "tags", "label": "Tags", "type": "taxonomy_ids", "taxonomy": "tags"},
+                    {"key": "featured_media", "label": "Featured image", "type": "media_url"},
+                ],
+            },
+            {
+                "name": "Page",
+                "post_type": "pages",
+                "fields": [
+                    {"key": "title", "label": "Title", "type": "text", "required": True},
+                    {"key": "content", "label": "Content", "type": "textarea", "required": True},
+                    {"key": "excerpt", "label": "Excerpt", "type": "textarea"},
+                    {"key": "slug", "label": "Slug", "type": "text"},
+                    {
+                        "key": "status",
+                        "label": "Status",
+                        "type": "select",
+                        "options": status_options,
+                        "required": True,
+                    },
+                    {"key": "featured_media", "label": "Featured image", "type": "media_url"},
+                ],
+            },
+        ]
+    }
+
+
+def _has_profiles(raw: dict | None) -> bool:
+    """True when ``raw`` already carries at least one profile (new or legacy shape)."""
+    if not raw:
+        return False
+    profiles = raw.get("profiles")
+    if isinstance(profiles, list) and profiles:
+        return True
+    # Legacy single-config shape counts too — normalize_publish_config will
+    # promote it into a single profile, so we don't want to clobber it.
+    if raw.get("post_type") or raw.get("fields"):
+        return True
+    return False
 
 
 class CustomConfig(BaseModel):

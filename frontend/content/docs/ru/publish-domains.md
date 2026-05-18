@@ -111,6 +111,53 @@
 
 Несколько похожих доменов удобно завести через CSV: кнопка **Import CSV** на странице доменов. Образец CSV скачивается тут же.
 
+**Ограничение CSV**: поддерживаются только плоские поля — `name, base_url, cms_type, auth_type, credentials, languages, multilingual_plugin`. Профили публикации (post types + поля) через CSV завести нельзя — формат не выражает вложенность. Для этого есть JSON-импорт ниже.
+
+## JSON-импорт доменов (с профилями)
+
+Кнопка **Import JSON** рядом с **Import CSV**. Открывается окно: вставьте JSON-массив объектов или загрузите `.json`-файл. Каждый элемент — та же структура, что в `POST /domains`: домен с полным вложенным `publish_config` (несколько профилей, у каждого — `post_type` + `fields[]`) и/или `custom_config`. Лимит 500 элементов за вызов.
+
+Краткая структура одного элемента:
+
+```json
+{
+  "name": "Site A",
+  "base_url": "https://site-a.example.com",
+  "cms_type": "wordpress",
+  "auth_type": "wp_app_password",
+  "credentials": "user:application_password",
+  "languages": ["en", "ru"],
+  "multilingual_plugin": "polylang",
+  "publish_config": {
+    "profiles": [
+      {
+        "name": "Article",
+        "post_type": "posts",
+        "fields": [
+          { "key": "title",   "label": "Title",   "type": "text",     "required": true },
+          { "key": "content", "label": "Content", "type": "textarea", "required": true },
+          { "key": "slug",    "label": "Slug",    "type": "text" }
+        ]
+      },
+      {
+        "name": "Page",
+        "post_type": "pages",
+        "fields": [
+          { "key": "title",   "label": "Title",   "type": "text",     "required": true },
+          { "key": "content", "label": "Content", "type": "textarea", "required": true }
+        ]
+      }
+    ]
+  }
+}
+```
+
+В окне есть кнопки **Скачать пример** и **Загрузить пример в редактор** — берите оттуда отправную точку и правьте под свои сайты. На каждое изменение текста снизу показывается превью разбора: «Похоже на корректный JSON — N доменов готовы к импорту». Кнопка Import активна только когда парсинг успешен.
+
+Поведение при ошибках — такое же, как у CSV: каждая «битая» строка попадает в `errors[]` с понятной причиной (validation, конфликт имени, не-WP с `wp_app_password` и т. п.), остальные обрабатываются дальше. По итогам — сводка `inserted / skipped` + список конкретных ошибок по номерам строк.
+
+Под капотом: `POST /domains/import-json`, та же ответная форма `CsvImportResult` ({inserted, skipped, errors[]}).
+
 ## Удаление домена (Корзина)
 
 Удаление домена теперь — **soft-delete**: домен переезжает в Корзину, а не пропадает безвозвратно.

@@ -1,7 +1,11 @@
 import { api, getToken } from "@/lib/api";
 
 export type CmsType = "wordpress" | "custom";
-export type AuthType = "wp_app_password" | "bearer" | "api_key_header";
+export type AuthType =
+  | "wp_app_password"
+  | "bearer"
+  | "api_key_header"
+  | "basic_auth";
 export type MultilingualPlugin = "none" | "polylang" | "wpml";
 
 export interface CustomConfig {
@@ -222,4 +226,16 @@ export async function importDomainsCsv(file: File): Promise<CsvImportResult> {
     throw new Error(text || `Import failed (${res.status})`);
   }
   return (await res.json()) as CsvImportResult;
+}
+
+/** Bulk-create domains from a JSON array. Same payload shape as POST /domains
+ *  per element. Unlike the CSV path this carries the full nested
+ *  `publish_config` (profiles + their fields[]) and `custom_config`. */
+export function importDomainsJson(
+  payloads: DomainCreatePayload[],
+): Promise<CsvImportResult> {
+  return api<CsvImportResult>("/domains/import-json", {
+    method: "POST",
+    body: payloads,
+  });
 }

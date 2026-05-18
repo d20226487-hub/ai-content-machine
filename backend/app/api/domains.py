@@ -33,6 +33,8 @@ from app.schemas.domain import (
     DomainUpdate,
     TestConnectionResult,
     TrashBulkIds,
+    _has_profiles,
+    default_wp_profiles,
     normalize_publish_config,
 )
 
@@ -330,6 +332,10 @@ async def create_domain(
 ) -> DomainRead:
     _validate_payload(payload.cms_type, payload.auth_type, payload.custom_config)
 
+    pc_dump = payload.publish_config.model_dump() if payload.publish_config else None
+    if payload.cms_type == "wordpress" and not _has_profiles(pc_dump):
+        pc_dump = default_wp_profiles()
+
     domain = Domain(
         name=payload.name,
         base_url=payload.base_url,
@@ -338,7 +344,7 @@ async def create_domain(
         languages=payload.languages,
         multilingual_plugin=payload.multilingual_plugin,
         custom_config=payload.custom_config.model_dump() if payload.custom_config else None,
-        publish_config=payload.publish_config.model_dump() if payload.publish_config else None,
+        publish_config=pc_dump,
         requests_per_minute=payload.requests_per_minute,
         max_concurrency=payload.max_concurrency,
         inter_request_delay_ms=payload.inter_request_delay_ms,
@@ -700,6 +706,9 @@ async def import_csv(
             languages=payload.languages,
             multilingual_plugin=payload.multilingual_plugin,
             custom_config=None,
+            publish_config=(
+                default_wp_profiles() if payload.cms_type == "wordpress" else None
+            ),
             created_by_id=actor.id,
         )
         if payload.credentials:
@@ -717,6 +726,123 @@ async def import_csv(
     return CsvImportResult(inserted=inserted, skipped=skipped, errors=errors)
 
 
+@router.post("/import-json", response_model=CsvImportResult)
+async def import_json(
+    payload: list[dict[str, Any]],
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> CsvImportResult:
+    """Bulk-create domains from a JSON array.
+
+    Same shape as the single-domain ``POST /domains`` endpoint, repeated
+    per element. Unlike the CSV importer this DOES carry the full nested
+    ``publish_config`` (profiles + their fields[]) and ``custom_config``,
+    so you can stand up a fleet of multi-profile sites in one call.
+
+    Per-row failures (validation, conflict) are collected into
+    ``errors[]`` so a single bad row doesn't abort the rest of the batch
+    — matches the CSV importer's semantics. The endpoint accepts
+    ``list[dict]`` (not ``list[DomainCreate]``) on purpose: Pydantic at
+    the request boundary would reject the entire batch on the first
+    invalid row. We construct + validate each ``DomainCreate`` inside
+    the loop instead, catching ``ValidationError`` to surface a per-row
+    message.
+
+    Response shape: ``CsvImportResult`` (same {inserted, skipped,
+    errors[]} as the CSV path).
+    """
+    if not isinstance(payload, list) or not payload:
+        raise HTTPException(
+            status_code=400,
+            detail="Body must be a non-empty JSON array of domain objects.",
+        )
+    if len(payload) > 500:
+        raise HTTPException(
+            status_code=400,
+            detail="Import is capped at 500 domains per call. Split into chunks.",
+        )
+
+    from pydantic import ValidationError
+
+    inserted = 0
+    skipped = 0
+    errors: list[dict[str, Any]] = []
+    # `actor` is bound to the session. After the first per-row commit,
+    # its attributes expire and the next access fires sync I/O under the
+    # async session → MissingGreenlet. Cache the id locally so the loop
+    # only reads a Python int from here on.
+    actor_id = actor.id
+
+    for idx, raw in enumerate(payload, start=1):
+        if not isinstance(raw, dict):
+            errors.append({"row": idx, "detail": "Row must be a JSON object."})
+            skipped += 1
+            continue
+        try:
+            item = DomainCreate.model_validate(raw)
+        except ValidationError as e:
+            # Flatten the first-line of each Pydantic error so users see
+            # something actionable instead of the nested dump.
+            messages = [
+                f"{'.'.join(str(x) for x in err.get('loc', ()) ) or '?'}: {err.get('msg', '?')}"
+                for err in e.errors()
+            ]
+            errors.append({"row": idx, "detail": "; ".join(messages)})
+            skipped += 1
+            continue
+        try:
+            _validate_payload(item.cms_type, item.auth_type, item.custom_config)
+        except HTTPException as e:
+            errors.append({"row": idx, "detail": str(e.detail)})
+            skipped += 1
+            continue
+
+        pc_dump = item.publish_config.model_dump() if item.publish_config else None
+        if item.cms_type == "wordpress" and not _has_profiles(pc_dump):
+            pc_dump = default_wp_profiles()
+
+        domain = Domain(
+            name=item.name,
+            base_url=item.base_url,
+            cms_type=item.cms_type,
+            auth_type=item.auth_type,
+            languages=item.languages,
+            multilingual_plugin=item.multilingual_plugin,
+            custom_config=item.custom_config.model_dump() if item.custom_config else None,
+            publish_config=pc_dump,
+            requests_per_minute=item.requests_per_minute,
+            max_concurrency=item.max_concurrency,
+            inter_request_delay_ms=item.inter_request_delay_ms,
+            retry_max_attempts=item.retry_max_attempts,
+            backoff_base_ms=item.backoff_base_ms,
+            backoff_jitter_ms=item.backoff_jitter_ms,
+            respect_retry_after=item.respect_retry_after,
+            created_by_id=actor_id,
+        )
+        if item.credentials:
+            domain.credentials_encrypted = encrypt(item.credentials)
+
+        db.add(domain)
+        try:
+            await db.commit()
+        except IntegrityError as e:
+            await db.rollback()
+            # Surface which uniqueness was violated, same as POST /domains.
+            cause_text = str(e.orig) if getattr(e, "orig", None) else str(e)
+            if "uq_domains_name_active" in cause_text or "uq_domains_name" in cause_text:
+                detail = f"name {item.name!r} already in use by an active domain"
+            elif "uq_domains_base_url_active" in cause_text or "uq_domains_base_url" in cause_text:
+                detail = f"base_url {item.base_url!r} already in use by an active domain"
+            else:
+                detail = "uniqueness conflict"
+            errors.append({"row": idx, "detail": detail})
+            skipped += 1
+            continue
+        inserted += 1
+
+    return CsvImportResult(inserted=inserted, skipped=skipped, errors=errors)
+
+
 def _validate_payload(
     cms_type: str, auth_type: str, custom_config: object
 ) -> None:
@@ -725,10 +851,13 @@ def _validate_payload(
             status_code=400,
             detail="WordPress domains must use auth_type='wp_app_password'",
         )
-    if cms_type == "custom" and auth_type not in ("bearer", "api_key_header"):
+    if cms_type == "custom" and auth_type not in ("bearer", "api_key_header", "basic_auth"):
         raise HTTPException(
             status_code=400,
-            detail="Custom domains must use auth_type='bearer' or 'api_key_header'",
+            detail=(
+                "Custom domains must use auth_type='bearer', 'api_key_header', "
+                "or 'basic_auth'"
+            ),
         )
     if cms_type == "custom" and custom_config is None:
         raise HTTPException(

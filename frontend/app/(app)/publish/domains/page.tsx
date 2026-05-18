@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { DomainCsvImportModal } from "@/components/DomainCsvImportModal";
+import { DomainJsonImportModal } from "@/components/DomainJsonImportModal";
 import { DomainModal } from "@/components/DomainModal";
 import { ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -22,7 +23,8 @@ type ModalState =
   | { kind: "closed" }
   | { kind: "create" }
   | { kind: "edit"; domain: Domain }
-  | { kind: "import" };
+  | { kind: "import" }
+  | { kind: "importJson" };
 
 export default function DomainsPage() {
   const router = useRouter();
@@ -147,6 +149,13 @@ export default function DomainsPage() {
             className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800"
           >
             {t("domains.import")}
+          </button>
+          <button
+            onClick={() => setModal({ kind: "importJson" })}
+            title={t("domains.importJsonHint")}
+            className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800"
+          >
+            {t("domains.importJson")}
           </button>
           <button
             onClick={() => setModal({ kind: "create" })}
@@ -297,6 +306,12 @@ export default function DomainsPage() {
       )}
       {modal.kind === "import" && (
         <DomainCsvImportModal
+          onClose={() => setModal({ kind: "closed" })}
+          onImported={() => void load()}
+        />
+      )}
+      {modal.kind === "importJson" && (
+        <DomainJsonImportModal
           onClose={() => setModal({ kind: "closed" })}
           onImported={() => void load()}
         />
