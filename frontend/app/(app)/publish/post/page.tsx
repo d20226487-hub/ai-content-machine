@@ -142,6 +142,18 @@ export default function PostPage() {
                   >
                     {j.status}
                   </span>
+                  {/* Upstream HTTP code (migration 0026). Same render
+                      pattern as bulk run detail — small neutral chip
+                      next to the badge; the badge owns the color
+                      signal so we don't double-encode. */}
+                  {j.status_code != null && (
+                    <span
+                      className="ml-1 inline-flex items-center rounded bg-neutral-100 px-1 py-0.5 font-mono text-[10px] font-medium text-neutral-600 ring-1 ring-inset ring-neutral-300 dark:bg-neutral-800 dark:text-neutral-400 dark:ring-neutral-700"
+                      title={t("pubHistory.httpCodeTip")}
+                    >
+                      {j.status_code}
+                    </span>
+                  )}
                   {j.warnings && j.warnings.length > 0 && (
                     <span
                       title={j.warnings.join("\n")}

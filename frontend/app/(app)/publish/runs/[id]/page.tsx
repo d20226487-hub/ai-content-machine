@@ -454,6 +454,20 @@ export default function RunDetailPage() {
                   >
                     {j.status}
                   </span>
+                  {/* Upstream HTTP code (migration 0026). Rendered as a
+                      small neutral chip next to the status badge so the
+                      color signal stays single-sourced from the status
+                      itself. Hidden for rows where the code is null
+                      (legacy rows pre-migration, or queued/posting
+                      rows that haven't hit the wire yet). */}
+                  {j.status_code != null && (
+                    <span
+                      className="ml-1 inline-flex items-center rounded bg-neutral-100 px-1 py-0.5 font-mono text-[10px] font-medium text-neutral-600 ring-1 ring-inset ring-neutral-300 dark:bg-neutral-800 dark:text-neutral-400 dark:ring-neutral-700"
+                      title={t("bulkRun.httpCodeTip")}
+                    >
+                      {j.status_code}
+                    </span>
+                  )}
                   {j.warnings && j.warnings.length > 0 && (
                     <span className="ml-1 inline-flex items-center rounded bg-amber-50 px-1 py-0.5 text-[10px] font-medium ring-1 ring-amber-600/10 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-400/30">
                       ⚠ {j.warnings.length}

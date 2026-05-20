@@ -15,6 +15,15 @@ export interface PublishJob {
   language: string | null;
   cms_post_id: string | null;
   cms_post_url: string | null;
+  /**
+   * Upstream HTTP status code (100–599). NULL for rows that landed
+   * before backend migration 0026 (no way to backfill), or for rows
+   * where the request never reached an HTTP layer (e.g. an SSRF
+   * pre-flight rejection). Surfaces in the run-detail table next to
+   * the status badge so a "posted 201" vs "failed 403" is visible at a
+   * glance without parsing the error string.
+   */
+  status_code: number | null;
   error: string | null;
   warnings: string[] | null;
   profile_name: string | null;

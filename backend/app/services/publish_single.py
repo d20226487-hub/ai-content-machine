@@ -135,6 +135,9 @@ async def process_single_job(db: AsyncSession, *, job_id: int) -> None:
 
     job.payload_sent = result.payload_sent
     job.response_json = result.response_json
+    # Migration 0026: persist the upstream HTTP code so the UI can show
+    # "HTTP 201" next to "posted" without parsing the error string.
+    job.status_code = result.status_code
     job.cms_post_id = result.cms_post_id
     job.cms_post_url = result.cms_post_url
     job.warnings = list(result.warnings) if result.warnings else None

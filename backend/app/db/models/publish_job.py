@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, SmallInteger, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -47,6 +47,13 @@ class PublishJob(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     warnings: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     profile_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Upstream HTTP status code as returned by the CMS. Nullable: rows
+    # that landed before migration 0026 have NULL here and we don't
+    # backfill (the code is only present in error text for failures, and
+    # only inferable as 2xx for posted rows). The PublishJobRead schema
+    # surfaces this directly so the run-detail UI can show "HTTP 201"
+    # next to "posted" without parsing the error string.
+    status_code: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
 
     created_by_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True

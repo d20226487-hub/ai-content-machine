@@ -650,6 +650,11 @@ async def publish_one_row(
 
     job.payload_sent = result.payload_sent
     job.response_json = result.response_json
+    # Migration 0026: persist the exact upstream HTTP code. CMS clients
+    # already capture this on PublishResult; previously it was thrown
+    # away after the function returned, leaving only the inferable "2xx
+    # because we landed in the success branch" for posted rows.
+    job.status_code = result.status_code
     job.cms_post_id = result.cms_post_id
     job.cms_post_url = result.cms_post_url
     job.warnings = list(result.warnings) if result.warnings else None

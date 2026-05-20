@@ -223,6 +223,10 @@ class PublishJobRead(BaseModel):
     language: str | None
     cms_post_id: str | None
     cms_post_url: str | None
+    # Upstream HTTP status code (100–599). None for rows that landed
+    # before migration 0026, or for rows where the request never reached
+    # an HTTP layer (e.g. SSRF guard rejecting the URL pre-flight).
+    status_code: int | None = None
     error: str | None
     warnings: list[str] | None = None
     profile_name: str | None = None

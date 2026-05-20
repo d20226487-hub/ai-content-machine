@@ -267,6 +267,10 @@ def _to_read(job: PublishJob, domain_name: str | None) -> PublishJobRead:
         language=job.language,
         cms_post_id=job.cms_post_id,
         cms_post_url=job.cms_post_url,
+        # Migration 0026: upstream HTTP code. NULL for rows that predate
+        # the migration; the UI treats null as "unknown" and falls back to
+        # inferring from status / error text.
+        status_code=job.status_code,
         error=job.error,
         warnings=list(job.warnings) if job.warnings else None,
         profile_name=job.profile_name,
