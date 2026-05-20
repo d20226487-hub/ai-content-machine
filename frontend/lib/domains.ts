@@ -68,6 +68,8 @@ export interface Domain {
   backoff_base_ms: number | null;
   backoff_jitter_ms: number | null;
   respect_retry_after: boolean | null;
+  /** Drive-style folder placement (migration 0027). Null = implicit root. */
+  folder_id: number | null;
   created_by_id: number | null;
   created_at: string;
   updated_at: string;
@@ -92,6 +94,8 @@ export interface DomainCreatePayload {
   backoff_base_ms?: number | null;
   backoff_jitter_ms?: number | null;
   respect_retry_after?: boolean | null;
+  /** Folder placement. Omit to leave unchanged; null = implicit root. */
+  folder_id?: number | null;
 }
 
 export interface DomainUpdatePayload extends Partial<DomainCreatePayload> {}
@@ -109,8 +113,22 @@ export interface CsvImportResult {
   errors: { row: number; detail: string }[];
 }
 
-export function listDomains() {
-  return api<Domain[]>("/domains");
+/**
+ * Folder-scoping for the list endpoint (migration 0027). Send a folder
+ * id to list domains in that folder, the literal "root" to list
+ * domains with no folder (implicit root), or omit to ignore folder
+ * placement (status quo, every active domain).
+ */
+export type FolderScope = number | "root" | "all";
+
+export function listDomains(scope: FolderScope = "all") {
+  const qs =
+    scope === "all"
+      ? ""
+      : scope === "root"
+      ? "?folder_id=root"
+      : `?folder_id=${scope}`;
+  return api<Domain[]>(`/domains${qs}`);
 }
 
 export function getDomain(id: number) {
@@ -284,5 +302,53 @@ export function importDomainsJson(
   return api<CsvImportResult>("/domains/import-json", {
     method: "POST",
     body: payloads,
+  });
+}
+
+// ---- Folder tree (migration 0027) -----------------------------------------
+
+export interface DomainFolder {
+  id: number;
+  name: string;
+  parent_id: number | null;
+  created_by_id: number | null;
+  created_at: string;
+  updated_at: string;
+  /** Populated only when listFolders is called with {with_counts: true}. */
+  domain_count: number | null;
+  /** Populated only when listFolders is called with {with_counts: true}. */
+  subfolder_count: number | null;
+}
+
+export function listDomainFolders(opts: { with_counts?: boolean } = {}) {
+  const qs = opts.with_counts ? "?with_counts=true" : "";
+  return api<DomainFolder[]>(`/domain-folders${qs}`);
+}
+
+export function createDomainFolder(payload: { name: string; parent_id?: number | null }) {
+  return api<DomainFolder>("/domain-folders", { method: "POST", body: payload });
+}
+
+export function updateDomainFolder(
+  id: number,
+  payload: { name?: string; parent_id?: number | null },
+) {
+  return api<DomainFolder>(`/domain-folders/${id}`, {
+    method: "PATCH",
+    body: payload,
+  });
+}
+
+export function deleteDomainFolder(id: number) {
+  return api<void>(`/domain-folders/${id}`, { method: "DELETE" });
+}
+
+export function bulkMoveDomains(payload: {
+  domain_ids: number[];
+  folder_id: number | null;
+}) {
+  return api<{ moved: number }>("/domains/bulk-move", {
+    method: "POST",
+    body: payload,
   });
 }

@@ -868,6 +868,34 @@ export const ru: Record<keyof typeof en, string> = {
   "domains.title": "Домены",
   "domains.subtitle":
     "Подключённые сайты, на которые можно публиковать.",
+  "domains.selectedCount": "Выбрано: {count}",
+  "domains.selectRow": "Выбрать {name}",
+  "domains.moveToFolder": "В папку…",
+
+  // folder tree on /publish/domains (migration 0027 redesign)
+  "domainFolders.heading": "Папки",
+  "domainFolders.newTopLevel": "Новая папка верхнего уровня",
+  "domainFolders.allDomains": "Все домены",
+  "domainFolders.root": "Корень (без папки)",
+  "domainFolders.emptyHint": "Папок пока нет — нажмите + для создания.",
+  "domainFolders.namePrompt": "Название папки:",
+  "domainFolders.renamePrompt": "Новое название папки:",
+  "domainFolders.confirmDelete":
+    "Удалить папку {name}? Удалить можно только пустую папку.",
+
+  // move-to-folder modal
+  "moveToFolder.title": "Переместить домены ({count}) в папку",
+  "moveToFolder.subtitle":
+    "Выберите назначение. «Корень» — убрать из всех папок.",
+  "moveToFolder.root": "Корень (без папки)",
+  "moveToFolder.noFolders":
+    "Папок пока нет. Сначала создайте папку в боковой панели.",
+  "moveToFolder.confirm": "Переместить",
+
+  "common.clearSelection": "Сбросить выбор",
+  "common.selectAll": "Выбрать все",
+  "common.saveFailed": "Не удалось сохранить",
+
   "domains.import": "Импорт CSV",
   "domains.importJson": "Импорт JSON",
   "domains.importJsonHint":

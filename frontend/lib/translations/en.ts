@@ -824,6 +824,33 @@ export const en = {
   // domains page
   "domains.title": "Domains",
   "domains.subtitle": "Connected sites you can publish to.",
+  "domains.selectedCount": "{count} selected",
+  "domains.selectRow": "Select {name}",
+  "domains.moveToFolder": "Move to folder…",
+
+  // folder tree on /publish/domains (migration 0027 redesign)
+  "domainFolders.heading": "Folders",
+  "domainFolders.newTopLevel": "New top-level folder",
+  "domainFolders.allDomains": "All domains",
+  "domainFolders.root": "Root (no folder)",
+  "domainFolders.emptyHint": "No folders yet — use + to create one.",
+  "domainFolders.namePrompt": "Folder name:",
+  "domainFolders.renamePrompt": "Rename folder:",
+  "domainFolders.confirmDelete":
+    "Delete folder {name}? Only empty folders can be deleted.",
+
+  // move-to-folder modal
+  "moveToFolder.title": "Move {count} domain(s) to folder",
+  "moveToFolder.subtitle":
+    "Pick a destination. \"Root\" moves them out of any folder.",
+  "moveToFolder.root": "Root (no folder)",
+  "moveToFolder.noFolders": "No folders yet. Create one from the sidebar first.",
+  "moveToFolder.confirm": "Move",
+
+  "common.clearSelection": "Clear selection",
+  "common.selectAll": "Select all",
+  "common.saveFailed": "Save failed",
+
   "domains.import": "Import CSV",
   "domains.importJson": "Import JSON",
   "domains.importJsonHint":
