@@ -1,0 +1,6 @@
+domain,language,slug,title,content,seo_title,seo_description,post_id,post_url
+crm.example.com,en,welcome-to-our-blog,Welcome to our blog,"<p>Hello world! This is our first post.</p>",Welcome to our blog — Example,A quick hello from our new site.,,
+crm.example.com,en,10-tips-better-mornings,10 tips for better mornings,"<p>Morning routines matter. Here are ten habits.</p>",10 morning habits to start the day right,Ten habits that make mornings easier.,,
+news.example.org,en,quarterly-results,Quarterly results announced,"<p>The company reported strong growth this quarter.</p>",Q-results announced — strong growth,Strong growth across all regions in the latest quarter.,,
+shop.example.de,de,willkommen,Willkommen in unserem Shop,"<p>Schön, dass Sie da sind.</p>",Willkommen — Beispiel-Shop,Stöbern Sie durch unsere kuratierte Auswahl.,,
+shop.example.de,en,welcome,Welcome to our shop,"<p>Glad you are here. Browse our selection.</p>",Welcome — Example Shop,Browse our curated selection of products.,,

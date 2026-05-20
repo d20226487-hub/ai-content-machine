@@ -23,3 +23,12 @@ pytest-asyncio==0.24.0
 # compose runs celery directly; the package is harmless extra bytes
 # there (~100 KB) but avoids needing a separate dev requirements file.
 watchdog==6.0.0
+# Vertex AI service-account auth. Pulled in only by `vertex_ai.py` and
+# imported lazily inside `_mint_vertex_access_token` so trimming it out
+# doesn't break other providers — but we want it preinstalled so SA mode
+# works without a separate rebuild.
+google-auth==2.36.0
+# Required by google-auth's `transport.requests.Request` — the only path
+# google-auth ships for token refresh in 2.36. We don't use `requests`
+# anywhere else (Vertex itself is called via httpx). ~500 KB.
+requests==2.32.3

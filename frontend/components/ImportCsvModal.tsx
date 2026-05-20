@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useState } from "react";
+import { ChangeEvent, FormEvent, useRef, useState } from "react";
 
 import { ErrorPanel } from "@/components/ErrorPanel";
 import { Modal } from "@/components/Modal";
@@ -13,6 +13,13 @@ interface Props {
   onImported: (table: BulkTable) => void;
 }
 
+const SAMPLES: { file: string; labelKey: "csvImport.sampleWpSingle" | "csvImport.sampleWpMulti" | "csvImport.sampleCustomSingle" | "csvImport.sampleCustomMulti" }[] = [
+  { file: "wordpress-single-site.csv", labelKey: "csvImport.sampleWpSingle" },
+  { file: "wordpress-multi-site.csv", labelKey: "csvImport.sampleWpMulti" },
+  { file: "custom-cms-single-site.csv", labelKey: "csvImport.sampleCustomSingle" },
+  { file: "custom-cms-multi-site.csv", labelKey: "csvImport.sampleCustomMulti" },
+];
+
 export function ImportCsvModal({ onClose, onImported }: Props) {
   const { t } = useT();
   const [name, setName] = useState("");
@@ -22,6 +29,8 @@ export function ImportCsvModal({ onClose, onImported }: Props) {
   const [filename, setFilename] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [sampleOpen, setSampleOpen] = useState(false);
+  const sampleMenuRef = useRef<HTMLDivElement | null>(null);
 
   async function onPick(e: ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
@@ -81,6 +90,42 @@ export function ImportCsvModal({ onClose, onImported }: Props) {
             className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-700 dark:bg-neutral-900"
           />
         </label>
+
+        <div className="rounded-md border border-dashed border-neutral-300 bg-neutral-50 px-3 py-2 text-xs dark:border-neutral-700 dark:bg-neutral-900/40">
+          <div className="flex items-start justify-between gap-3">
+            <p className="flex-1 text-neutral-600 dark:text-neutral-400">
+              {t("csvImport.sampleHint")}
+            </p>
+            <div ref={sampleMenuRef} className="relative shrink-0">
+              <button
+                type="button"
+                onClick={() => setSampleOpen((v) => !v)}
+                className="inline-flex items-center gap-1 rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800"
+              >
+                {t("csvImport.downloadSample")}
+                <span aria-hidden>▾</span>
+              </button>
+              {sampleOpen && (
+                <div
+                  className="absolute right-0 z-10 mt-1 w-56 overflow-hidden rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-900"
+                  onMouseLeave={() => setSampleOpen(false)}
+                >
+                  {SAMPLES.map((s) => (
+                    <a
+                      key={s.file}
+                      href={`/samples/${s.file}`}
+                      download
+                      onClick={() => setSampleOpen(false)}
+                      className="block px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                    >
+                      {t(s.labelKey)}
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
 
         <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
           {t("csvImport.csvFile")}

@@ -235,6 +235,21 @@ export const ru: Record<keyof typeof en, string> = {
   "settings.testHintSaved": "Проверить сохранённый ключ",
   "settings.testHintNeedKey": "Сначала введите или сохраните ключ",
   "settings.clearKey": "Очистить ключ",
+  "settings.vertexAuthHeader": "Авторизация через сервисный аккаунт (рекомендуется)",
+  "settings.vertexAuthHint":
+    "Для продакшен-нагрузок вставьте JSON сервисного аккаунта Google Cloud и укажите project + регион. Оставьте поля пустыми, чтобы использовать Vertex Express через API-ключ выше (только пробные квоты).",
+  "settings.vertexProjectId": "ID проекта GCP",
+  "settings.vertexLocation": "Регион",
+  "settings.vertexSaJson": "JSON сервисного аккаунта",
+  "settings.vertexSaJsonPlaceholder": "Вставьте сюда полный JSON сервисного аккаунта…",
+  "settings.vertexSaJsonStored": "Сохранён — вставьте новый JSON, чтобы заменить.",
+  "settings.vertexSaJsonHelperEmpty":
+    "Перед сохранением шифруется. Сервисному аккаунту нужна роль Vertex AI User в проекте.",
+  "settings.vertexSaJsonHelperStored":
+    "JSON сервисного аккаунта уже сохранён. Замените его, вставив новый, или используйте Очистить.",
+  "settings.vertexClear": "Очистить",
+  "settings.vertexConfirmClear":
+    "Очистить сохранённые project, регион и JSON сервисного аккаунта Vertex?",
   "settings.confirmClearKey": "Очистить API-ключ для {provider}?",
   "settings.clearKeyFailed": "Не удалось очистить ключ",
   "settings.testRequestFailed": "Не удалось выполнить проверочный запрос",
@@ -787,6 +802,13 @@ export const ru: Record<keyof typeof en, string> = {
   "csvImport.delimiterPipe": "| (вертикальная черта)",
   "csvImport.firstRowHeader": "Первая строка — заголовок",
   "csvImport.previewLabel": "Предпросмотр",
+  "csvImport.downloadSample": "Скачать пример",
+  "csvImport.sampleHint":
+    "Не знаете, какие столбцы использовать? Скачайте пример CSV под ваш сценарий публикации. Для Custom CMS столбцы должны соответствовать плейсхолдерам body_template вашего домена.",
+  "csvImport.sampleWpSingle": "WordPress — один сайт",
+  "csvImport.sampleWpMulti": "WordPress — несколько сайтов",
+  "csvImport.sampleCustomSingle": "Custom CMS — один сайт",
+  "csvImport.sampleCustomMulti": "Custom CMS — несколько сайтов",
 
   // ---------- create / single ----------
   "create.title": "Создать",

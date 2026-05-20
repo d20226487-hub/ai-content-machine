@@ -22,6 +22,14 @@ interface FormState {
   respect_retry_after: boolean;
 }
 
+// Vertex AI–only state (kept separate from FormState so the rest of the
+// settings card stays generic across providers).
+interface VertexFormState {
+  project_id: string;
+  location: string;
+  service_account_json: string; // textarea input; never round-trips from server
+}
+
 function toFormState(p: Provider): FormState {
   return {
     enabled: p.enabled,
@@ -49,6 +57,12 @@ export function ProviderCard({
   const { t } = useT();
   const [form, setForm] = useState<FormState>(toFormState(provider));
   const [apiKeyInput, setApiKeyInput] = useState("");
+  const isVertex = provider.code === "vertex";
+  const [vertex, setVertex] = useState<VertexFormState>({
+    project_id: provider.extra_config_public?.project_id ?? "",
+    location: provider.extra_config_public?.location ?? "",
+    service_account_json: "",
+  });
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,13 +100,51 @@ export function ProviderCard({
       // Empty input = "no change". Use the dedicated Clear button to remove.
       if (apiKeyInput.trim()) patch.api_key = apiKeyInput.trim();
 
+      // Vertex AI extras: only send the keys that actually changed. The
+      // textarea for service_account_json starts empty on every render and
+      // only sends when the user typed a new value — same convention as
+      // apiKeyInput, so re-saving the form doesn't wipe a stored SA JSON.
+      if (isVertex) {
+        const extraPatch: Record<string, string> = {};
+        const pubProject = provider.extra_config_public?.project_id ?? "";
+        const pubLocation = provider.extra_config_public?.location ?? "";
+        if (vertex.project_id !== pubProject) extraPatch.project_id = vertex.project_id.trim();
+        if (vertex.location !== pubLocation) extraPatch.location = vertex.location.trim();
+        if (vertex.service_account_json.trim()) {
+          extraPatch.service_account_json = vertex.service_account_json.trim();
+        }
+        if (Object.keys(extraPatch).length > 0) patch.extra_config = extraPatch;
+      }
+
       const next = await updateProvider(provider.code, patch);
       onUpdated(next);
       setForm(toFormState(next));
       setApiKeyInput("");
+      if (isVertex) {
+        setVertex({
+          project_id: next.extra_config_public?.project_id ?? "",
+          location: next.extra_config_public?.location ?? "",
+          service_account_json: "",
+        });
+      }
       setSavedAt(Date.now());
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t("settings.saveFailed"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onClearVertexExtras() {
+    if (!confirm(t("settings.vertexConfirmClear"))) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const next = await updateProvider(provider.code, { extra_config: {} });
+      onUpdated(next);
+      setVertex({ project_id: "", location: "", service_account_json: "" });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t("settings.clearKeyFailed"));
     } finally {
       setSaving(false);
     }
@@ -245,6 +297,76 @@ export function ProviderCard({
           </div>
         )}
       </div>
+
+      {/* Vertex-specific extras: project_id + location + SA JSON */}
+      {isVertex && (
+        <div className="mt-5 rounded-md border border-neutral-200 bg-neutral-50 p-4 dark:border-neutral-800 dark:bg-neutral-900/40">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+                {t("settings.vertexAuthHeader")}
+              </h3>
+              <p className="mt-1 text-xs text-neutral-600 dark:text-neutral-400">
+                {t("settings.vertexAuthHint")}
+              </p>
+            </div>
+            {provider.has_extra_config && (
+              <button
+                type="button"
+                onClick={onClearVertexExtras}
+                className="shrink-0 text-xs font-medium text-red-600 hover:underline dark:text-red-400"
+              >
+                {t("settings.vertexClear")}
+              </button>
+            )}
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+              {t("settings.vertexProjectId")}
+              <input
+                type="text"
+                value={vertex.project_id}
+                onChange={(e) => setVertex((v) => ({ ...v, project_id: e.target.value }))}
+                placeholder="my-gcp-project-123"
+                className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-700 dark:bg-neutral-900"
+              />
+            </label>
+            <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+              {t("settings.vertexLocation")}
+              <input
+                type="text"
+                value={vertex.location}
+                onChange={(e) => setVertex((v) => ({ ...v, location: e.target.value }))}
+                placeholder="us-central1"
+                className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-700 dark:bg-neutral-900"
+              />
+            </label>
+          </div>
+          <label className="mt-3 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+            {t("settings.vertexSaJson")}
+            <textarea
+              rows={5}
+              value={vertex.service_account_json}
+              onChange={(e) =>
+                setVertex((v) => ({ ...v, service_account_json: e.target.value }))
+              }
+              placeholder={
+                provider.has_extra_config
+                  ? t("settings.vertexSaJsonStored")
+                  : t("settings.vertexSaJsonPlaceholder")
+              }
+              autoComplete="off"
+              spellCheck={false}
+              className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 font-mono text-xs focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-700 dark:bg-neutral-900"
+            />
+          </label>
+          <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+            {provider.has_extra_config
+              ? t("settings.vertexSaJsonHelperStored")
+              : t("settings.vertexSaJsonHelperEmpty")}
+          </p>
+        </div>
+      )}
 
       {/* Models */}
       <div className="mt-5 grid gap-4 sm:grid-cols-2">

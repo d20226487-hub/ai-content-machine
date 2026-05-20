@@ -58,9 +58,19 @@ class ProviderError(RuntimeError):
 class BaseProvider(ABC):
     code: str  # 'ai_studio' | 'vertex' | ...
 
-    def __init__(self, api_key: str, *, default_model: str | None = None):
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        default_model: str | None = None,
+        extra_config: dict | None = None,
+    ):
         self.api_key = api_key
         self.default_model = default_model
+        # Decrypted structured creds for providers that need more than a
+        # single API key. ai_studio / openrouter / github_models pass None.
+        # Vertex AI reads service_account_json / project_id / location here.
+        self.extra_config = extra_config or {}
 
     @abstractmethod
     async def generate(

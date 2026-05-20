@@ -15,6 +15,7 @@ class Provider(Base, TimestampMixin):
 
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extra_config_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     default_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     prompt_creation_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
@@ -35,3 +36,7 @@ class Provider(Base, TimestampMixin):
     @property
     def has_api_key(self) -> bool:
         return bool(self.api_key_encrypted)
+
+    @property
+    def has_extra_config(self) -> bool:
+        return bool(self.extra_config_encrypted)

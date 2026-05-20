@@ -1,25 +1,24 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Modal } from "@/components/Modal";
+import { CustomCmsForm } from "@/components/publishToDomain/CustomCmsForm";
+import { ResultPanel } from "@/components/publishToDomain/ResultPanel";
+import { TargetPicker } from "@/components/publishToDomain/TargetPicker";
+import { WordPressForm } from "@/components/publishToDomain/WordPressForm";
+import { collectPlaceholders } from "@/components/publishToDomain/placeholders";
 import { ApiError } from "@/lib/api";
 import { useT } from "@/lib/i18n-context";
 import {
   DEFAULT_WP_FIELDS,
-  listDomains,
+  getDomain,
+  listDomainsPicker,
+  type CmsType,
   type Domain,
+  type DomainPickerItem,
   type PublishProfile,
-  type WpField,
 } from "@/lib/domains";
-
-function profilesOf(d: Domain): PublishProfile[] {
-  const saved = d.publish_config?.profiles;
-  if (saved && saved.length > 0) return saved;
-  // Domain has no profiles configured — fall back to a single Default profile
-  // with the standard WP field set so legacy domains still work.
-  return [{ name: "Default", post_type: "posts", fields: DEFAULT_WP_FIELDS }];
-}
 import { getPublishJob, publishSingle, type PublishJobDetail } from "@/lib/publish";
 
 interface Props {
@@ -30,6 +29,32 @@ interface Props {
   onClose: () => void;
 }
 
+function profilesOf(d: Domain): PublishProfile[] {
+  const saved = d.publish_config?.profiles;
+  if (saved && saved.length > 0) return saved;
+  // Domain has no profiles configured — fall back to a single Default
+  // profile with the standard WP field set so legacy domains still work.
+  return [{ name: "Default", post_type: "posts", fields: DEFAULT_WP_FIELDS }];
+}
+
+/**
+ * "Publish to a single domain" modal — surfaced from the Single (Create)
+ * mode after generating content.
+ *
+ * Phase A symmetry with BulkPublishModal:
+ *   - CMS-type segmented control at the top so the domain picker stays
+ *     filtered server-side. Default seeded from the first credentialled
+ *     domain on load.
+ *   - DomainCombobox replaces the unfiltered <select> — the modal no
+ *     longer loads every site on mount, so a 5k-site fleet doesn't pay
+ *     the multi-MB payload tax just to publish one post.
+ *   - Heavy `Domain` record fetched on demand via `getDomain(id)` only
+ *     after a pick lands; the lite picker rows are enough to populate
+ *     the input label.
+ *
+ * State stays here (orchestrator); rendering lives in
+ * `components/publishToDomain/*`.
+ */
 export function PublishToDomainModal({
   initialTitle,
   initialContent,
@@ -38,36 +63,101 @@ export function PublishToDomainModal({
   onClose,
 }: Props) {
   const { t } = useT();
-  const [domains, setDomains] = useState<Domain[] | null>(null);
+
+  // CMS-type segmented control — drives both the form panels rendered
+  // below AND the combobox's server-side filter.
+  const [cmsType, setCmsType] = useState<CmsType>("wordpress");
+
+  // Picker state. domainId is the source of truth; selectedLabel keeps
+  // the combobox input populated while the heavy Domain fetch is in
+  // flight after a pick (sub-50ms locally but a real round-trip in prod).
+  const [domainId, setDomainId] = useState<number | null>(null);
+  const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Domain | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [domainId, setDomainId] = useState<number | null>(null);
+  // Publish-form state.
   const [profileName, setProfileName] = useState<string | null>(null);
   const [language, setLanguage] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
 
+  // Publish flow state.
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PublishJobDetail | null>(null);
 
+  // Discovery on mount: seed the CMS-type segmented control to whatever
+  // the first credentialled domain happens to be (picker is ordered
+  // credentialled-first). Avoids the papercut of an all-Custom fleet
+  // landing on WP-by-default with an empty combobox.
   useEffect(() => {
-    listDomains()
-      .then((list) => {
-        setDomains(list);
-        // Pre-select first domain that has credentials.
-        const first = list.find((d) => d.has_credentials) ?? list[0];
-        if (first) setDomainId(first.id);
+    listDomainsPicker({ page_size: 1 })
+      .then((r) => {
+        if (r.items.length > 0) {
+          setCmsType(r.items[0].cms_type);
+        }
       })
       .catch((err) =>
-        setLoadError(err instanceof ApiError ? err.message : t("pubMod.failedLoadDomains")),
+        setLoadError(
+          err instanceof ApiError ? err.message : t("pubMod.failedLoadDomains"),
+        ),
       );
   }, [t]);
 
-  const selected = useMemo(
-    () => (domainId != null ? domains?.find((d) => d.id === domainId) ?? null : null),
-    [domainId, domains],
+  // First-page-of-results callback: auto-pick the first credentialled
+  // domain when the parent currently has nothing selected. Fires after
+  // each CMS-type flip too (the combobox refetches with the new filter).
+  const onPickerResults = useCallback(
+    (items: DomainPickerItem[]) => {
+      if (domainId != null) return;
+      const pick = items.find((d) => d.has_credentials) ?? items[0] ?? null;
+      if (!pick) return;
+      setDomainId(pick.id);
+      setSelectedLabel(pick.name);
+    },
+    [domainId],
   );
 
+  // Latest-wins token so a slow Domain fetch can't clobber a newer pick.
+  const fullDomainTokenRef = useRef(0);
+  useEffect(() => {
+    if (domainId == null) {
+      setSelected(null);
+      return;
+    }
+    const token = ++fullDomainTokenRef.current;
+    getDomain(domainId)
+      .then((d) => {
+        if (token !== fullDomainTokenRef.current) return;
+        setSelected(d);
+        setSelectedLabel(d.name);
+      })
+      .catch((err) => {
+        if (token !== fullDomainTokenRef.current) return;
+        setLoadError(
+          err instanceof ApiError ? err.message : t("pubMod.failedLoadDomains"),
+        );
+      });
+  }, [domainId, t]);
+
+  // Flipping the CMS-type control invalidates the current selection: a
+  // WP domain isn't a valid target for the Custom panel and vice versa.
+  // Clear everything; the combobox auto-picks the first credentialled
+  // match in the new type via `onPickerResults`.
+  function onCmsTypeChange(next: CmsType) {
+    if (next === cmsType) return;
+    setCmsType(next);
+    setDomainId(null);
+    setSelected(null);
+    setSelectedLabel(null);
+  }
+
+  function onDomainPicked(item: DomainPickerItem) {
+    setDomainId(item.id);
+    setSelectedLabel(item.name);
+  }
+
+  // WP profile derivation + default-pick on domain change.
   const wpProfiles: PublishProfile[] = useMemo(
     () => (selected?.cms_type === "wordpress" ? profilesOf(selected) : []),
     [selected],
@@ -75,12 +165,9 @@ export function PublishToDomainModal({
   const activeProfile: PublishProfile | null = useMemo(() => {
     if (selected?.cms_type !== "wordpress") return null;
     if (wpProfiles.length === 0) return null;
-    return (
-      wpProfiles.find((p) => p.name === profileName) ?? wpProfiles[0]
-    );
+    return wpProfiles.find((p) => p.name === profileName) ?? wpProfiles[0];
   }, [selected, wpProfiles, profileName]);
 
-  // When the picked domain changes, default the profile to the first one.
   useEffect(() => {
     if (selected?.cms_type === "wordpress" && wpProfiles.length > 0) {
       setProfileName((cur) =>
@@ -91,7 +178,8 @@ export function PublishToDomainModal({
     }
   }, [selected, wpProfiles]);
 
-  // When the picked domain or profile changes, seed the form values.
+  // Seed the form values from the active profile / Custom placeholders,
+  // pre-filling title + content + slug from the props the parent passed in.
   useEffect(() => {
     if (!selected) {
       setValues({});
@@ -106,18 +194,23 @@ export function PublishToDomainModal({
       for (const f of fields) {
         if (f.key === "title" && initialTitle) next[f.key] = initialTitle;
         else if (f.key === "content") next[f.key] = initialContent;
-        else if (f.key === "slug" && initialSlugSuggestion) next[f.key] = initialSlugSuggestion;
-        else if (f.key === "status") next[f.key] = (f.options ?? ["publish"])[0] ?? "publish";
-        else next[f.key] = "";
+        else if (f.key === "slug" && initialSlugSuggestion) {
+          next[f.key] = initialSlugSuggestion;
+        } else if (f.key === "status") {
+          next[f.key] = (f.options ?? ["publish"])[0] ?? "publish";
+        } else next[f.key] = "";
       }
     } else if (selected.cms_type === "custom") {
       const placeholders = collectPlaceholders(selected.custom_config?.body_template);
       for (const ph of placeholders) {
         if (ph === "title" && initialTitle) next[ph] = initialTitle;
         else if (ph === "content") next[ph] = initialContent;
-        else if (ph === "slug" && initialSlugSuggestion) next[ph] = initialSlugSuggestion;
-        else if (ph === "language") continue; // language is sent separately
-        else next[ph] = "";
+        else if (ph === "slug" && initialSlugSuggestion) {
+          next[ph] = initialSlugSuggestion;
+        } else if (ph === "language") {
+          // Language is sent separately via the language picker. Skip.
+          continue;
+        } else next[ph] = "";
       }
     }
     setValues(next);
@@ -133,9 +226,8 @@ export function PublishToDomainModal({
     setError(null);
     setBusy(true);
     try {
-      // The endpoint now queues the publish and returns immediately with a
-      // job in 'queued' / 'posting' state. Poll until it reaches a terminal
-      // state ('posted' / 'failed').
+      // /publish/single queues the job and returns immediately. Poll
+      // until terminal ('posted' / 'failed') with a 5-minute deadline.
       const initial = await publishSingle({
         domain_id: selected.id,
         language: language || null,
@@ -146,7 +238,7 @@ export function PublishToDomainModal({
       setResult(initial);
 
       let job = initial;
-      const deadline = Date.now() + 5 * 60 * 1000; // 5-min cap
+      const deadline = Date.now() + 5 * 60 * 1000;
       while (job.status === "queued" || job.status === "posting") {
         if (Date.now() > deadline) break;
         await new Promise((r) => setTimeout(r, 1000));
@@ -164,9 +256,6 @@ export function PublishToDomainModal({
     }
   }
 
-  const langOptions = selected?.languages ?? [];
-  const showLangPicker = langOptions.length > 1;
-
   return (
     <Modal onClose={onClose} size="max-w-2xl">
       <form onSubmit={onSubmit} className="space-y-4">
@@ -180,139 +269,35 @@ export function PublishToDomainModal({
           </div>
         )}
 
-        {domains !== null && domains.length === 0 && (
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">
-            {t("pubMod.noneConnected")}
-          </p>
+        <TargetPicker
+          cmsType={cmsType}
+          onCmsTypeChange={onCmsTypeChange}
+          domainId={domainId}
+          selectedLabel={selectedLabel}
+          onDomainPicked={onDomainPicked}
+          onPickerResults={onPickerResults}
+          selected={selected}
+          language={language}
+          onLanguageChange={setLanguage}
+        />
+
+        {selected?.cms_type === "wordpress" && (
+          <WordPressForm
+            selected={selected}
+            wpProfiles={wpProfiles}
+            profileName={profileName}
+            onProfileNameChange={setProfileName}
+            activeProfile={activeProfile}
+            values={values}
+            onFieldChange={setField}
+          />
         )}
 
-        {domains && domains.length > 0 && (
-          <div className="grid grid-cols-2 gap-3">
-            <Field label={t("pubMod.fieldDomain")}>
-              <select
-                value={domainId ?? ""}
-                onChange={(e) => setDomainId(Number(e.target.value))}
-                className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-              >
-                {domains.map((d) => (
-                  <option key={d.id} value={d.id} disabled={!d.has_credentials}>
-                    {d.name} ({d.cms_type}){!d.has_credentials ? t("pubMod.noCreds") : ""}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            {showLangPicker && (
-              <Field label={t("pubMod.fieldLanguage")}>
-                <select
-                  value={language ?? ""}
-                  onChange={(e) => setLanguage(e.target.value)}
-                  className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-                >
-                  {langOptions.map((l) => (
-                    <option key={l} value={l}>
-                      {l}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            )}
-          </div>
+        {selected?.cms_type === "custom" && (
+          <CustomCmsForm values={values} onFieldChange={setField} />
         )}
 
-        {selected && selected.cms_type === "wordpress" && (
-          <div className="space-y-3 border-t border-neutral-200 pt-3 dark:border-neutral-800">
-            {!selected.publish_config && (
-              <p className="rounded-md bg-blue-50 px-3 py-2 text-xs text-blue-800 dark:bg-blue-950/40 dark:text-blue-300">
-                {t("pubMod.noFormConfigured")}
-              </p>
-            )}
-
-            {wpProfiles.length > 0 && (
-              <Field label={t("pubMod.fieldPostType")}>
-                <select
-                  value={profileName ?? ""}
-                  onChange={(e) => setProfileName(e.target.value)}
-                  disabled={wpProfiles.length === 1}
-                  className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm disabled:opacity-70 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-                >
-                  {wpProfiles.map((p) => (
-                    <option key={p.name} value={p.name}>
-                      {p.name} — {p.post_type}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            )}
-
-            {(activeProfile?.fields ?? DEFAULT_WP_FIELDS).map((f) => (
-              <WpFormInput
-                key={f.key}
-                field={f}
-                value={values[f.key] ?? ""}
-                onChange={(v) => setField(f.key, v)}
-              />
-            ))}
-          </div>
-        )}
-
-        {selected && selected.cms_type === "custom" && (
-          <div className="space-y-3 border-t border-neutral-200 pt-3 dark:border-neutral-800">
-            {Object.keys(values).map((key) => (
-              <Field key={key} label={key}>
-                {key === "content" ? (
-                  <textarea
-                    value={values[key]}
-                    onChange={(e) => setField(key, e.target.value)}
-                    rows={8}
-                    className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm font-mono dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-                  />
-                ) : (
-                  <input
-                    value={values[key]}
-                    onChange={(e) => setField(key, e.target.value)}
-                    className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-                  />
-                )}
-              </Field>
-            ))}
-          </div>
-        )}
-
-        {error && (
-          <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-            {error}
-          </div>
-        )}
-
-        {result && result.status === "posted" && (
-          <div className="rounded-md bg-green-50 px-3 py-2 text-sm text-green-800 dark:bg-green-950/40 dark:text-green-300">
-            {t("pubMod.published")}
-            {result.cms_post_url && (
-              <>
-                {" "}
-                <a
-                  href={result.cms_post_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline"
-                >
-                  {t("pubMod.viewPost")}
-                </a>
-              </>
-            )}
-          </div>
-        )}
-
-        {result?.warnings && result.warnings.length > 0 && (
-          <div className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
-            <p className="font-medium">{t("pubMod.warnings")}</p>
-            <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs">
-              {result.warnings.map((w, i) => (
-                <li key={i}>{w}</li>
-              ))}
-            </ul>
-          </div>
-        )}
+        <ResultPanel error={error} result={result} />
 
         <div className="flex justify-end gap-2 border-t border-neutral-200 pt-3 dark:border-neutral-800">
           <button
@@ -335,108 +320,4 @@ export function PublishToDomainModal({
       </form>
     </Modal>
   );
-}
-
-function WpFormInput({
-  field,
-  value,
-  onChange,
-}: {
-  field: WpField;
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  const { t } = useT();
-  const labelText = field.label + (field.required ? ` ${t("pubMod.required")}` : "");
-  if (field.type === "textarea") {
-    return (
-      <Field label={labelText}>
-        <textarea
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          rows={8}
-          required={field.required}
-          className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm font-mono dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-        />
-      </Field>
-    );
-  }
-  if (field.type === "select") {
-    return (
-      <Field label={labelText}>
-        <select
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          required={field.required}
-          className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-        >
-          {(field.options ?? []).map((o) => (
-            <option key={o} value={o}>
-              {o}
-            </option>
-          ))}
-        </select>
-      </Field>
-    );
-  }
-  // text / taxonomy_ids / media_url all render as text inputs in v1.
-  return (
-    <Field
-      label={labelText}
-      hint={
-        field.type === "taxonomy_ids"
-          ? t("pubMod.taxonomyHint", { tax: field.taxonomy ?? "taxonomy" })
-          : field.type === "media_url"
-            ? t("pubMod.mediaHint")
-            : undefined
-      }
-    >
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        required={field.required}
-        className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-      />
-    </Field>
-  );
-}
-
-function Field({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
-        {label}
-      </span>
-      {children}
-      {hint && (
-        <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{hint}</p>
-      )}
-    </label>
-  );
-}
-
-const PLACEHOLDER_RE = /\{\{\s*([A-Za-z_][\w\.\- ]*?)\s*\}\}/g;
-
-function collectPlaceholders(node: unknown, out: Set<string> = new Set()): string[] {
-  if (typeof node === "string") {
-    let m: RegExpExecArray | null;
-    while ((m = PLACEHOLDER_RE.exec(node)) !== null) {
-      out.add(m[1].trim());
-    }
-  } else if (Array.isArray(node)) {
-    node.forEach((x) => collectPlaceholders(x, out));
-  } else if (node && typeof node === "object") {
-    Object.values(node as Record<string, unknown>).forEach((v) =>
-      collectPlaceholders(v, out),
-    );
-  }
-  return Array.from(out);
 }

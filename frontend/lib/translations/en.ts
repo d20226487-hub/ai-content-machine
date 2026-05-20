@@ -224,6 +224,21 @@ export const en = {
   "settings.testHintSaved": "Test the saved key",
   "settings.testHintNeedKey": "Type or save a key first",
   "settings.clearKey": "Clear key",
+  "settings.vertexAuthHeader": "Service-account auth (recommended)",
+  "settings.vertexAuthHint":
+    "For production workloads, paste a Google Cloud service-account JSON and set the project + region. Leave these empty to use Vertex Express via the API key above (trial quotas only).",
+  "settings.vertexProjectId": "GCP project ID",
+  "settings.vertexLocation": "Location (region)",
+  "settings.vertexSaJson": "Service-account JSON",
+  "settings.vertexSaJsonPlaceholder": "Paste the full service-account JSON here…",
+  "settings.vertexSaJsonStored": "Stored — paste a new JSON to replace it.",
+  "settings.vertexSaJsonHelperEmpty":
+    "Encrypted before storage. The service account needs the Vertex AI User role on the project.",
+  "settings.vertexSaJsonHelperStored":
+    "A service-account JSON is on file. Replace it by pasting a new one, or use Clear to remove.",
+  "settings.vertexClear": "Clear",
+  "settings.vertexConfirmClear":
+    "Clear the stored Vertex project, location, and service-account JSON?",
   "settings.confirmClearKey": "Clear API key for {provider}?",
   "settings.clearKeyFailed": "Failed to clear key",
   "settings.testRequestFailed": "Test request failed",
@@ -753,6 +768,13 @@ export const en = {
   "csvImport.delimiterPipe": "| (pipe)",
   "csvImport.firstRowHeader": "First row is header",
   "csvImport.previewLabel": "Preview",
+  "csvImport.downloadSample": "Download sample",
+  "csvImport.sampleHint":
+    "Not sure what columns to use? Download a sample CSV that matches your publishing setup. For Custom CMS, your columns must match the placeholders in your domain's body_template.",
+  "csvImport.sampleWpSingle": "WordPress — single site",
+  "csvImport.sampleWpMulti": "WordPress — multi site",
+  "csvImport.sampleCustomSingle": "Custom CMS — single site",
+  "csvImport.sampleCustomMulti": "Custom CMS — multi site",
 
   // ---------- create / single ----------
   "create.title": "Create",

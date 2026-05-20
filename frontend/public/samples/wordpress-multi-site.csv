@@ -1,0 +1,6 @@
+domain,profile,language,title,content,slug,status,categories,tags,featured_media,post_id,post_url
+blog.example.com,Default,en,Welcome to our blog,"<p>Hello world! This is our first post.</p>",welcome-to-our-blog,publish,"2,5",12,https://images.example.com/welcome.jpg,,
+blog.example.com,Default,en,10 tips for better mornings,"<p>Morning routines matter. Here are ten habits.</p>",10-tips-better-mornings,publish,5,"12,18",https://images.example.com/morning.jpg,,
+news.example.org,News,en,Quarterly results announced,"<p>The company reported strong growth this quarter.</p>",quarterly-results,publish,3,,,,,
+shop.example.de,Default,de,Willkommen in unserem Shop,"<p>Schön, dass Sie da sind. Stöbern Sie durch unsere Auswahl.</p>",willkommen,publish,1,,https://images.example.com/shop-de.jpg,,
+shop.example.de,Default,en,Welcome to our shop,"<p>Glad you are here. Browse our selection.</p>",welcome,publish,1,,https://images.example.com/shop-en.jpg,,

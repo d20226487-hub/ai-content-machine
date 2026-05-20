@@ -2,7 +2,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ProviderRead(BaseModel):
-    """What we send to the client. The API key is never returned — only its presence."""
+    """What we send to the client. The API key is never returned — only its presence.
+
+    ``extra_config_public`` carries the non-secret subset of structured creds
+    (e.g. Vertex's project_id + location) so the Settings form can prefill
+    those inputs after a reload. Secret fields inside extra_config (e.g.
+    ``service_account_json``) are stripped here — their presence is only
+    signalled via ``has_extra_config``.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -11,6 +18,8 @@ class ProviderRead(BaseModel):
     display_name: str
     enabled: bool
     has_api_key: bool
+    has_extra_config: bool = False
+    extra_config_public: dict = {}
 
     default_model: str | None = None
     prompt_creation_model: str | None = None
@@ -37,6 +46,12 @@ class ProviderUpdate(BaseModel):
 
     enabled: bool | None = None
     api_key: str | None = None  # see docstring
+    # Provider-specific structured creds. For Vertex AI:
+    #   {"service_account_json": "...", "project_id": "...", "location": "..."}
+    # Same semantics as api_key for individual sub-fields: omit = unchanged,
+    # empty string = clear that sub-field, non-empty = overwrite. Sending
+    # ``extra_config: {}`` clears everything.
+    extra_config: dict | None = None
 
     default_model: str | None = None
     prompt_creation_model: str | None = None

@@ -65,7 +65,11 @@ async def get_enabled_providers(db: AsyncSession) -> Sequence[CachedProvider]:
             display_name=p.display_name,
             default_model=p.default_model,
             available_models=tuple(p.available_models or []),
-            has_api_key=bool(p.api_key_encrypted),
+            # "is the provider credentialled at all" — drives the dropdown
+            # disabled state. Vertex AI counts as credentialled when its
+            # service_account_json is stored under extra_config, even if
+            # api_key_encrypted is empty.
+            has_api_key=bool(p.api_key_encrypted) or bool(p.extra_config_encrypted),
         )
         for p in rows
     )

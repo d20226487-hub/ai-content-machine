@@ -230,6 +230,11 @@ export interface Provider {
   display_name: string;
   enabled: boolean;
   has_api_key: boolean;
+  has_extra_config: boolean;
+  // Non-secret subset of structured creds (e.g. Vertex AI's project_id +
+  // location). Secret fields (service_account_json) are stripped server-
+  // side and signalled only via has_extra_config.
+  extra_config_public: Record<string, string>;
 
   default_model: string | null;
   prompt_creation_model: string | null;
@@ -257,6 +262,9 @@ export interface ConnectionTestResult {
 export type ProviderUpdate = Partial<{
   enabled: boolean;
   api_key: string; // "" clears, omit leaves unchanged, value sets
+  // Same per-field semantics as api_key: omit = unchanged, "" = clear,
+  // non-empty = overwrite. Send {} to wipe every field.
+  extra_config: Record<string, string>;
   default_model: string | null;
   prompt_creation_model: string | null;
   available_models: string[];

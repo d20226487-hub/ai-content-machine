@@ -1,0 +1,4 @@
+title,content,slug,status,categories,tags,featured_media,post_id,post_url
+Welcome to our blog,"<p>Hello world! This is our very first post on the new site.</p><p>Stay tuned for more.</p>",welcome-to-our-blog,publish,"2,5",12,https://images.example.com/welcome.jpg,,
+10 tips for better mornings,"<p>Morning routines matter. Here are ten habits we swear by.</p><ol><li>Drink water.</li><li>Stretch.</li></ol>",10-tips-better-mornings,publish,5,"12,18",https://images.example.com/morning.jpg,,
+Behind the scenes of our launch,"<p>A short look at how the team built the new product.</p>",behind-the-scenes-launch,draft,"2,7",,42,,
