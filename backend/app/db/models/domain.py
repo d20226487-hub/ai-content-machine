@@ -72,6 +72,17 @@ class Domain(Base):
     #   }
     publish_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # Drive-style folder grouping (migration 0027). NULL = sits in the
+    # implicit root folder. FK uses ON DELETE SET NULL so a force-deleted
+    # folder doesn't take its domains with it; the folder-delete endpoint
+    # already refuses non-empty folders for the normal flow.
+    folder_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("domain_folders.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     created_by_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

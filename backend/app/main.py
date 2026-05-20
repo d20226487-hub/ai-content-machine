@@ -10,6 +10,7 @@ from app.api import (
     auth,
     backup as backup_router,
     categories,
+    domain_folders as domain_folders_router,
     domains as domains_router,
     errors as errors_router,
     generate,
@@ -98,6 +99,7 @@ app.include_router(generations_router.router)
 app.include_router(library.router)
 app.include_router(errors_router.router)
 app.include_router(domains_router.router)
+app.include_router(domain_folders_router.router)
 app.include_router(publish_router.router)
 app.include_router(publish_bulk_router.router)
 app.include_router(backup_router.router)

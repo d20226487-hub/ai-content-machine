@@ -207,6 +207,8 @@ class DomainCreate(DomainBase):
     # WP: "user:application_password". Bearer: the token.
     # api_key_header: JSON dict serialized as a string {"header": "X-Foo", "value": "..."}.
     credentials: str | None = None
+    # Optional folder placement. Null = create in the implicit root.
+    folder_id: int | None = None
 
 
 class DomainUpdate(BaseModel):
@@ -242,6 +244,9 @@ class DomainUpdate(BaseModel):
     backoff_base_ms: int | None = Field(None, ge=0, le=600000)
     backoff_jitter_ms: int | None = Field(None, ge=0, le=600000)
     respect_retry_after: bool | None = None
+    # Move to another folder. Send null to move to the implicit root.
+    # Omit the field entirely to leave folder unchanged.
+    folder_id: int | None = None
 
 
 class DomainRead(BaseModel):
@@ -264,6 +269,8 @@ class DomainRead(BaseModel):
     backoff_base_ms: int | None
     backoff_jitter_ms: int | None
     respect_retry_after: bool | None
+    # Folder placement (migration 0027). Null = implicit root.
+    folder_id: int | None = None
     created_by_id: int | None
     created_at: datetime
     updated_at: datetime

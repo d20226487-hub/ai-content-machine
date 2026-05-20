@@ -9,6 +9,7 @@ from app.db.models.bulk_table import (
 )
 from app.db.models.category import Category
 from app.db.models.domain import Domain
+from app.db.models.domain_folder import DomainFolder
 from app.db.models.error_log import AppSetting, ErrorLog
 from app.db.models.generation import Generation
 from app.db.models.media_upload import MediaUpload
@@ -32,6 +33,7 @@ __all__ = [
     "BulkTableRow",
     "Category",
     "Domain",
+    "DomainFolder",
     "ErrorLog",
     "Generation",
     "MediaUpload",

@@ -23,7 +23,7 @@ from app.api.deps import get_current_user, require_role
 from app.cms.registry import UnsupportedCms, get_cms_client
 from app.core.crypto import decrypt, encrypt
 from app.core.ssrf import SafeAsyncTransport, UnsafeUrlError, validate_public_url
-from app.db.models import AppSetting, BulkPublishRun, Domain, User
+from app.db.models import AppSetting, BulkPublishRun, Domain, DomainFolder, User
 from app.db.session import get_db
 from app.services.media_cache import clear_for_domain, count_for_domain
 from app.schemas.domain import (
@@ -39,6 +39,7 @@ from app.schemas.domain import (
     default_wp_profiles,
     normalize_publish_config,
 )
+from app.schemas.domain_folder import DomainBulkMove
 
 router = APIRouter(
     prefix="/domains",
@@ -67,6 +68,7 @@ def _to_read(d: Domain) -> DomainRead:
             "backoff_base_ms": d.backoff_base_ms,
             "backoff_jitter_ms": d.backoff_jitter_ms,
             "respect_retry_after": d.respect_retry_after,
+            "folder_id": d.folder_id,
             "created_by_id": d.created_by_id,
             "created_at": d.created_at,
             "updated_at": d.updated_at,
@@ -75,13 +77,64 @@ def _to_read(d: Domain) -> DomainRead:
     )
 
 
-@router.get("", response_model=list[DomainRead])
-async def list_domains(db: AsyncSession = Depends(get_db)) -> list[DomainRead]:
-    """List active domains. Trashed rows are hidden — see /domains/trash."""
-    rows = (
-        await db.execute(
-            select(Domain).where(Domain.deleted_at.is_(None)).order_by(Domain.id)
+# Sentinel: when the caller wants "only domains with no folder" (the
+# implicit root), they send ``?folder_id=root`` instead of omitting the
+# param. Omitting the param means "every folder" (the v1 behavior we
+# preserve for callers that pre-date migration 0027).
+_ROOT_SENTINEL = "root"
+
+
+def _folder_clause(folder_id_param: str | None):
+    """Translate ``?folder_id=N`` / ``=root`` / omit into a WHERE clause.
+
+    Returns None when the param is omitted (no filter applied). Raises
+    HTTPException(400) on a malformed value.
+
+    Centralized so both the list endpoint and the picker apply the same
+    semantics — a caller who passes ``folder_id=root`` to either gets
+    the same set of rows.
+    """
+    if folder_id_param is None or folder_id_param == "":
+        return None
+    if folder_id_param == _ROOT_SENTINEL:
+        return Domain.folder_id.is_(None)
+    try:
+        fid = int(folder_id_param)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"folder_id must be an integer, 'root', or omitted "
+                f"(got {folder_id_param!r})."
+            ),
         )
+    return Domain.folder_id == fid
+
+
+@router.get("", response_model=list[DomainRead])
+async def list_domains(
+    folder_id: str | None = Query(
+        None,
+        description=(
+            "Optional folder scope. Send a folder id to list domains in "
+            "that folder; send the literal 'root' to list domains that "
+            "sit in the implicit root (no folder); omit to list every "
+            "domain regardless of folder placement."
+        ),
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> list[DomainRead]:
+    """List active domains. Trashed rows are hidden — see /domains/trash.
+
+    ``?folder_id=`` added in migration 0027. Backward-compatible: a
+    caller that doesn't send the param still sees every active domain.
+    """
+    base = select(Domain).where(Domain.deleted_at.is_(None))
+    clause = _folder_clause(folder_id)
+    if clause is not None:
+        base = base.where(clause)
+    rows = (
+        await db.execute(base.order_by(Domain.id))
     ).scalars().all()
     return [_to_read(d) for d in rows]
 
@@ -99,6 +152,13 @@ async def list_domains_picker(
     cms_type: str | None = Query(
         None,
         description="Optional filter — 'wordpress' or 'custom'.",
+    ),
+    folder_id: str | None = Query(
+        None,
+        description=(
+            "Optional folder scope: a folder id, the literal 'root' "
+            "(domains with no folder), or omit to ignore folder placement."
+        ),
     ),
     page: int = Query(1, ge=1, description="1-based page number."),
     page_size: int = Query(
@@ -135,6 +195,11 @@ async def list_domains_picker(
             )
         base = base.where(Domain.cms_type == ct)
         count_base = count_base.where(Domain.cms_type == ct)
+
+    folder_clause = _folder_clause(folder_id)
+    if folder_clause is not None:
+        base = base.where(folder_clause)
+        count_base = count_base.where(folder_clause)
 
     q_norm = (q or "").strip()
     if q_norm:
@@ -428,6 +493,38 @@ async def bulk_permanent_delete_domains(
     return {"deleted": len(rows)}
 
 
+@router.post("/bulk-move", response_model=dict)
+async def bulk_move_domains(
+    payload: DomainBulkMove,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Move N active domains to a folder (or out of any folder).
+
+    Used by the "Move to folder…" bulk action in the /publish/domains
+    redesign. Trashed domains are silently skipped — only active rows
+    can be moved (a trashed domain shouldn't suddenly hop into a folder
+    behind the user's back).
+
+    Body: ``{"domain_ids": [int, ...], "folder_id": int | null}``.
+    Returns ``{"moved": <count>}`` so the UI can confirm.
+    """
+    if payload.folder_id is not None:
+        await _require_folder_exists(db, payload.folder_id)
+
+    rows = (
+        await db.execute(
+            select(Domain).where(
+                Domain.id.in_(payload.domain_ids),
+                Domain.deleted_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    for d in rows:
+        d.folder_id = payload.folder_id
+    await db.commit()
+    return {"moved": len(rows)}
+
+
 @router.post("", response_model=DomainRead, status_code=status.HTTP_201_CREATED)
 async def create_domain(
     payload: DomainCreate,
@@ -435,6 +532,11 @@ async def create_domain(
     actor: User = Depends(get_current_user),
 ) -> DomainRead:
     _validate_payload(payload.cms_type, payload.auth_type, payload.custom_config)
+
+    if payload.folder_id is not None:
+        # Reject up front so the user gets a 400 instead of a vague IntegrityError
+        # if they reference a folder that doesn't exist.
+        await _require_folder_exists(db, payload.folder_id)
 
     pc_dump = payload.publish_config.model_dump() if payload.publish_config else None
     if payload.cms_type == "wordpress" and not _has_profiles(pc_dump):
@@ -456,6 +558,7 @@ async def create_domain(
         backoff_base_ms=payload.backoff_base_ms,
         backoff_jitter_ms=payload.backoff_jitter_ms,
         respect_retry_after=payload.respect_retry_after,
+        folder_id=payload.folder_id,
         created_by_id=actor.id,
     )
     if payload.credentials:
@@ -519,6 +622,11 @@ async def update_domain(
     next_auth = data.get("auth_type", d.auth_type)
     next_custom = data.get("custom_config", d.custom_config)
     _validate_payload(next_cms, next_auth, next_custom if isinstance(next_custom, object) else None)
+
+    # folder_id may be null (moves to implicit root) — only validate
+    # existence when the caller passes a non-null id.
+    if "folder_id" in data and data["folder_id"] is not None:
+        await _require_folder_exists(db, data["folder_id"])
 
     if "credentials" in data:
         raw = data.pop("credentials")
@@ -945,6 +1053,26 @@ async def import_json(
         inserted += 1
 
     return CsvImportResult(inserted=inserted, skipped=skipped, errors=errors)
+
+
+async def _require_folder_exists(db: AsyncSession, folder_id: int) -> None:
+    """Raise 400 if ``folder_id`` doesn't refer to an existing DomainFolder.
+
+    The PATCH and create endpoints validate at the application layer
+    rather than letting Postgres raise IntegrityError, so the user gets
+    a clean error string instead of "violates foreign key constraint
+    \"domains_folder_id_fkey\"" — same UX rule as Prompts categories.
+    """
+    exists = (
+        await db.execute(
+            select(DomainFolder.id).where(DomainFolder.id == folder_id)
+        )
+    ).scalar_one_or_none()
+    if exists is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Folder #{folder_id} not found.",
+        )
 
 
 def _validate_payload(
