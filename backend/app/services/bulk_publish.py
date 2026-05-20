@@ -388,16 +388,17 @@ async def publish_one_row(
     # domain.languages). Otherwise fall back to the run-level language.
     effective_language = target.language if target.language is not None else run.language
 
-    # Update mode is WP-only. resolve_row_target already blocks Custom CMS
-    # in multi mode; single mode is blocked at API creation. This guard is
-    # defense in depth in case a domain's cms_type changed under us.
-    if run.operation == "update" and domain.cms_type != "wordpress":
+    # CMS-vs-operation compatibility: defense in depth. The API layer
+    # already rejected upsert/non-WP combinations at run creation; this
+    # catches the case where a domain's cms_type changes between creation
+    # and the worker picking up the row.
+    if run.operation == "upsert" and domain.cms_type != "custom":
         await _record_failure(
             db,
             run=run,
             row_id=row_id,
             error=(
-                f"Update mode is supported only for WordPress domains "
+                f"Upsert is supported only for Custom CMS domains "
                 f"(domain {domain.name!r} is {domain.cms_type})."
             ),
             domain_id_override=domain.id,
@@ -405,6 +406,21 @@ async def publish_one_row(
         return "failed"
 
     fields = await _build_fields(db, run=run, row_id=row_id)
+
+    # Custom CMS treats the operation as a per-row `action` field on the
+    # outgoing JSON. The body_template author writes "{{action}}" in their
+    # template; we inject the value here so the user doesn't have to add
+    # an action column to every bulk table. WP handles operation via the
+    # find_post → update_post / publish_post branching below.
+    if domain.cms_type == "custom":
+        fields.setdefault("action", run.operation)
+        # For Custom CMS, the per-row language already lives in the body
+        # (via field_to_column['lang']). Carry it into PublishJob.language
+        # too so the run-detail UI Lang column matches reality, instead of
+        # showing the run-level fallback everywhere.
+        lang_from_field = (fields.get("lang") or "").strip()
+        if lang_from_field:
+            effective_language = lang_from_field
 
     try:
         media_cache = MediaCache(db, domain.id) if domain.cms_type == "wordpress" else None
@@ -486,7 +502,10 @@ async def publish_one_row(
     # publish_job row. A lookup miss is a per-row failure and the row never
     # reaches WP — keeping the failed row out of `posting` simplifies the
     # state machine and shortens the audit trail.
-    if run.operation == "update":
+    #
+    # WP-only: Custom CMS update sends `id` in the body and lets the
+    # upstream do the resolution server-side. No find_post pre-flight.
+    if run.operation == "update" and domain.cms_type == "wordpress":
         if run.lookup_column_id is None or run.lookup_kind is None:
             await _record_failure(
                 db,
@@ -672,7 +691,17 @@ async def publish_one_row(
 async def _build_fields(
     db: AsyncSession, *, run: BulkPublishRun, row_id: int
 ) -> dict[str, Any]:
-    """Resolve {field_key → cell.value} from the run's field_to_column map."""
+    """Resolve {field_key → cell.value} from the run's field_to_column map.
+
+    Cell values are ``.strip()``-ed before being placed in the dict. CSV
+    imports, copy/paste from Excel, and the bulk-table editor all leak
+    trailing/leading newlines into cells, which then go out verbatim in
+    publish bodies (we've seen `slug='home2\n'`, `action='\ncreate'`,
+    `lang='en\n'`). Most CMSes either reject these outright or, worse,
+    accept them and store the whitespace, breaking lookups by id/slug
+    later. Stripping on publish leaves the editor data unchanged but
+    keeps the wire-format clean.
+    """
     field_map = run.field_to_column or {}
     if not field_map:
         return {}
@@ -685,7 +714,7 @@ async def _build_fields(
             )
         )
     ).all()
-    value_by_col = {col_id: (val or "") for col_id, val in rows}
+    value_by_col = {col_id: (val or "").strip() for col_id, val in rows}
     return {fkey: value_by_col.get(int(col_id), "") for fkey, col_id in field_map.items()}
 
 

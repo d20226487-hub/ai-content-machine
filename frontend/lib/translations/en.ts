@@ -1062,6 +1062,34 @@ export const en = {
   "bulkPub.title": "Publish bulk",
   "bulkPub.subtitle":
     "Each row of {table} becomes one post. Map the publish fields to bulk columns; optionally pick columns to receive the new post ID and URL.",
+  "bulkPub.cmsType": "CMS type",
+  "bulkPub.cmsTypeWordPress": "WordPress",
+  "bulkPub.cmsTypeCustom": "Custom CMS",
+  "bulkPub.cmsTypeWordPressHint":
+    "Show WordPress-specific settings (profiles, Create/Update, lookup, slug conflict). Only WordPress domains will be offered below.",
+  "bulkPub.cmsTypeCustomHint":
+    "Show Custom-CMS-specific settings. Only Custom-CMS domains will be offered below.",
+  "bulkPub.noDomainsForType":
+    "no domains of this CMS type — add one in /publish/domains or switch the toggle above",
+  "domainCombo.placeholder": "Search domains by name or URL…",
+  "domainCombo.loading": "Loading…",
+  "domainCombo.loadFailed": "Failed to load domains",
+  "domainCombo.noMatches": "No domains match {q}",
+  "domainCombo.noDomainsForType":
+    "No domains of this CMS type. Add one in /publish/domains.",
+  "domainCombo.noCreds": "no creds",
+  "domainCombo.refineHint": "{shown} of {total} — type to filter.",
+  "bulkPub.opUpsert": "Upsert",
+  "bulkPub.customCreateHint":
+    "Send action=create. Maps the row's slug, title, content (and any other body_template fields) into a new page on the target.",
+  "bulkPub.customUpdateHint":
+    "Send action=update with the upstream id. Map the bulk table's id column to the 'id' field below; any other mapped fields get patched onto the existing page.",
+  "bulkPub.customUpsertHint":
+    "Send action=upsert. The upstream looks up the row's slug; if found, the page is patched in place — otherwise a new page is created.",
+  "bulkPub.upsertCustomOnly":
+    "Upsert is supported only for Custom CMS domains. Use Create or Update for WordPress.",
+  "bulkPub.customUpdateNeedsId":
+    "Custom CMS Update mode requires the 'id' field to be mapped to a column.",
   "bulkPub.mode": "Mode",
   "bulkPub.modeSingle": "Single site",
   "bulkPub.modeMulti": "Multi site",
@@ -1097,6 +1125,8 @@ export const en = {
   "bulkPub.skip": "— skip —",
   "bulkPub.noFieldsDetected":
     "No publish fields detected for this destination. For Custom CMS, the body template needs {{placeholder}} values; for WP, configure the publish form on the domain.",
+  "bulkPub.noFieldsCustomEmpty":
+    "Domain {name} has no {{placeholders}} in its body template, so there's nothing to map. Edit the domain in /publish/domains to add placeholders, or pick a different domain in the picker above.",
   "bulkPub.backFill": "Back-fill targets (optional)",
   "bulkPub.backFillHint":
     "After each successful publish, the new post's ID and URL are written back into these columns of the bulk table.",

@@ -29,6 +29,8 @@ from app.services.media_cache import clear_for_domain, count_for_domain
 from app.schemas.domain import (
     CsvImportResult,
     DomainCreate,
+    DomainPickerItem,
+    DomainPickerResponse,
     DomainRead,
     DomainUpdate,
     TestConnectionResult,
@@ -82,6 +84,108 @@ async def list_domains(db: AsyncSession = Depends(get_db)) -> list[DomainRead]:
         )
     ).scalars().all()
     return [_to_read(d) for d in rows]
+
+
+@router.get("/picker", response_model=DomainPickerResponse)
+async def list_domains_picker(
+    q: str | None = Query(
+        None,
+        max_length=200,
+        description=(
+            "Optional case-insensitive substring filter against name and "
+            "base_url. Empty / whitespace = no filter."
+        ),
+    ),
+    cms_type: str | None = Query(
+        None,
+        description="Optional filter — 'wordpress' or 'custom'.",
+    ),
+    page: int = Query(1, ge=1, description="1-based page number."),
+    page_size: int = Query(
+        50,
+        ge=1,
+        le=200,
+        description=(
+            "Up to 200 per request. Default 50 is enough to render a "
+            "scrollable dropdown without re-fetching for most use cases."
+        ),
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> DomainPickerResponse:
+    """Lite, paginated, search-friendly endpoint for the modal pickers.
+
+    Designed for the publish modals where users may have thousands of
+    domains and an unfiltered ``GET /domains`` would be wasteful (each
+    row carries a 1–2 KB ``publish_config`` blob that the picker
+    doesn't need).
+
+    Ordering: credentialled rows first (so the "first usable" auto-pick
+    in the modal lands on something the user can actually publish to),
+    then by name for stable scroll position.
+    """
+    base = select(Domain).where(Domain.deleted_at.is_(None))
+    count_base = select(func.count(Domain.id)).where(Domain.deleted_at.is_(None))
+
+    if cms_type:
+        ct = cms_type.strip().lower()
+        if ct not in ("wordpress", "custom"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"cms_type must be 'wordpress' or 'custom' (got {ct!r}).",
+            )
+        base = base.where(Domain.cms_type == ct)
+        count_base = count_base.where(Domain.cms_type == ct)
+
+    q_norm = (q or "").strip()
+    if q_norm:
+        # Substring match across both display surfaces — users sometimes
+        # remember the domain by its URL ("the .uz one"), sometimes by
+        # its display name. ILIKE handles the case-insensitive part;
+        # `%` is escaped to avoid wildcard-injection (a `%` typed by
+        # the user shouldn't match everything).
+        like = "%" + q_norm.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_") + "%"
+        base = base.where(
+            Domain.name.ilike(like) | Domain.base_url.ilike(like)
+        )
+        count_base = count_base.where(
+            Domain.name.ilike(like) | Domain.base_url.ilike(like)
+        )
+
+    total = int((await db.execute(count_base)).scalar_one())
+
+    rows = (
+        await db.execute(
+            base.order_by(
+                # has_credentials desc — coerced via case() because
+                # SQLAlchemy can't sort on a Python @property. We sort
+                # by the encrypted-blob's nullness instead, which is the
+                # exact thing has_credentials checks under the hood.
+                Domain.credentials_encrypted.is_(None).asc(),
+                Domain.name.asc(),
+            )
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).scalars().all()
+
+    items = [
+        DomainPickerItem(
+            id=d.id,
+            name=d.name,
+            base_url=d.base_url,
+            cms_type=d.cms_type,
+            has_credentials=d.has_credentials,
+            languages=d.languages or [],
+        )
+        for d in rows
+    ]
+    return DomainPickerResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        has_more=(page * page_size) < total,
+    )
 
 
 # ---------- trash ----------

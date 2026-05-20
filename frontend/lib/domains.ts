@@ -113,6 +113,53 @@ export function listDomains() {
   return api<Domain[]>("/domains");
 }
 
+export function getDomain(id: number) {
+  return api<Domain>(`/domains/${id}`);
+}
+
+// ---- Lite picker (paginated, searchable) for modal comboboxes ----
+
+export interface DomainPickerItem {
+  id: number;
+  name: string;
+  base_url: string;
+  cms_type: CmsType;
+  has_credentials: boolean;
+  languages: string[];
+}
+
+export interface DomainPickerResponse {
+  items: DomainPickerItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+}
+
+/**
+ * Search-friendly paginated list used by the publish modals' combobox.
+ * Returns a lite shape (no publish_config / custom_config) so a user
+ * with thousands of domains doesn't pay for blobs they don't render.
+ * The full Domain is fetched on demand via `getDomain(id)` after the
+ * user picks one.
+ */
+export function listDomainsPicker(params: {
+  q?: string;
+  cms_type?: CmsType;
+  page?: number;
+  page_size?: number;
+} = {}) {
+  const qs = new URLSearchParams();
+  if (params.q && params.q.trim()) qs.set("q", params.q.trim());
+  if (params.cms_type) qs.set("cms_type", params.cms_type);
+  if (params.page) qs.set("page", String(params.page));
+  if (params.page_size) qs.set("page_size", String(params.page_size));
+  const query = qs.toString();
+  return api<DomainPickerResponse>(
+    `/domains/picker${query ? `?${query}` : ""}`,
+  );
+}
+
 export function createDomain(payload: DomainCreatePayload) {
   return api<Domain>("/domains", { method: "POST", body: payload });
 }

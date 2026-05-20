@@ -11,9 +11,16 @@ BulkRunStatus = Literal[
 RowFilter = Literal["all", "selected", "range"]
 CellFilter = Literal["all", "unpublished", "failed"]
 PublishMode = Literal["single", "multi"]
-# 'create' = POST a new post; 'update' = resolve an existing post via
-# lookup_kind+lookup_column_id and PATCH it. WP-only.
-PublishOperation = Literal["create", "update"]
+# Per-run publish operation.
+#   'create' — POST a new post / page.
+#   'update' — For WP: resolve an existing post via lookup_kind+lookup_column_id
+#              and PATCH it. For Custom CMS: send action='update' with the
+#              upstream id supplied as the `id` field-to-column mapping; no
+#              find_post pre-flight (the upstream resolves the id itself).
+#   'upsert' — Custom CMS only. Server-side slug → existing-page lookup with
+#              fallback to create when the slug isn't found. WP has no native
+#              upsert and the API rejects this combination at run creation.
+PublishOperation = Literal["create", "update", "upsert"]
 PublishLookupKind = Literal["id", "slug"]
 # How to react when a Create row's slug already exists on the target
 # (in its language, per the find_post language filter). 'create' = always
@@ -78,17 +85,12 @@ class BulkPublishRequest(BaseModel):
             # (need the resolved domain), so the API validates after looking
             # up domains. profile_column_id presence is checked there.
 
-        if self.operation == "update":
-            if self.lookup_kind is None:
-                raise ValueError(
-                    "lookup_kind is required when operation='update' "
-                    "(pick 'id' or 'slug')"
-                )
-            if self.lookup_column_id is None:
-                raise ValueError(
-                    "lookup_column_id is required when operation='update' "
-                    "(the bulk-table column that holds the existing post id or slug)"
-                )
+        # lookup_kind / lookup_column_id are WP-specific (find_post by id|slug).
+        # Custom CMS update sends the upstream id via the `id` field-to-column
+        # mapping instead — no find_post needed. We can't see cms_type at this
+        # layer, so we don't enforce lookup_* presence here; the API layer
+        # validates it for WP runs and the service-layer Custom-CMS branch
+        # ignores those fields entirely.
         if self.on_slug_conflict != "create":
             # Skip / Update behaviors only apply to Create-mode runs. In
             # Update mode every row already targets an existing post; a

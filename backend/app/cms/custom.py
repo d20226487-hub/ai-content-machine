@@ -29,6 +29,20 @@ from app.core.ssrf import SafeAsyncTransport, UnsafeUrlError, validate_public_ur
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][\w\.\- ]*?)\s*\}\}")
 
+# Sentinel returned by ``_substitute`` when a bare ``{{key}}`` placeholder
+# resolves to a missing or empty value. The dict/list walkers drop any key
+# whose substituted value is this sentinel, so a single body_template can
+# describe a superset of every action's fields — unused keys are simply
+# omitted from the outgoing payload instead of being sent as the literal
+# string ``"{{id}}"`` (which the old behavior did and which upstream APIs
+# either 400 on or, worse, silently store).
+class _Missing:
+    __slots__ = ()
+    def __repr__(self) -> str:  # pragma: no cover — debug only
+        return "<MISSING>"
+
+_MISSING = _Missing()
+
 
 class CustomCmsClient(CmsClient):
     cms_type = "custom"
@@ -174,6 +188,14 @@ class CustomCmsClient(CmsClient):
             url_path = cfg.get("response_url_path") or ""
             cms_id = _dig(resp_json, id_path) if isinstance(resp_json, (dict, list)) else None
             cms_url = _dig(resp_json, url_path) if isinstance(resp_json, (dict, list)) else None
+            # APIs commonly return a relative URL ("/en/foo/"). The publish
+            # history UI renders cms_post_url as a clickable anchor; relative
+            # URLs would resolve against ACM's own host, which is wrong.
+            # Promote any "/"-prefixed value into an absolute URL against the
+            # domain's base_url. Absolute URLs and protocol-relative URLs
+            # ("//host/...") pass through untouched.
+            if isinstance(cms_url, str) and cms_url.startswith("/") and not cms_url.startswith("//"):
+                cms_url = f"{self.base_url}{cms_url}"
             return PublishResult(
                 ok=True,
                 status_code=resp.status_code,
@@ -204,14 +226,24 @@ def _substitute(node: Any, values: dict[str, Any]) -> Any:
     """Recursively replace {{key}} placeholders inside a JSON-shaped tree.
 
     A scalar string consisting of exactly one placeholder is replaced with
-    the typed value (so numbers/bools/objects survive). Strings containing
-    other text get string interpolation.
+    the typed value (so numbers/bools/objects survive). When the value is
+    missing OR is an empty string, the sentinel ``_MISSING`` is returned
+    so the parent container can drop the key entirely — this is what lets
+    one body_template cover create / update / upsert: leave a field blank
+    and it won't be sent.
+
+    Strings containing other text (interpolation) keep the existing
+    "missing → empty string" behavior because dropping a sub-section of
+    a larger string would silently produce a malformed result.
     """
     if isinstance(node, str):
         match = _PLACEHOLDER.fullmatch(node.strip())
         if match:
             key = match.group(1).strip()
-            return values.get(key, node)
+            v = values.get(key)
+            if v is None or v == "":
+                return _MISSING
+            return v
 
         def repl(m: re.Match[str]) -> str:
             key = m.group(1).strip()
@@ -221,10 +253,22 @@ def _substitute(node: Any, values: dict[str, Any]) -> Any:
         return _PLACEHOLDER.sub(repl, node)
 
     if isinstance(node, list):
-        return [_substitute(x, values) for x in node]
+        out_list: list[Any] = []
+        for x in node:
+            r = _substitute(x, values)
+            if r is _MISSING:
+                continue
+            out_list.append(r)
+        return out_list
 
     if isinstance(node, dict):
-        return {k: _substitute(v, values) for k, v in node.items()}
+        out_dict: dict[str, Any] = {}
+        for k, v in node.items():
+            r = _substitute(v, values)
+            if r is _MISSING:
+                continue
+            out_dict[k] = r
+        return out_dict
 
     return node
 

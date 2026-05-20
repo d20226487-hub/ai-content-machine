@@ -289,3 +289,40 @@ class CsvImportResult(BaseModel):
     inserted: int
     skipped: int
     errors: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class DomainPickerItem(BaseModel):
+    """Lite shape for the domain picker — used by the bulk + single publish
+    modal comboboxes when the user has thousands of domains.
+
+    Deliberately omits the heavy ``publish_config`` and ``custom_config``
+    JSONB blobs (those are 1–2 KB per row for a typical 8-field WP
+    profile). The picker only needs enough to render a result row and
+    decide which entries are credentialled; the full ``Domain`` is
+    fetched on demand via the existing ``GET /domains/{id}`` after the
+    user actually selects something.
+
+    ``languages`` is included because the modal derives the per-domain
+    Language picker from it; it's small (handful of short strings).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    base_url: str
+    cms_type: CmsType
+    has_credentials: bool
+    languages: list[str]
+
+
+class DomainPickerResponse(BaseModel):
+    """Paginated envelope. ``has_more`` lets the combobox decide whether
+    to fetch the next page (no need to expose total when we don't need to
+    render a page-N-of-M control)."""
+
+    items: list[DomainPickerItem]
+    total: int
+    page: int
+    page_size: int
+    has_more: bool

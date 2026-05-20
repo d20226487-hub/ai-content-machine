@@ -99,20 +99,45 @@ async def create_bulk_publish_run(
             raise HTTPException(status_code=404, detail="Domain not found")
         domain_id = domain.id
         profile = _norm_profile(payload.profile_name)
-        # Update mode is WordPress-only. We block here in single mode so
-        # the user sees the rejection immediately at run creation instead
-        # of every row failing one by one. (Multi mode catches it per-row
-        # via resolve_row_target since each row might point at a different
-        # cms_type.)
-        if payload.operation == "update" and domain.cms_type != "wordpress":
+        # Validate operation vs cms_type per-CMS at run creation so the user
+        # gets a clear rejection instead of every row failing one by one.
+        # Multi mode validates per-row in resolve_row_target since each row
+        # may point at a different cms_type.
+        if payload.operation == "upsert" and domain.cms_type != "custom":
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Update mode is supported only for WordPress domains. "
+                    "Upsert is supported only for Custom CMS domains. "
                     f"{domain.name!r} is configured as {domain.cms_type}; "
-                    "use Single mode + Create, or switch the domain's CMS type."
+                    "use Create or Update instead."
                 ),
             )
+        if payload.operation == "update" and domain.cms_type == "wordpress":
+            # WP update relies on find_post → PATCH, which needs the lookup
+            # column. Custom CMS update reads the upstream id from a
+            # field_to_column mapping ('id'); see the check below.
+            if payload.lookup_kind is None or payload.lookup_column_id is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "WordPress Update mode requires lookup_kind + "
+                        "lookup_column_id (the column holding the post id "
+                        "or slug for each row)."
+                    ),
+                )
+        if payload.operation == "update" and domain.cms_type == "custom":
+            # Custom CMS update sends `id` in the body. The user must map
+            # the bulk table's id column to the `id` field; without it the
+            # upstream has nothing to PATCH.
+            if "id" not in payload.field_to_column:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Custom CMS Update mode requires the 'id' field to "
+                        "be mapped to a column (the column holding the "
+                        "upstream page id for each row)."
+                    ),
+                )
     else:
         # Multi mode: domain_column_id required (Pydantic enforced); profile
         # column required when ANY domain in the table is WordPress. We can't
@@ -157,15 +182,16 @@ async def create_bulk_publish_run(
             )
         language_column_id = payload.language_column_id
 
-    # Update mode: ensure the lookup column exists on this table. The
-    # Pydantic validator already asserted the field is present; here we
-    # check it actually refers to a column of this bulk table.
+    # Update mode: ensure the lookup column exists on this table (WP only —
+    # Custom CMS update sends no lookup column, it reads `id` from
+    # field_to_column instead). The WP-vs-Custom split was already done
+    # above; here we just bind the column when present.
     lookup_kind = payload.lookup_kind
     lookup_column_id = payload.lookup_column_id
-    if payload.operation == "update":
+    if payload.operation == "update" and payload.lookup_column_id is not None:
         if not await _column_belongs_to_table(
             db,
-            column_id=payload.lookup_column_id,  # type: ignore[arg-type]
+            column_id=payload.lookup_column_id,
             table_id=table.id,
         ):
             raise HTTPException(

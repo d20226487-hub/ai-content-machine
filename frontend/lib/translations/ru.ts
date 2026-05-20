@@ -1121,6 +1121,34 @@ export const ru: Record<keyof typeof en, string> = {
   "bulkPub.title": "Массовая публикация",
   "bulkPub.subtitle":
     "Каждая строка таблицы {table} становится отдельной записью. Сопоставьте поля публикации с колонками; при необходимости укажите колонки, в которые будут записаны новый ID и URL записи.",
+  "bulkPub.cmsType": "Тип CMS",
+  "bulkPub.cmsTypeWordPress": "WordPress",
+  "bulkPub.cmsTypeCustom": "Custom CMS",
+  "bulkPub.cmsTypeWordPressHint":
+    "Показать настройки для WordPress (профили, Создать/Обновить, поиск, конфликт slug). В списке доменов ниже будут только WordPress-сайты.",
+  "bulkPub.cmsTypeCustomHint":
+    "Показать настройки для Custom CMS. В списке доменов ниже будут только Custom-CMS-сайты.",
+  "bulkPub.noDomainsForType":
+    "нет доменов этого типа CMS — добавьте в /publish/domains или переключите тип выше",
+  "domainCombo.placeholder": "Поиск доменов по названию или URL…",
+  "domainCombo.loading": "Загрузка…",
+  "domainCombo.loadFailed": "Не удалось загрузить домены",
+  "domainCombo.noMatches": "Нет доменов по запросу {q}",
+  "domainCombo.noDomainsForType":
+    "Нет доменов этого типа CMS. Добавьте в /publish/domains.",
+  "domainCombo.noCreds": "нет ключей",
+  "domainCombo.refineHint": "Показано {shown} из {total} — введите для фильтрации.",
+  "bulkPub.opUpsert": "Upsert",
+  "bulkPub.customCreateHint":
+    "Отправляется action=create. Слаг, заголовок, контент (и любые другие поля body_template) создают новую страницу на сайте.",
+  "bulkPub.customUpdateHint":
+    "Отправляется action=update с upstream id. Сопоставьте колонку таблицы с полем 'id' ниже; остальные сопоставленные поля будут обновлены на существующей странице.",
+  "bulkPub.customUpsertHint":
+    "Отправляется action=upsert. Сервер ищет страницу по slug — если нашёл, обновляет; если нет, создаёт новую.",
+  "bulkPub.upsertCustomOnly":
+    "Upsert поддерживается только для Custom CMS. Для WordPress используйте Create или Update.",
+  "bulkPub.customUpdateNeedsId":
+    "Для Update в Custom CMS нужно сопоставить поле 'id' с колонкой таблицы.",
   "bulkPub.mode": "Режим",
   "bulkPub.modeSingle": "Один сайт",
   "bulkPub.modeMulti": "Несколько сайтов",
@@ -1156,6 +1184,8 @@ export const ru: Record<keyof typeof en, string> = {
   "bulkPub.skip": "— пропустить —",
   "bulkPub.noFieldsDetected":
     "Для этого назначения не обнаружено полей публикации. Для Custom CMS в шаблоне тела должны быть значения {{плейсхолдеров}}; для WP — настройте форму публикации на домене.",
+  "bulkPub.noFieldsCustomEmpty":
+    "В шаблоне тела домена {name} нет {{плейсхолдеров}}, сопоставлять нечего. Отредактируйте домен в /publish/domains, добавив плейсхолдеры, либо выберите другой домен в поиске выше.",
   "bulkPub.backFill": "Колонки для обратной записи (необязательно)",
   "bulkPub.backFillHint":
     "После каждой успешной публикации новый ID и URL записи записываются в указанные колонки массовой таблицы.",

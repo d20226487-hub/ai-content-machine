@@ -11,7 +11,7 @@ export type BulkRunStatus =
 export type RowFilter = "all" | "selected" | "range";
 export type CellFilter = "all" | "unpublished" | "failed";
 export type PublishMode = "single" | "multi";
-export type PublishOperation = "create" | "update";
+export type PublishOperation = "create" | "update" | "upsert";
 export type PublishLookupKind = "id" | "slug";
 /** What to do in Create mode when a row's slug already exists on the target. */
 export type OnSlugConflict = "create" | "skip" | "update";

@@ -74,3 +74,185 @@ def test_explicit_lang_field_overrides_alias():
     values.setdefault("language", "en")
     values.setdefault("lang", "en")
     assert _substitute(body, values) == {"lang": "ru"}
+
+
+# ---- drop-empty behavior ----------------------------------------------------
+#
+# These pin the invariant that lets one body_template cover create / update /
+# upsert: when a bare {{key}} placeholder resolves to missing-or-empty, the
+# whole key/value pair is dropped from the outgoing body. Previously the
+# literal string ``"{{id}}"`` would have been sent.
+
+
+def test_missing_placeholder_drops_key_from_dict():
+    body = {"id": "{{id}}", "title": "{{title}}"}
+    assert _substitute(body, {"title": "hello"}) == {"title": "hello"}
+
+
+def test_empty_string_placeholder_drops_key():
+    """An empty input field is the same as 'didn't provide it'."""
+    body = {"id": "{{id}}", "title": "{{title}}"}
+    assert _substitute(body, {"id": "", "title": "hello"}) == {"title": "hello"}
+
+
+def test_none_placeholder_drops_key():
+    body = {"id": "{{id}}", "title": "{{title}}"}
+    assert _substitute(body, {"id": None, "title": "hello"}) == {"title": "hello"}
+
+
+def test_all_keys_dropped_yields_empty_dict():
+    body = {"id": "{{id}}", "slug": "{{slug}}"}
+    assert _substitute(body, {}) == {}
+
+
+def test_create_action_payload_shape():
+    """Create: action+lang+slug+content present, id blank → dropped."""
+    body = {
+        "action": "{{action}}",
+        "id": "{{id}}",
+        "lang": "{{lang}}",
+        "slug": "{{slug}}",
+        "title": "{{title}}",
+        "content": "{{content}}",
+    }
+    values = {
+        "action": "create",
+        "id": "",
+        "lang": "en",
+        "slug": "new-page",
+        "title": "Hi",
+        "content": "<p>Hi</p>",
+    }
+    assert _substitute(body, values) == {
+        "action": "create",
+        "lang": "en",
+        "slug": "new-page",
+        "title": "Hi",
+        "content": "<p>Hi</p>",
+    }
+
+
+def test_update_action_payload_shape():
+    """Update: only action+id+fields-being-changed survive; lang/slug dropped."""
+    body = {
+        "action": "{{action}}",
+        "id": "{{id}}",
+        "lang": "{{lang}}",
+        "slug": "{{slug}}",
+        "title": "{{title}}",
+        "seo_description": "{{seo_description}}",
+    }
+    values = {
+        "action": "update",
+        "id": "page_abc",
+        "lang": "",
+        "slug": "",
+        "title": "New title",
+        "seo_description": "New meta",
+    }
+    assert _substitute(body, values) == {
+        "action": "update",
+        "id": "page_abc",
+        "title": "New title",
+        "seo_description": "New meta",
+    }
+
+
+def test_interpolation_still_substitutes_empty_for_missing():
+    """Regression guard: only PURE {{key}} placeholders get dropped.
+    Interpolated strings keep their empty-string fallback so we don't
+    accidentally break callers that depend on that path."""
+    body = {"url": "/posts/{{slug}}"}
+    assert _substitute(body, {}) == {"url": "/posts/"}
+
+
+def test_list_drops_missing_entries():
+    body = {"tags": ["{{tag_a}}", "{{tag_b}}", "{{tag_c}}"]}
+    assert _substitute(body, {"tag_b": "kept"}) == {"tags": ["kept"]}
+
+
+# ---- relative-URL absolutization --------------------------------------------
+#
+# The publish history renders cms_post_url as a clickable anchor. Some CMSes
+# return relative paths in their response — those would resolve against ACM's
+# own origin, not the target site. Pin the absolutization here.
+
+
+def test_relative_url_is_absolutized_against_base_url():
+    """Mock the HTTP round-trip and assert the post-processing path."""
+    import asyncio
+    from unittest.mock import patch, MagicMock, AsyncMock
+
+    from app.cms.custom import CustomCmsClient
+
+    cfg = {
+        "endpoint_path": "/index.php?__add_content=1",
+        "body_template": {"slug": "{{slug}}", "content": "{{content}}"},
+        "response_id_path": "data.id",
+        "response_url_path": "data.url",
+    }
+    client = CustomCmsClient(
+        base_url="https://test-crm.mrba-stage1.xyz",
+        credentials="login:password",
+        auth_type="basic_auth",
+        custom_config=cfg,
+    )
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 201
+    mock_resp.content = b"{}"
+    mock_resp.json.return_value = {
+        "ok": True,
+        "data": {"id": "page_abc", "url": "/en/test-page/"},
+    }
+
+    async def _fake_post(*a, **kw):
+        return mock_resp
+
+    with patch("app.cms.custom.httpx.AsyncClient") as mac:
+        mac.return_value.__aenter__.return_value.post = AsyncMock(side_effect=_fake_post)
+        result = asyncio.run(
+            client.publish_post(
+                fields={"slug": "test-page", "content": "<p>x</p>"},
+                language="en",
+            )
+        )
+
+    assert result.ok is True
+    assert result.cms_post_id == "page_abc"
+    # Was "/en/test-page/", now absolute.
+    assert result.cms_post_url == "https://test-crm.mrba-stage1.xyz/en/test-page/"
+
+
+def test_absolute_url_passes_through_unchanged():
+    """Pre-absolute response URLs are not double-prefixed."""
+    import asyncio
+    from unittest.mock import patch, MagicMock, AsyncMock
+
+    from app.cms.custom import CustomCmsClient
+
+    client = CustomCmsClient(
+        base_url="https://test-crm.mrba-stage1.xyz",
+        credentials="login:password",
+        auth_type="basic_auth",
+        custom_config={
+            "endpoint_path": "/x",
+            "body_template": {},
+            "response_id_path": "id",
+            "response_url_path": "url",
+        },
+    )
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = b"{}"
+    mock_resp.json.return_value = {"id": "p1", "url": "https://other-host.example/p1"}
+
+    async def _fake_post(*a, **kw):
+        return mock_resp
+
+    with patch("app.cms.custom.httpx.AsyncClient") as mac:
+        mac.return_value.__aenter__.return_value.post = AsyncMock(side_effect=_fake_post)
+        result = asyncio.run(client.publish_post(fields={}, language="en"))
+
+    assert result.cms_post_url == "https://other-host.example/p1"

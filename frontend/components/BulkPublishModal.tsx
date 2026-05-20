@@ -1,15 +1,27 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { Modal } from "@/components/Modal";
+import { BackFill } from "@/components/bulkPublish/BackFill";
+import { CellFilter } from "@/components/bulkPublish/CellFilter";
+import { CmsTypeSegmented } from "@/components/bulkPublish/CmsTypeSegmented";
+import { CustomCmsActionPanel } from "@/components/bulkPublish/CustomCmsActionPanel";
+import { FieldMapping } from "@/components/bulkPublish/FieldMapping";
+import { MultiModeSection } from "@/components/bulkPublish/MultiModeSection";
+import { RowFilter } from "@/components/bulkPublish/RowFilter";
+import { SingleModeSection } from "@/components/bulkPublish/SingleModeSection";
+import { WordPressOperationPanel } from "@/components/bulkPublish/WordPressOperationPanel";
 import { ApiError } from "@/lib/api";
 import { useT } from "@/lib/i18n-context";
 import {
   DEFAULT_WP_FIELDS,
-  listDomains,
+  getDomain,
+  listDomainsPicker,
+  type CmsType,
   type Domain,
+  type DomainPickerItem,
   type PublishProfile,
 } from "@/lib/domains";
 import {
@@ -19,25 +31,22 @@ import {
   getMappingMulti,
   getMappingSingle,
   type BulkPublishPayload,
-  type CellFilter,
+  // Type aliases keep these distinct from the same-named components
+  // we import from @/components/bulkPublish/* above.
+  type CellFilter as CellFilterValue,
   type OnSlugConflict,
   type PublishLookupKind,
   type PublishMode,
   type PublishOperation,
-  type RowFilter,
+  type RowFilter as RowFilterValue,
 } from "@/lib/publishBulk";
-import type { BulkColumn, BulkTable } from "@/lib/types";
+import type { BulkTable } from "@/lib/types";
+import type { FieldSlot } from "@/components/bulkPublish/FieldMapping";
 
 interface Props {
   table: BulkTable;
   selectedRowIds: number[];
   onClose: () => void;
-}
-
-interface FieldSlot {
-  key: string;
-  label: string;
-  required: boolean;
 }
 
 export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
@@ -53,7 +62,26 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
   // back-fill carry across modes; only the mode-specific target fields reset.
   const [mode, setMode] = useState<PublishMode>("single");
 
-  const [domains, setDomains] = useState<Domain[] | null>(null);
+  // Phase A: instead of preloading all domains (a problem at thousands of
+  // sites), we now stream them on demand through the picker endpoint.
+  //
+  //   selectedFullDomain — the heavy `Domain` for the currently picked
+  //     id. Fetched via `getDomain(id)` whenever `domainId` changes. The
+  //     `selected` derivation below reads from this; `wpProfiles` and the
+  //     per-domain Language picker both walk its `publish_config` /
+  //     `languages`.
+  //
+  //   multiCanonicalDomain — fetched once when entering multi mode (the
+  //     run uses the first WP domain's first profile as the canonical
+  //     schema for field mapping). Null until that fetch lands.
+  //
+  //   selectedLabel — keeps the combobox input populated with the
+  //     current pick even while `selectedFullDomain` is still in flight
+  //     after a selection click, OR after the user reopens the modal
+  //     with a stored domainId that hasn't been fetched yet.
+  const [selectedFullDomain, setSelectedFullDomain] = useState<Domain | null>(null);
+  const [multiCanonicalDomain, setMultiCanonicalDomain] = useState<Domain | null>(null);
+  const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
   // Single-mode targets
   const [domainId, setDomainId] = useState<number | null>(null);
   const [profileName, setProfileName] = useState<string | null>(null);
@@ -67,12 +95,12 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
 
   const [language, setLanguage] = useState<string | null>(null);
 
-  const [rowFilter, setRowFilter] = useState<RowFilter>(
+  const [rowFilter, setRowFilter] = useState<RowFilterValue>(
     selectedRowIds.length > 0 ? "selected" : "all",
   );
   const [rangeStart, setRangeStart] = useState<string>("1");
   const [rangeEnd, setRangeEnd] = useState<string>(String(table.rows.length));
-  const [cellFilter, setCellFilter] = useState<CellFilter>("all");
+  const [cellFilter, setCellFilter] = useState<CellFilterValue>("all");
 
   const [fieldToColumn, setFieldToColumn] = useState<Record<string, number>>({});
   const [postIdTarget, setPostIdTarget] = useState<number | "">("");
@@ -95,22 +123,102 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
   const [onSlugConflict, setOnSlugConflict] =
     useState<OnSlugConflict>("create");
 
+  // CMS-type segmented control at the top of the modal. Drives:
+  //   - which CMS-specific panel renders (WP operation knobs vs Custom
+  //     placeholder);
+  //   - which domains the single-mode picker offers below.
+  // Default seeded from the first credentialled domain on load; flipping
+  // the control auto-picks the first matching domain so we never sit on
+  // an inconsistent state where the segmented control says one thing and
+  // `selected` says another.
+  const [cmsTypeFilter, setCmsTypeFilter] = useState<CmsType>("wordpress");
+
+  // Discovery fetch on mount: pick the right CMS-type default from
+  // whatever the first credentialled domain is. The picker is ordered
+  // credentialled-first, so items[0] is the natural default.
+  //
+  // Without this, a user whose entire fleet is Custom would land on the
+  // WP-by-default segmented control and see an empty combobox until they
+  // manually flipped to Custom. One small fetch avoids that papercut.
   useEffect(() => {
-    listDomains()
-      .then((list) => {
-        setDomains(list);
-        const first = list.find((d) => d.has_credentials) ?? list[0] ?? null;
-        if (first) setDomainId(first.id);
+    listDomainsPicker({ page_size: 1 })
+      .then((r) => {
+        if (r.items.length > 0) {
+          setCmsTypeFilter(r.items[0].cms_type);
+        }
       })
       .catch((err) =>
         setLoadError(err instanceof ApiError ? err.message : t("pubMod.failedLoadDomains")),
       );
   }, [t]);
 
-  const selected = useMemo(
-    () => (domainId != null ? domains?.find((d) => d.id === domainId) ?? null : null),
-    [domainId, domains],
+  // When the segmented control flips, the current selection (if any)
+  // probably doesn't match the new type. Clear it; the combobox will
+  // re-fetch with the new cms_type and the onResults callback below
+  // auto-picks the first credentialled match.
+  function onCmsTypeFilterChange(next: CmsType) {
+    if (next === cmsTypeFilter) return;
+    setCmsTypeFilter(next);
+    setDomainId(null);
+    setSelectedFullDomain(null);
+    setSelectedLabel(null);
+  }
+
+  // Called by the combobox after every fresh page of results. We use
+  // this to seed the initial selection (and to re-seed after a
+  // cmsType flip) — picking the first credentialled item if the parent
+  // currently has no selection.
+  const onPickerResults = useCallback(
+    (items: DomainPickerItem[]) => {
+      if (domainId != null) return;
+      const pick = items.find((d) => d.has_credentials) ?? items[0] ?? null;
+      if (!pick) return;
+      setDomainId(pick.id);
+      setSelectedLabel(pick.name);
+    },
+    [domainId],
   );
+
+  // When the user explicitly picks a domain from the combobox, we have
+  // the lite item immediately — store its label so the input stays
+  // populated — and kick off a full Domain fetch so the WP profile
+  // picker / language picker / publish_config-driven slots can render.
+  function onDomainPicked(item: DomainPickerItem) {
+    setDomainId(item.id);
+    setSelectedLabel(item.name);
+    // selectedFullDomain stays at the previous value until the fetch
+    // below resolves; that's a brief flicker for the dependent UI but
+    // not visible in practice (the fetch is sub-50ms on local Postgres).
+  }
+
+  // Fetch the heavy Domain whenever domainId changes (whether from the
+  // combobox or an auto-pick). Latest-wins token guards against a
+  // mid-flight stale result clobbering a newer selection.
+  const fullDomainTokenRef = useRef(0);
+  useEffect(() => {
+    if (domainId == null) {
+      setSelectedFullDomain(null);
+      return;
+    }
+    const token = ++fullDomainTokenRef.current;
+    getDomain(domainId)
+      .then((d) => {
+        if (token !== fullDomainTokenRef.current) return;
+        setSelectedFullDomain(d);
+        setSelectedLabel(d.name);
+      })
+      .catch((err) => {
+        if (token !== fullDomainTokenRef.current) return;
+        setLoadError(
+          err instanceof ApiError ? err.message : t("pubMod.failedLoadDomains"),
+        );
+      });
+  }, [domainId, t]);
+
+  // The full domain record drives everything below — wpProfiles, language
+  // pickers, custom_config-derived slot derivation. Kept as a separate
+  // memo so the dependents don't have to re-check the loading state.
+  const selected = selectedFullDomain;
 
   const wpProfiles: PublishProfile[] = useMemo(() => {
     if (selected?.cms_type !== "wordpress") return [];
@@ -124,17 +232,41 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
     return wpProfiles.find((p) => p.name === profileName) ?? wpProfiles[0] ?? null;
   }, [selected, wpProfiles, profileName]);
 
-  // In multi mode the field map applies to every row regardless of domain.
-  // We use the first WP domain's first profile as the canonical schema —
-  // the user's stated invariant is that all sites share the same fields.
+  // Multi-mode field map applies to every row regardless of which
+  // domain that row resolves to. We use the first WP domain's first
+  // profile as the canonical schema (the user's stated invariant is
+  // that all sites share the same fields).
+  //
+  // Phase A: we no longer have all domains preloaded, so we fetch one
+  // WP domain via the picker on entering multi mode. Cached in
+  // `multiCanonicalDomain`; null until the fetch lands (DEFAULT_WP_FIELDS
+  // fallback below covers the empty / pre-load window).
+  const multiCanonicalTokenRef = useRef(0);
+  useEffect(() => {
+    if (mode !== "multi") return;
+    if (multiCanonicalDomain) return; // cache: fetch once per modal open
+    const token = ++multiCanonicalTokenRef.current;
+    listDomainsPicker({ cms_type: "wordpress", page_size: 1 })
+      .then((r) => {
+        if (token !== multiCanonicalTokenRef.current) return;
+        if (r.items.length === 0) return; // no WP domain → fallback fields
+        return getDomain(r.items[0].id).then((d) => {
+          if (token !== multiCanonicalTokenRef.current) return;
+          setMultiCanonicalDomain(d);
+        });
+      })
+      .catch(() => {
+        // Non-fatal — the slot derivation falls back to DEFAULT_WP_FIELDS.
+      });
+  }, [mode, multiCanonicalDomain]);
+
   const multiCanonicalProfile = useMemo<PublishProfile | null>(() => {
     if (mode !== "multi") return null;
-    const wp = (domains ?? []).find((d) => d.cms_type === "wordpress");
-    if (!wp) return null;
-    const profiles = wp.publish_config?.profiles;
+    if (!multiCanonicalDomain) return null;
+    const profiles = multiCanonicalDomain.publish_config?.profiles;
     if (profiles && profiles.length > 0) return profiles[0];
     return { name: "Default", post_type: "posts", fields: DEFAULT_WP_FIELDS };
-  }, [mode, domains]);
+  }, [mode, multiCanonicalDomain]);
 
   // Compute the set of field "slots" the user must map columns to.
   const slots: FieldSlot[] = useMemo(() => {
@@ -161,6 +293,25 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
       .filter((p) => p !== "language")
       .map((p) => ({ key: p, label: p, required: false }));
   }, [mode, multiCanonicalProfile, selected, activeProfile]);
+
+  // When `slots` resolves to empty, render a context-specific reason in
+  // the FieldMapping panel instead of the generic
+  // "no fields detected" copy. Two realistic causes for an empty list,
+  // both surface here with a clear next step:
+  //   1. Custom CMS domain whose body_template has no {{placeholders}}.
+  //      (Real example: 'lang-single-test' with body_template={x:y}
+  //      auto-picked by alphabetical order — user couldn't figure out
+  //      why fields disappeared until I traced the picker order.)
+  //   2. Multi mode with no WP domain on the account to derive the
+  //      canonical schema from — falls back to DEFAULT_WP_FIELDS via
+  //      `slots` above, so this branch is theoretical today.
+  const mappingEmptyMessage = useMemo<string | null>(() => {
+    if (slots.length > 0) return null;
+    if (mode === "single" && selected?.cms_type === "custom") {
+      return t("bulkPub.noFieldsCustomEmpty", { name: selected.name });
+    }
+    return null; // FieldMapping falls back to the generic key
+  }, [slots.length, mode, selected, t]);
 
   // Pick default profile for single-WP when selected domain changes.
   useEffect(() => {
@@ -465,21 +616,26 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
 
     if (mode === "single" && !selected) return;
 
-    // Update mode is WP-only. Catch single-mode + Custom CMS here so the
-    // user gets a clear message before the request goes out.
-    if (
-      operation === "update" &&
-      mode === "single" &&
-      selected &&
-      selected.cms_type !== "wordpress"
-    ) {
-      setError(t("bulkPub.updateWpOnly", { name: selected.name }));
+    // Per-CMS, per-operation submit-time validation. Keep the messages
+    // specific so the user knows exactly what to fix.
+    const cmsType = cmsTypeFilter;
+    if (operation === "upsert" && cmsType !== "custom") {
+      setError(t("bulkPub.upsertCustomOnly"));
       return;
     }
-
-    if (operation === "update" && lookupColumnId === "") {
-      setError(t("bulkPub.updateLookupRequired"));
-      return;
+    if (operation === "update" && cmsType === "wordpress") {
+      // WP update path uses find_post → PATCH, needs the lookup column.
+      if (lookupColumnId === "") {
+        setError(t("bulkPub.updateLookupRequired"));
+        return;
+      }
+    }
+    if (operation === "update" && cmsType === "custom") {
+      // Custom CMS update sends `id` in the body — must be mapped.
+      if (!("id" in fieldToColumn)) {
+        setError(t("bulkPub.customUpdateNeedsId"));
+        return;
+      }
     }
 
     if (
@@ -541,15 +697,20 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
       operation,
     };
 
-    if (operation === "update") {
+    if (operation === "update" && cmsTypeFilter === "wordpress") {
+      // WP update uses find_post → PATCH driven by the lookup column.
+      // Custom CMS update reads `id` directly from a field_to_column
+      // mapping, so we deliberately omit lookup_* in that branch.
       payload.lookup_kind = lookupKind;
       payload.lookup_column_id = Number(lookupColumnId);
-    } else {
+    } else if (operation === "create") {
       // Slug-conflict handling lives on Create only. Server rejects
-      // mixing this with operation='update', so we just don't send it
-      // for Update runs.
+      // mixing this with operation='update' or 'upsert', so we just
+      // don't send it for those.
       payload.on_slug_conflict = onSlugConflict;
     }
+    // operation === 'upsert' or Custom-CMS update: no lookup_*, no
+    // on_slug_conflict. Server-side action injection does the rest.
 
     if (mode === "single") {
       payload.domain_id = selected!.id;
@@ -607,6 +768,10 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
           </div>
         )}
 
+        {/* CMS-type segmented control — drives which settings render below
+            and filters the single-mode domain picker. */}
+        <CmsTypeSegmented value={cmsTypeFilter} onChange={onCmsTypeFilterChange} />
+
         {/* Mode toggle */}
         <div>
           <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
@@ -634,449 +799,92 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
           </p>
         </div>
 
-        {/* Operation toggle: Create vs Update. */}
-        <div>
-          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
-            {t("bulkPub.operation")}
-          </span>
-          <div className="inline-flex rounded-md border border-neutral-300 p-0.5 dark:border-neutral-700">
-            {(["create", "update"] as const).map((op) => (
-              <button
-                key={op}
-                type="button"
-                onClick={() => setOperationTouched(op)}
-                className={
-                  "rounded px-3 py-1 text-sm font-medium transition-colors " +
-                  (operation === op
-                    ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
-                    : "text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100")
-                }
-              >
-                {op === "create"
-                  ? t("bulkPub.opCreate")
-                  : t("bulkPub.opUpdate")}
-              </button>
-            ))}
-          </div>
-          <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-            {operation === "create"
-              ? t("bulkPub.opCreateHint")
-              : t("bulkPub.opUpdateHint")}
-          </p>
-        </div>
-
-        {/* Create mode: what to do when a row's slug already exists. */}
-        {operation === "create" && (
-          <div className="rounded-md border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-800/30">
-            <Field label={t("bulkPub.onSlugConflict")}>
-              <div className="inline-flex rounded-md border border-neutral-300 bg-white p-0.5 dark:border-neutral-700 dark:bg-neutral-900">
-                {(["create", "skip", "update"] as const).map((opt) => (
-                  <button
-                    key={opt}
-                    type="button"
-                    onClick={() => setOnSlugConflictTouched(opt)}
-                    className={
-                      "rounded px-3 py-1 text-xs font-medium transition-colors " +
-                      (onSlugConflict === opt
-                        ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
-                        : "text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100")
-                    }
-                  >
-                    {opt === "create"
-                      ? t("bulkPub.onSlugCreate")
-                      : opt === "skip"
-                      ? t("bulkPub.onSlugSkip")
-                      : t("bulkPub.onSlugUpdate")}
-                  </button>
-                ))}
-              </div>
-            </Field>
-            <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-              {onSlugConflict === "create"
-                ? t("bulkPub.onSlugCreateHint")
-                : onSlugConflict === "skip"
-                ? t("bulkPub.onSlugSkipHint")
-                : t("bulkPub.onSlugUpdateHint")}
-            </p>
-            {onSlugConflict !== "create" && !("slug" in fieldToColumn) && (
-              <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
-                {t("bulkPub.slugConflictNeedsSlug")}
-              </p>
-            )}
-          </div>
+        {/* CMS-specific operation panel. WP shows operation + conflict +
+            lookup; Custom shows a placeholder until the action-injection
+            wiring lands in the follow-up PR. */}
+        {cmsTypeFilter === "wordpress" ? (
+          <WordPressOperationPanel
+            operation={operation}
+            onOperationChange={setOperationTouched}
+            onSlugConflict={onSlugConflict}
+            onSlugConflictChange={setOnSlugConflictTouched}
+            lookupKind={lookupKind}
+            onLookupKindChange={setLookupKindTouched}
+            lookupColumnId={lookupColumnId}
+            onLookupColumnIdChange={setLookupColumnId}
+            columns={table.columns}
+            fieldToColumn={fieldToColumn}
+          />
+        ) : (
+          <CustomCmsActionPanel
+            operation={operation}
+            onOperationChange={setOperationTouched}
+          />
         )}
 
-        {/* Update mode: look-up controls. */}
-        {operation === "update" && (
-          <div className="rounded-md border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-800/30">
-            <div className="grid grid-cols-2 gap-3">
-              <Field label={t("bulkPub.lookupKind")}>
-                <div className="inline-flex rounded-md border border-neutral-300 bg-white p-0.5 dark:border-neutral-700 dark:bg-neutral-900">
-                  {(["id", "slug"] as const).map((k) => (
-                    <button
-                      key={k}
-                      type="button"
-                      onClick={() => setLookupKindTouched(k)}
-                      className={
-                        "rounded px-3 py-1 text-xs font-medium transition-colors " +
-                        (lookupKind === k
-                          ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
-                          : "text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100")
-                      }
-                    >
-                      {k === "id" ? t("bulkPub.lookupKindId") : t("bulkPub.lookupKindSlug")}
-                    </button>
-                  ))}
-                </div>
-              </Field>
-              <Field label={t("bulkPub.lookupColumn")}>
-                <select
-                  value={lookupColumnId}
-                  onChange={(e) =>
-                    setLookupColumnId(e.target.value === "" ? "" : Number(e.target.value))
-                  }
-                  className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-                >
-                  <option value="">— {t("bulkPub.lookupColumnPlaceholder")} —</option>
-                  {table.columns.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            </div>
-            <p className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
-              {lookupKind === "id"
-                ? t("bulkPub.lookupHintId")
-                : t("bulkPub.lookupHintSlug")}
-            </p>
-            <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
-              {t("bulkPub.updateBlankHint")}
-            </p>
-          </div>
+        {mode === "single" ? (
+          <SingleModeSection
+            cmsTypeFilter={cmsTypeFilter}
+            domainId={domainId}
+            selectedLabel={selectedLabel}
+            onDomainPicked={onDomainPicked}
+            onPickerResults={onPickerResults}
+            selected={selected}
+            wpProfiles={wpProfiles}
+            profileName={profileName}
+            onProfileNameChange={setProfileName}
+            language={language}
+            onLanguageChange={setLanguage}
+            languageColumnId={languageColumnId}
+            onLanguageColumnIdChange={setLanguageColumnId}
+            columns={eligibleColumns}
+          />
+        ) : (
+          <MultiModeSection
+            domainColumnId={domainColumnId}
+            onDomainColumnIdChange={setDomainColumnId}
+            profileColumnId={profileColumnId}
+            onProfileColumnIdChange={setProfileColumnId}
+            languageColumnId={languageColumnId}
+            onLanguageColumnIdChange={setLanguageColumnId}
+            columns={eligibleColumns}
+          />
         )}
 
-        {/* Single-mode: Domain + Profile dropdowns */}
-        {mode === "single" && (
-          <div className="grid grid-cols-2 gap-3">
-            <Field label={t("bulkPub.fieldDomain")}>
-              <select
-                value={domainId ?? ""}
-                onChange={(e) => setDomainId(Number(e.target.value))}
-                className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-              >
-                {(domains ?? []).map((d) => (
-                  <option key={d.id} value={d.id} disabled={!d.has_credentials}>
-                    {d.name} ({d.cms_type}){!d.has_credentials ? t("pubMod.noCreds") : ""}
-                  </option>
-                ))}
-              </select>
-            </Field>
+        <RowFilter
+          value={rowFilter}
+          onChange={setRowFilter}
+          rangeStart={rangeStart}
+          rangeEnd={rangeEnd}
+          onRangeStartChange={setRangeStart}
+          onRangeEndChange={setRangeEnd}
+          totalRows={table.rows.length}
+          selectedCount={selectedRowIds.length}
+        />
 
-            {selected?.cms_type === "wordpress" && wpProfiles.length > 0 && (
-              <Field label={t("bulkPub.fieldPostType")}>
-                <select
-                  value={profileName ?? ""}
-                  onChange={(e) => setProfileName(e.target.value)}
-                  disabled={wpProfiles.length === 1}
-                  className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm disabled:opacity-70 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-                >
-                  {wpProfiles.map((p) => (
-                    <option key={p.name} value={p.name}>
-                      {p.name} — {p.post_type}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            )}
+        <CellFilter
+          value={cellFilter}
+          onChange={setCellFilter}
+          hasPostIdTarget={postIdTarget !== ""}
+        />
 
-            {selected && selected.languages.length > 1 && (
-              <Field label={t("bulkPub.fieldLanguage")}>
-                <select
-                  value={language ?? ""}
-                  onChange={(e) => setLanguage(e.target.value)}
-                  className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-                >
-                  {selected.languages.map((l) => (
-                    <option key={l} value={l}>
-                      {l}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            )}
-
-            {/* Optional per-row language column for Single mode. Shown only
-                when the selected domain advertises >1 language — for a
-                single-language site this is just clutter. When set, the
-                run-level Language picker above becomes the fallback for
-                display; the actual language per row comes from the cell.
-                Same strict semantics as multi-mode: empty cell fails the
-                row, unknown value fails the row. */}
-            {selected && selected.languages.length > 1 && (
-              <Field label={t("bulkPub.fieldLanguageColumn")}>
-                <select
-                  value={languageColumnId}
-                  onChange={(e) =>
-                    setLanguageColumnId(e.target.value ? Number(e.target.value) : "")
-                  }
-                  className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-                >
-                  <option value="">{t("bulkPub.languageColumnDefault")}</option>
-                  {eligibleColumns.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-                <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
-                  {t("bulkPub.languageColumnHint")}
-                </p>
-              </Field>
-            )}
-          </div>
-        )}
-
-        {/* Multi-mode: column pickers */}
-        {mode === "multi" && (
-          <div className="grid grid-cols-2 gap-3">
-            <Field label={t("bulkPub.fieldDomainColumn")}>
-              <select
-                value={domainColumnId}
-                onChange={(e) =>
-                  setDomainColumnId(e.target.value ? Number(e.target.value) : "")
-                }
-                className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-              >
-                <option value="">{t("bulkPub.pickColumn")}</option>
-                {eligibleColumns.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label={t("bulkPub.fieldProfileColumn")}>
-              <select
-                value={profileColumnId}
-                onChange={(e) =>
-                  setProfileColumnId(e.target.value ? Number(e.target.value) : "")
-                }
-                className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-              >
-                <option value="">{t("bulkPub.profileColumnDefault")}</option>
-                {eligibleColumns.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-              <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
-                {t("bulkPub.profileColumnHint")}
-              </p>
-            </Field>
-            <Field label={t("bulkPub.fieldLanguageColumn")}>
-              <select
-                value={languageColumnId}
-                onChange={(e) =>
-                  setLanguageColumnId(e.target.value ? Number(e.target.value) : "")
-                }
-                className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-              >
-                <option value="">{t("bulkPub.languageColumnDefault")}</option>
-                {eligibleColumns.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-              <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
-                {t("bulkPub.languageColumnHint")}
-              </p>
-            </Field>
-          </div>
-        )}
-
-        {/* Row filter */}
-        <div>
-          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
-            {t("bulkPub.rows")}
-          </span>
-          <div className="flex flex-wrap items-center gap-3 text-sm">
-            <label className="flex items-center gap-1">
-              <input
-                type="radio"
-                checked={rowFilter === "all"}
-                onChange={() => setRowFilter("all")}
-              />
-              {t("bulkPub.rowsAll", { count: table.rows.length })}
-            </label>
-            <label className="flex items-center gap-1">
-              <input
-                type="radio"
-                checked={rowFilter === "selected"}
-                onChange={() => setRowFilter("selected")}
-                disabled={selectedRowIds.length === 0}
-              />
-              {t("bulkPub.rowsSelected", { count: selectedRowIds.length })}
-            </label>
-            <label className="flex items-center gap-1">
-              <input
-                type="radio"
-                checked={rowFilter === "range"}
-                onChange={() => setRowFilter("range")}
-              />
-              {t("bulkPub.rowsRange")}
-            </label>
-            {rowFilter === "range" && (
-              <span className="flex items-center gap-1 text-xs text-neutral-600 dark:text-neutral-400">
-                <input
-                  type="number"
-                  min={1}
-                  value={rangeStart}
-                  onChange={(e) => setRangeStart(e.target.value)}
-                  className="w-20 rounded-md border border-neutral-300 bg-white px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-                />
-                <span>–</span>
-                <input
-                  type="number"
-                  min={1}
-                  value={rangeEnd}
-                  onChange={(e) => setRangeEnd(e.target.value)}
-                  className="w-20 rounded-md border border-neutral-300 bg-white px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-                />
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Cell filter */}
-        <div>
-          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
-            {t("bulkPub.cellFilter")}
-          </span>
-          <div className="flex flex-wrap items-center gap-3 text-sm">
-            <label className="flex items-center gap-1">
-              <input
-                type="radio"
-                checked={cellFilter === "all"}
-                onChange={() => setCellFilter("all")}
-              />
-              {t("bulkPub.cellAll")}
-            </label>
-            <label className="flex items-center gap-1">
-              <input
-                type="radio"
-                checked={cellFilter === "unpublished"}
-                onChange={() => setCellFilter("unpublished")}
-              />
-              {t("bulkPub.cellUnpublished")}
-            </label>
-            <label className="flex items-center gap-1">
-              <input
-                type="radio"
-                checked={cellFilter === "failed"}
-                onChange={() => setCellFilter("failed")}
-              />
-              {t("bulkPub.cellFailed")}
-            </label>
-          </div>
-          {cellFilter !== "all" && postIdTarget === "" && (
-            <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
-              {t("bulkPub.cellNeedTarget")}
-            </p>
-          )}
-        </div>
-
-        {/* Field-to-column mapping */}
         {(mode === "multi" || selected) && (
-          <div className="border-t border-neutral-200 pt-3 dark:border-neutral-800">
-            <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
-                {t("bulkPub.mapHeading")}
-              </h3>
-              <button
-                type="button"
-                onClick={onClear}
-                className="text-xs text-neutral-500 underline hover:text-red-600 dark:text-neutral-400 dark:hover:text-red-400"
-              >
-                {t("bulkPub.clearMapping")}
-              </button>
-            </div>
-            <div className="space-y-1 text-sm">
-              {slots.map((s) => (
-                <div
-                  key={s.key}
-                  className="grid grid-cols-[1fr_2fr] items-center gap-2"
-                >
-                  <span className="truncate text-neutral-700 dark:text-neutral-300">
-                    {s.label}
-                    {s.required && <span className="ml-0.5 text-red-600">*</span>}
-                  </span>
-                  <select
-                    value={fieldToColumn[s.key] ?? ""}
-                    onChange={(e) =>
-                      setSlot(s.key, e.target.value ? Number(e.target.value) : null)
-                    }
-                    className="block w-full rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-                  >
-                    <option value="">{t("bulkPub.skip")}</option>
-                    {eligibleColumns.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              ))}
-              {slots.length === 0 && (
-                <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                  {t("bulkPub.noFieldsDetected")}
-                </p>
-              )}
-            </div>
-
-            <h3 className="mt-4 mb-2 text-sm font-semibold text-neutral-900 dark:text-neutral-100">
-              {t("bulkPub.backFill")}
-            </h3>
-            <p className="mb-2 text-xs text-neutral-500 dark:text-neutral-400">
-              {t("bulkPub.backFillHint")}
-            </p>
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <Field label={t("bulkPub.postIdTarget")}>
-                <select
-                  value={postIdTarget}
-                  onChange={(e) =>
-                    setPostIdTarget(e.target.value ? Number(e.target.value) : "")
-                  }
-                  className="block w-full rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-                >
-                  <option value="">{t("bulkPub.backFillNone")}</option>
-                  {eligibleColumns.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label={t("bulkPub.postUrlTarget")}>
-                <select
-                  value={postUrlTarget}
-                  onChange={(e) =>
-                    setPostUrlTarget(e.target.value ? Number(e.target.value) : "")
-                  }
-                  className="block w-full rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-                >
-                  <option value="">{t("bulkPub.backFillNone")}</option>
-                  {eligibleColumns.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            </div>
+          <div className="space-y-4 border-t border-neutral-200 pt-3 dark:border-neutral-800">
+            <FieldMapping
+              slots={slots}
+              fieldToColumn={fieldToColumn}
+              onSlotChange={setSlot}
+              columns={eligibleColumns}
+              onClear={onClear}
+              emptyMessage={mappingEmptyMessage}
+            />
+            <BackFill
+              postIdTarget={postIdTarget}
+              postUrlTarget={postUrlTarget}
+              onPostIdTargetChange={setPostIdTarget}
+              onPostUrlTargetChange={setPostUrlTarget}
+              columns={eligibleColumns}
+            />
           </div>
         )}
 
@@ -1154,23 +962,6 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
         </div>
       </form>
     </Modal>
-  );
-}
-
-function Field({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
-        {label}
-      </span>
-      {children}
-    </label>
   );
 }
 
