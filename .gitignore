@@ -2,6 +2,13 @@
 .env.local
 *.log
 
+# Runtime artifacts tracked in early commits but actually runtime-only.
+# Every developer was seeing a "modified" diff for these on every git
+# status, which polluted the signal. `git rm --cached` was used to
+# untrack them in the same commit that added these lines.
+backend/celerybeat-schedule
+frontend/tsconfig.tsbuildinfo
+
 # Python
 __pycache__/
 *.pyc
