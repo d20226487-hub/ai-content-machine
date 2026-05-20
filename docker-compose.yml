@@ -64,7 +64,38 @@ services:
     # process. Embedded beat is fine at our scale; if we later run multiple
     # workers we'd split beat into its own dedicated service so it stays
     # singleton.
-    command: celery -A app.tasks.celery_app worker --beat --loglevel=info --concurrency=8
+    #
+    # `watchmedo auto-restart` wraps celery so a code change to anything
+    # under /app/app/*.py SIGTERMs and respawns the worker. Mirrors what
+    # uvicorn --reload does for the api service. Without this, editing a
+    # task or service file leaves the worker running stale code until a
+    # manual `docker compose restart worker` (which has bitten us during
+    # bulk-publish iteration: the api hot-reloaded but the worker kept
+    # the old field-injection logic until restarted).
+    #
+    # Debounce 0.5s collapses rapid IDE saves into one restart. SIGTERM
+    # (instead of the watchmedo default SIGKILL) lets Celery flush its
+    # current task and unack any in-flight messages cleanly.
+    #
+    # --debug-force-polling is essential on Windows + macOS: native
+    # inotify events don't reliably propagate from the host into Docker
+    # Desktop's Linux VM across the bind mount, so watchmedo would never
+    # fire on save. Polling has a small CPU cost (an os.stat per file
+    # per interval) which is fine for the dozens of files under
+    # ./backend/app. On native Linux dev this flag is harmless.
+    #
+    # Prod runs celery directly — see docker-compose.prod.yml; watchmedo
+    # is harmless dead code there.
+    command: >
+      watchmedo auto-restart
+      --directory=/app/app
+      --pattern=*.py
+      --recursive
+      --signal SIGTERM
+      --debounce-interval=0.5
+      --debug-force-polling
+      --
+      celery -A app.tasks.celery_app worker --beat --loglevel=info --concurrency=8
     healthcheck:
       # `inspect ping` round-trips a control message through the broker to a
       # live worker. Exits 0 only if at least one worker replies. Catches

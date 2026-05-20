@@ -18,3 +18,8 @@ boto3==1.35.92
 sentry-sdk[fastapi,celery]==2.18.0
 pytest==8.3.4
 pytest-asyncio==0.24.0
+# Dev-only: ships with the `watchmedo` CLI used by docker-compose.yml's
+# worker service to auto-restart Celery on .py file changes. The prod
+# compose runs celery directly; the package is harmless extra bytes
+# there (~100 KB) but avoids needing a separate dev requirements file.
+watchdog==6.0.0
