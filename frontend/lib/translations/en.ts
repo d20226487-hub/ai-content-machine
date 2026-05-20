@@ -827,6 +827,15 @@ export const en = {
   "domains.selectedCount": "{count} selected",
   "domains.selectRow": "Select {name}",
   "domains.moveToFolder": "Move to folder…",
+  "domains.bulkDelete": "Move to Trash",
+  "domains.confirmBulkDelete":
+    "Move {count} domain(s) to Trash? You can restore them from /publish/domains/trash.",
+  "domains.bulkDeletePartial":
+    "Moved {trashed} to Trash. {blocked} could not be deleted:",
+  "domains.selectAllMatchingPrompt":
+    "All {shown} on this page are selected.",
+  "domains.selectAllMatchingAction":
+    "Select all {total} matching the current filter",
   "domains.searchPlaceholder": "Search by name or URL…",
   "domains.totalCount": "{count} total",
   "domains.inFolder": "in {folder}",

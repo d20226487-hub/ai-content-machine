@@ -15,6 +15,7 @@ import { useAuth } from "@/lib/auth-context";
 import { useT } from "@/lib/i18n-context";
 import {
   bulkMoveDomains,
+  bulkTrashDomains,
   createDomainFolder,
   deleteDomain,
   deleteDomainFolder,
@@ -22,6 +23,7 @@ import {
   getDomainTrashCount,
   listDomainFolders,
   listDomainsPicker,
+  listDomainsPickerIds,
   testDomain,
   updateDomainFolder,
   type Domain,
@@ -110,9 +112,12 @@ export default function DomainsPage() {
   // Persist-across-pages selection (user picked this in the
   // AskUserQuestion that drove this work). Selection survives page
   // changes, folder switches, and search-query edits — only the
-  // "Clear selection" button or a successful bulk-move resets it.
+  // "Clear selection" button or a successful bulk-move / bulk-trash
+  // resets it.
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [moving, setMoving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [selectingAll, setSelectingAll] = useState(false);
 
   // ---- debounce search ----
   useEffect(() => {
@@ -335,6 +340,79 @@ export default function DomainsPage() {
     }
   }
 
+  // Bulk-trash flow: confirm → POST /domains/bulk-trash → refresh +
+  // surface partial-success info. The endpoint returns 200 even when
+  // some rows are blocked (active bulk publish runs), so we always
+  // refresh and just describe what happened.
+  async function onBulkDelete() {
+    if (selectedIds.size === 0 || deleting) return;
+    if (!confirm(t("domains.confirmBulkDelete", { count: selectedIds.size }))) return;
+    setDeleting(true);
+    try {
+      const result = await bulkTrashDomains({
+        domain_ids: Array.from(selectedIds),
+      });
+      // Always refresh, even with zero trashed — folder counts may have
+      // changed in some other tab and we'd rather over-fetch than show
+      // a stale row.
+      void loadList();
+      void loadFolders();
+      await refreshTrashCount();
+      // Clear only the ids that actually moved; leave blocked ids
+      // selected so the user can see them and re-attempt after fixing
+      // the blocker (e.g. cancelling the active bulk publish run).
+      if (result.blocked.length === 0) {
+        setSelectedIds(new Set());
+      } else {
+        const blockedIds = new Set(result.blocked.map((b) => b.id));
+        setSelectedIds((s) => {
+          const next = new Set<number>();
+          for (const id of s) if (blockedIds.has(id)) next.add(id);
+          return next;
+        });
+        const sample = result.blocked
+          .slice(0, 3)
+          .map((b) => `• ${b.name ?? `#${b.id}`}: ${b.reason}`)
+          .join("\n");
+        const more =
+          result.blocked.length > 3
+            ? `\n…and ${result.blocked.length - 3} more.`
+            : "";
+        alert(
+          t("domains.bulkDeletePartial", {
+            trashed: result.trashed,
+            blocked: result.blocked.length,
+          }) + "\n\n" + sample + more,
+        );
+      }
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : t("common.deleteFailed"));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  // "Select all N matching" — expands the current selection to every
+  // row that matches the active filter (folder + search + cms_type).
+  // Backend caps the result at 50k; we surface that 400 as-is.
+  async function onSelectAllMatching() {
+    if (selectingAll) return;
+    setSelectingAll(true);
+    try {
+      const folder_id =
+        scope === "all" ? undefined : scope === "root" ? "root" : scope;
+      const { ids } = await listDomainsPickerIds({
+        q: debouncedQuery,
+        folder_id,
+      });
+      setSelectedIds(new Set(ids));
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : t("common.failedToLoad"));
+    } finally {
+      setSelectingAll(false);
+    }
+  }
+
   // -------- selection --------
 
   function toggleSelect(id: number) {
@@ -462,26 +540,65 @@ export default function DomainsPage() {
               Selection persists across pages: the count here is the
               full selection, not just "on this page". */}
           {selectedIds.size > 0 && (
-            <div className="mb-2 flex items-center justify-between rounded-md border border-neutral-300 bg-neutral-50 px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900">
-              <span className="text-neutral-700 dark:text-neutral-300">
-                {t("domains.selectedCount", { count: selectedIds.size })}
-              </span>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setSelectedIds(new Set())}
-                  className="text-xs text-neutral-500 hover:underline dark:text-neutral-400"
-                >
-                  {t("common.clearSelection")}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setModal({ kind: "move" })}
-                  className="rounded-md bg-neutral-900 px-3 py-1 text-xs font-medium text-white dark:bg-neutral-100 dark:text-neutral-900"
-                >
-                  {t("domains.moveToFolder")}
-                </button>
+            <div className="mb-2 space-y-1">
+              <div className="flex items-center justify-between rounded-md border border-neutral-300 bg-neutral-50 px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900">
+                <span className="text-neutral-700 dark:text-neutral-300">
+                  {t("domains.selectedCount", { count: selectedIds.size })}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedIds(new Set())}
+                    className="text-xs text-neutral-500 hover:underline dark:text-neutral-400"
+                  >
+                    {t("common.clearSelection")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setModal({ kind: "move" })}
+                    className="rounded-md bg-neutral-900 px-3 py-1 text-xs font-medium text-white dark:bg-neutral-100 dark:text-neutral-900"
+                  >
+                    {t("domains.moveToFolder")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void onBulkDelete()}
+                    disabled={deleting}
+                    className="rounded-md bg-red-600 px-3 py-1 text-xs font-medium text-white disabled:opacity-50 hover:bg-red-700"
+                  >
+                    {deleting
+                      ? t("common.loading")
+                      : t("domains.bulkDelete")}
+                  </button>
+                </div>
               </div>
+
+              {/* "Select all N matching" — Gmail-style. Shows only when:
+                  - the whole current page is selected
+                  - selection size is still < total matching
+                  - we're not already showing the user the whole world
+                    (no point offering when selection = total). */}
+              {selectedIds.size > 0 &&
+                items.length > 0 &&
+                items.every((it) => selectedIds.has(it.id)) &&
+                selectedIds.size < total && (
+                  <div className="rounded-md bg-blue-50 px-3 py-1.5 text-xs text-blue-800 dark:bg-blue-950/30 dark:text-blue-300">
+                    {t("domains.selectAllMatchingPrompt", {
+                      shown: selectedIds.size,
+                      total,
+                    })}{" "}
+                    <button
+                      type="button"
+                      onClick={() => void onSelectAllMatching()}
+                      disabled={selectingAll}
+                      className="font-medium underline disabled:opacity-50"
+                    >
+                      {selectingAll
+                        ? t("common.loading")
+                        : t("domains.selectAllMatchingAction", { total })}
+                    </button>
+                  </div>
+                )}
             </div>
           )}
 

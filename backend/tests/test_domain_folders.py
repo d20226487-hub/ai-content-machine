@@ -17,6 +17,8 @@ import pytest
 
 from app.schemas.domain_folder import (
     DomainBulkMove,
+    DomainBulkTrash,
+    DomainBulkTrashResult,
     DomainFolderCreate,
     DomainFolderRead,
     DomainFolderUpdate,
@@ -82,6 +84,47 @@ def test_bulk_move_accepts_null_folder_for_root():
     "Move to root" menu item."""
     payload = DomainBulkMove(domain_ids=[1, 2, 3], folder_id=None)
     assert payload.folder_id is None
+
+
+# ---- bulk-trash ----------------------------------------------------------
+
+
+def test_bulk_trash_requires_at_least_one_id():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        DomainBulkTrash(domain_ids=[])
+
+
+def test_bulk_trash_caps_batch_size():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        DomainBulkTrash(domain_ids=list(range(501)))
+
+
+def test_bulk_trash_result_partial_success_shape():
+    """The partial-success contract is important: even if some rows are
+    blocked, the call returns 200 with per-row reasons so the UI can
+    show "X trashed, Y blocked" instead of refusing the whole batch."""
+    result = DomainBulkTrashResult(
+        trashed=3,
+        blocked=[
+            {"id": 7, "name": "site-a.example.com", "reason": "Active bulk publish run #42"},
+            {"id": 99, "name": None, "reason": "Domain not found or already trashed."},
+        ],
+    )
+    dumped = result.model_dump()
+    assert dumped["trashed"] == 3
+    assert len(dumped["blocked"]) == 2
+    assert dumped["blocked"][0]["reason"].startswith("Active bulk publish")
+
+
+def test_bulk_trash_result_empty_blocked_is_default():
+    """A clean run yields blocked=[] (not null) so the UI can iterate
+    unconditionally."""
+    result = DomainBulkTrashResult(trashed=5)
+    assert result.blocked == []
 
 
 # ---- DomainFolderRead shape ------------------------------------------------

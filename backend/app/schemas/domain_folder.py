@@ -7,6 +7,7 @@ UI today, while domains may want per-folder rate-limit defaults or
 project-level tags later.
 """
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -51,3 +52,29 @@ class DomainBulkMove(BaseModel):
 
     domain_ids: list[int] = Field(min_length=1, max_length=500)
     folder_id: int | None = None
+
+
+class DomainBulkTrash(BaseModel):
+    """Body for ``POST /domains/bulk-trash``: soft-delete N domains.
+
+    Same cap as bulk-move. The endpoint will refuse individual ids
+    that have an in-flight bulk publish run (queued / running /
+    paused) and report them back in the response so the UI can
+    surface a per-row reason — partial success is OK; rest still
+    trash.
+    """
+
+    domain_ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class DomainBulkTrashResult(BaseModel):
+    """Response shape for ``POST /domains/bulk-trash``.
+
+    ``trashed`` is the count that actually moved to Trash.
+    ``blocked`` lists per-id reasons (active bulk run, not found,
+    already trashed) so the UI can show a partial-success toast
+    instead of refusing the whole batch.
+    """
+
+    trashed: int
+    blocked: list[dict[str, Any]] = Field(default_factory=list)

@@ -871,6 +871,15 @@ export const ru: Record<keyof typeof en, string> = {
   "domains.selectedCount": "Выбрано: {count}",
   "domains.selectRow": "Выбрать {name}",
   "domains.moveToFolder": "В папку…",
+  "domains.bulkDelete": "В корзину",
+  "domains.confirmBulkDelete":
+    "Переместить домены ({count}) в корзину? Восстановить можно из /publish/domains/trash.",
+  "domains.bulkDeletePartial":
+    "В корзину: {trashed}. Не удалось удалить: {blocked}:",
+  "domains.selectAllMatchingPrompt":
+    "Выбраны все {shown} на этой странице.",
+  "domains.selectAllMatchingAction":
+    "Выбрать все {total} по текущему фильтру",
   "domains.searchPlaceholder": "Поиск по названию или URL…",
   "domains.totalCount": "Всего: {count}",
   "domains.inFolder": "в {folder}",

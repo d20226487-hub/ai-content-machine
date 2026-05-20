@@ -39,7 +39,11 @@ from app.schemas.domain import (
     default_wp_profiles,
     normalize_publish_config,
 )
-from app.schemas.domain_folder import DomainBulkMove
+from app.schemas.domain_folder import (
+    DomainBulkMove,
+    DomainBulkTrash,
+    DomainBulkTrashResult,
+)
 
 router = APIRouter(
     prefix="/domains",
@@ -254,6 +258,66 @@ async def list_domains_picker(
         page_size=page_size,
         has_more=(page * page_size) < total,
     )
+
+
+@router.get("/picker/ids", response_model=dict)
+async def list_domains_picker_ids(
+    q: str | None = Query(None, max_length=200),
+    cms_type: str | None = Query(None),
+    folder_id: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Return just the matching ids for the current filter, no rows.
+
+    Used by the /publish/domains "Select all N matching" affordance.
+    The user has the current page's 50 rows selected; clicking the
+    banner needs to expand that to every row matching the active
+    filter (folder + search + cms_type). We do not paginate this
+    endpoint — Postgres returns ~10k integers in well under 100 ms,
+    and the JSON payload is trivial (an int per row).
+
+    Capped at 50,000 ids defensively. A bulk run that needs to select
+    that many rows is a different UI problem (probably a DB-side
+    admin command); we 400 with a clear message instead of letting
+    a runaway query hold the connection.
+    """
+    base = select(Domain.id).where(Domain.deleted_at.is_(None))
+
+    if cms_type:
+        ct = cms_type.strip().lower()
+        if ct not in ("wordpress", "custom"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"cms_type must be 'wordpress' or 'custom' (got {ct!r}).",
+            )
+        base = base.where(Domain.cms_type == ct)
+
+    folder_clause = _folder_clause(folder_id)
+    if folder_clause is not None:
+        base = base.where(folder_clause)
+
+    q_norm = (q or "").strip()
+    if q_norm:
+        like = (
+            "%"
+            + q_norm.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+            + "%"
+        )
+        base = base.where(Domain.name.ilike(like) | Domain.base_url.ilike(like))
+
+    # Hard cap. If you legitimately need to operate on more than this in
+    # one click, the right shape is server-side batching or an admin
+    # command, not a 50k-id POST.
+    ids = list((await db.execute(base.limit(50_001))).scalars().all())
+    if len(ids) > 50_000:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Filter matches more than 50,000 domains. Narrow it with a "
+                "search query or folder scope before using 'Select all'."
+            ),
+        )
+    return {"ids": ids}
 
 
 # ---------- trash ----------
@@ -526,6 +590,89 @@ async def bulk_move_domains(
         d.folder_id = payload.folder_id
     await db.commit()
     return {"moved": len(rows)}
+
+
+@router.post("/bulk-trash", response_model=DomainBulkTrashResult)
+async def bulk_trash_domains(
+    payload: DomainBulkTrash,
+    db: AsyncSession = Depends(get_db),
+) -> DomainBulkTrashResult:
+    """Soft-delete N active domains in one call.
+
+    Partial success: rows blocked by an in-flight bulk publish run are
+    reported individually in ``blocked[]`` rather than failing the whole
+    batch. Trashed rows (deleted_at IS NOT NULL) are silently skipped —
+    they're already in the destination state.
+
+    The same 409 logic as the single ``DELETE /domains/{id}`` endpoint
+    applies per row: if a (queued | running | paused) bulk publish run
+    references the domain, that domain is left untouched and shows up
+    with a ``reason`` in the response so the UI can surface "X trashed,
+    Y blocked — cancel the active runs first".
+    """
+    active_domains = (
+        await db.execute(
+            select(Domain).where(
+                Domain.id.in_(payload.domain_ids),
+                Domain.deleted_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    active_by_id = {d.id: d for d in active_domains}
+
+    # Bulk-fetch the run-id-by-domain-id map once, instead of N queries.
+    # Picks any run in an active status; the response only needs to know
+    # whether there is one (and which run, for the UI message).
+    blocking_rows = (
+        await db.execute(
+            select(BulkPublishRun.id, BulkPublishRun.domain_id)
+            .where(
+                BulkPublishRun.domain_id.in_([d.id for d in active_domains]),
+                BulkPublishRun.status.in_(_ACTIVE_BULK_RUN_STATUSES),
+            )
+        )
+    ).all()
+    blocking_run_by_domain: dict[int, int] = {}
+    for run_id, dom_id in blocking_rows:
+        blocking_run_by_domain.setdefault(int(dom_id), int(run_id))
+
+    blocked: list[dict[str, object]] = []
+    now = datetime.now(timezone.utc)
+    trashed = 0
+    for d in active_domains:
+        run_id = blocking_run_by_domain.get(d.id)
+        if run_id is not None:
+            blocked.append(
+                {
+                    "id": d.id,
+                    "name": d.name,
+                    "reason": (
+                        f"Active bulk publish run #{run_id} targets this domain. "
+                        f"Cancel the run before deleting."
+                    ),
+                }
+            )
+            continue
+        d.deleted_at = now
+        trashed += 1
+
+    # Also report ids the caller sent that we never resolved as active.
+    # Could be already-trashed, never-existed, or someone-else's-tenant —
+    # don't leak which. A single "not active" reason covers the cases
+    # without disclosing more than we need.
+    resolved = set(active_by_id.keys())
+    for stray in payload.domain_ids:
+        if stray not in resolved:
+            blocked.append(
+                {
+                    "id": stray,
+                    "name": None,
+                    "reason": "Domain not found or already trashed.",
+                }
+            )
+
+    await db.commit()
+    return DomainBulkTrashResult(trashed=trashed, blocked=blocked)
 
 
 @router.post("", response_model=DomainRead, status_code=status.HTTP_201_CREATED)

@@ -362,3 +362,44 @@ export function bulkMoveDomains(payload: {
     body: payload,
   });
 }
+
+/** Per-id reason for a row that couldn't be trashed (active bulk run,
+ *  not found, etc). The UI shows these in a partial-success toast. */
+export interface DomainBulkTrashBlocked {
+  id: number;
+  name: string | null;
+  reason: string;
+}
+
+export interface DomainBulkTrashResult {
+  trashed: number;
+  blocked: DomainBulkTrashBlocked[];
+}
+
+export function bulkTrashDomains(payload: { domain_ids: number[] }) {
+  return api<DomainBulkTrashResult>("/domains/bulk-trash", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+/**
+ * Fetch every id matching the current filter — no rows, no pagination.
+ * Used by the "Select all N matching" affordance on the /publish/domains
+ * list page. The server caps the result at 50,000 ids and 400s otherwise.
+ */
+export function listDomainsPickerIds(params: {
+  q?: string;
+  cms_type?: CmsType;
+  folder_id?: number | "root";
+} = {}) {
+  const qs = new URLSearchParams();
+  if (params.q && params.q.trim()) qs.set("q", params.q.trim());
+  if (params.cms_type) qs.set("cms_type", params.cms_type);
+  if (params.folder_id !== undefined)
+    qs.set("folder_id", String(params.folder_id));
+  const query = qs.toString();
+  return api<{ ids: number[] }>(
+    `/domains/picker/ids${query ? `?${query}` : ""}`,
+  );
+}
