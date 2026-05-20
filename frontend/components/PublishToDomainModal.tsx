@@ -86,6 +86,13 @@ export function PublishToDomainModal({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PublishJobDetail | null>(null);
 
+  // Tracks whether the fleet is empty (no domains at all) so we can show
+  // the "noneConnected" hint that the pre-picker version had — without
+  // it the user would see an empty combobox and no explanation. Three-
+  // state: null = still loading, false = at least one exists, true =
+  // confirmed empty.
+  const [fleetEmpty, setFleetEmpty] = useState<boolean | null>(null);
+
   // Discovery on mount: seed the CMS-type segmented control to whatever
   // the first credentialled domain happens to be (picker is ordered
   // credentialled-first). Avoids the papercut of an all-Custom fleet
@@ -93,6 +100,7 @@ export function PublishToDomainModal({
   useEffect(() => {
     listDomainsPicker({ page_size: 1 })
       .then((r) => {
+        setFleetEmpty(r.items.length === 0);
         if (r.items.length > 0) {
           setCmsType(r.items[0].cms_type);
         }
@@ -267,6 +275,12 @@ export function PublishToDomainModal({
           <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
             {loadError}
           </div>
+        )}
+
+        {fleetEmpty && (
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">
+            {t("pubMod.noneConnected")}
+          </p>
         )}
 
         <TargetPicker
