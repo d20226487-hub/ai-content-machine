@@ -871,6 +871,12 @@ export const ru: Record<keyof typeof en, string> = {
   "domains.selectedCount": "Выбрано: {count}",
   "domains.selectRow": "Выбрать {name}",
   "domains.moveToFolder": "В папку…",
+  "domains.searchPlaceholder": "Поиск по названию или URL…",
+  "domains.totalCount": "Всего: {count}",
+  "domains.inFolder": "в {folder}",
+  "domains.emptySearch": "Нет доменов по запросу {q}.",
+  "domains.pageSizeLabel": "На странице:",
+  "domains.pageOfTotal": "Стр. {page} из {total}",
 
   // folder tree on /publish/domains (migration 0027 redesign)
   "domainFolders.heading": "Папки",

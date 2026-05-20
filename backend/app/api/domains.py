@@ -239,8 +239,11 @@ async def list_domains_picker(
             name=d.name,
             base_url=d.base_url,
             cms_type=d.cms_type,
+            auth_type=d.auth_type,
             has_credentials=d.has_credentials,
             languages=d.languages or [],
+            multilingual_plugin=d.multilingual_plugin,
+            folder_id=d.folder_id,
         )
         for d in rows
     ]

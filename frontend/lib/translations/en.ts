@@ -827,6 +827,12 @@ export const en = {
   "domains.selectedCount": "{count} selected",
   "domains.selectRow": "Select {name}",
   "domains.moveToFolder": "Move to folder…",
+  "domains.searchPlaceholder": "Search by name or URL…",
+  "domains.totalCount": "{count} total",
+  "domains.inFolder": "in {folder}",
+  "domains.emptySearch": "No domains match {q}.",
+  "domains.pageSizeLabel": "Per page:",
+  "domains.pageOfTotal": "Page {page} of {total}",
 
   // folder tree on /publish/domains (migration 0027 redesign)
   "domainFolders.heading": "Folders",

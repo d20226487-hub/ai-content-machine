@@ -18,13 +18,16 @@ import {
   createDomainFolder,
   deleteDomain,
   deleteDomainFolder,
+  getDomain,
   getDomainTrashCount,
   listDomainFolders,
-  listDomains,
+  listDomainsPicker,
   testDomain,
   updateDomainFolder,
   type Domain,
   type DomainFolder,
+  type DomainPickerItem,
+  type DomainPickerResponse,
   type FolderScope,
   type TestConnectionResult,
 } from "@/lib/domains";
@@ -57,6 +60,9 @@ function scopeToParam(scope: FolderScope): string | null {
   return String(scope);
 }
 
+const PAGE_SIZE_OPTIONS = [50, 100, 200] as const;
+const DEFAULT_PAGE_SIZE: (typeof PAGE_SIZE_OPTIONS)[number] = 50;
+
 export default function DomainsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -65,8 +71,7 @@ export default function DomainsPage() {
 
   const isAuthorized = user && ["admin", "manager"].includes(user.role.name);
 
-  // URL state drives the folder scope. Back/forward and deep-links Just
-  // Work because we never store this twice.
+  // Folder scope lives in the URL so deep links + back/forward Just Work.
   const scope = useMemo(
     () => parseScope(searchParams.get("folder")),
     [searchParams],
@@ -78,24 +83,57 @@ export default function DomainsPage() {
     router.push(`/publish/domains${qs}`);
   }
 
-  const [domains, setDomains] = useState<Domain[] | null>(null);
+  // -------- list state (paginated picker) --------
+  //
+  // The /publish/domains list page used to hit /domains and pull the
+  // full Domain[]. At a thousand-plus domains the publish_config blob
+  // pushed the payload past several MB. We now read from the lite
+  // picker endpoint (Phase A) with pagination + server-side search,
+  // and fetch the full Domain on demand for the edit modal.
+  const [pickerData, setPickerData] = useState<DomainPickerResponse | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<(typeof PAGE_SIZE_OPTIONS)[number]>(
+    DEFAULT_PAGE_SIZE,
+  );
+  const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [folders, setFolders] = useState<DomainFolder[]>([]);
   const [loadingFolders, setLoadingFolders] = useState(false);
+  const [loadingList, setLoadingList] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState>({ kind: "closed" });
+  const [editLoadingId, setEditLoadingId] = useState<number | null>(null);
   const [testing, setTesting] = useState<Set<number>>(new Set());
   const [testResults, setTestResults] = useState<Record<number, TestConnectionResult>>({});
   const [trashCount, setTrashCount] = useState(0);
-  // Bulk-select state for the "Move to folder…" action.
+
+  // Persist-across-pages selection (user picked this in the
+  // AskUserQuestion that drove this work). Selection survives page
+  // changes, folder switches, and search-query edits — only the
+  // "Clear selection" button or a successful bulk-move resets it.
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [moving, setMoving] = useState(false);
+
+  // ---- debounce search ----
+  useEffect(() => {
+    const handle = window.setTimeout(() => setDebouncedQuery(query), 200);
+    return () => window.clearTimeout(handle);
+  }, [query]);
+
+  // Reset to page 1 whenever the result set changes shape. Without
+  // this, a user typing into the search box while on page 5 would
+  // immediately see "no results" because the new (smaller) result set
+  // doesn't have a page 5.
+  useEffect(() => {
+    setPage(1);
+  }, [scope, debouncedQuery, pageSize]);
 
   const refreshTrashCount = useCallback(async () => {
     try {
       const { count } = await getDomainTrashCount();
       setTrashCount(count);
     } catch {
-      // non-critical; the badge just won't show
+      // non-critical
     }
   }, []);
 
@@ -119,25 +157,36 @@ export default function DomainsPage() {
     }
   }, [t]);
 
-  const loadDomains = useCallback(
-    async (currentScope: FolderScope) => {
-      try {
-        const list = await listDomains(currentScope);
-        setDomains(list);
-        setLoadError(null);
-        // Selection refers to ids; if the current selection contains
-        // ids not in the new list (folder switch), drop them.
-        setSelectedIds((s) => {
-          const next = new Set<number>();
-          for (const d of list) if (s.has(d.id)) next.add(d.id);
-          return next;
-        });
-      } catch (err) {
-        setLoadError(err instanceof ApiError ? err.message : t("common.failedToLoad"));
-      }
-    },
-    [t],
-  );
+  // ---- list fetch ----
+  //
+  // Latest-wins token: if the user types fast, several fetches may be
+  // in flight; only the most recent should set state. Same pattern as
+  // the combobox.
+  const [fetchToken, setFetchToken] = useState(0);
+  const loadList = useCallback(async () => {
+    const token = fetchToken + 1;
+    setFetchToken(token);
+    setLoadingList(true);
+    try {
+      const folder_id =
+        scope === "all" ? undefined : scope === "root" ? "root" : scope;
+      const r = await listDomainsPicker({
+        q: debouncedQuery,
+        folder_id,
+        page,
+        page_size: pageSize,
+      });
+      setPickerData(r);
+      setLoadError(null);
+    } catch (err) {
+      setLoadError(err instanceof ApiError ? err.message : t("common.failedToLoad"));
+    } finally {
+      setLoadingList(false);
+    }
+    // fetchToken is intentionally not a dep — we only want the token
+    // captured at call-time, not a refetch when it changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope, debouncedQuery, page, pageSize, t]);
 
   useEffect(() => {
     if (!isAuthorized) return;
@@ -146,28 +195,52 @@ export default function DomainsPage() {
 
   useEffect(() => {
     if (!isAuthorized) return;
-    void loadDomains(scope);
-  }, [isAuthorized, scope, loadDomains]);
+    void loadList();
+  }, [isAuthorized, loadList]);
 
   if (authLoading || !user || !isAuthorized) return null;
 
+  const items = pickerData?.items ?? [];
+  const total = pickerData?.total ?? 0;
+  const hasMore = pickerData?.has_more ?? false;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
   // -------- modal helpers --------
 
-  function upsert(d: Domain) {
-    // After save, the domain may have been moved to a folder outside
-    // the current scope. Refetch the domain list to keep the page
-    // accurate; refetch folder counts because they're now stale.
-    void loadDomains(scope);
+  function afterDomainSaved(_d: Domain) {
+    void loadList();
     void loadFolders();
     setModal({ kind: "closed" });
   }
 
-  async function onDelete(target: Domain) {
+  async function onEditClick(id: number) {
+    // The list shows the lite picker shape; the edit modal needs the
+    // full Domain (publish_config / custom_config). Brief load is
+    // ~50ms on local Postgres — fine to keep the click flow simple.
+    setEditLoadingId(id);
+    try {
+      const d = await getDomain(id);
+      setModal({ kind: "edit", domain: d });
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : t("common.failedToLoad"));
+    } finally {
+      setEditLoadingId(null);
+    }
+  }
+
+  async function onDelete(target: DomainPickerItem) {
     if (!confirm(t("domains.confirmDelete", { name: target.name }))) return;
     try {
       await deleteDomain(target.id);
-      setDomains((list) => (list ? list.filter((x) => x.id !== target.id) : list));
-      void loadFolders(); // counts changed
+      // Drop from selection if present, then refetch.
+      setSelectedIds((s) => {
+        if (!s.has(target.id)) return s;
+        const next = new Set(s);
+        next.delete(target.id);
+        return next;
+      });
+      void loadList();
+      void loadFolders();
       await refreshTrashCount();
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
@@ -178,7 +251,7 @@ export default function DomainsPage() {
     }
   }
 
-  async function onTest(target: Domain) {
+  async function onTest(target: DomainPickerItem) {
     setTesting((s) => new Set(s).add(target.id));
     try {
       const r = await testDomain(target.id);
@@ -212,8 +285,6 @@ export default function DomainsPage() {
         name: name.trim(),
         parent_id: parentId,
       });
-      // Optimistically push so the user sees their new folder
-      // immediately; counts re-derive from `loadFolders`.
       setFolders((arr) => [...arr, { ...created, domain_count: 0, subfolder_count: 0 }]);
       setScope(created.id);
     } catch (err) {
@@ -237,13 +308,10 @@ export default function DomainsPage() {
     try {
       await deleteDomainFolder(folder.id);
       setFolders((arr) => arr.filter((f) => f.id !== folder.id));
-      // If we were viewing the now-deleted folder, hop up to its parent
-      // (or "all" if it was top-level).
       if (scope === folder.id) {
         setScope(folder.parent_id ?? "all");
       }
     } catch (err) {
-      // 400 with the friendly "non-empty" message is the most common case.
       alert(err instanceof ApiError ? err.message : t("common.deleteFailed"));
     }
   }
@@ -256,7 +324,7 @@ export default function DomainsPage() {
         domain_ids: Array.from(selectedIds),
         folder_id: folderId,
       });
-      void loadDomains(scope);
+      void loadList();
       void loadFolders();
       setSelectedIds(new Set());
       setModal({ kind: "closed" });
@@ -278,15 +346,33 @@ export default function DomainsPage() {
     });
   }
 
-  function toggleSelectAll() {
-    if (!domains) return;
+  // "Select all" applies to the current page only — clicking it adds
+  // every visible row id to the selection, or removes them if all
+  // visible are already selected. Selection from other pages is
+  // preserved.
+  const allOnPageSelected =
+    items.length > 0 && items.every((it) => selectedIds.has(it.id));
+
+  function toggleSelectAllOnPage() {
     setSelectedIds((s) => {
-      if (s.size === domains.length) return new Set();
-      return new Set(domains.map((d) => d.id));
+      const next = new Set(s);
+      if (allOnPageSelected) {
+        for (const it of items) next.delete(it.id);
+      } else {
+        for (const it of items) next.add(it.id);
+      }
+      return next;
     });
   }
 
-  const allSelected = domains != null && domains.length > 0 && selectedIds.size === domains.length;
+  // Folder-name lookup for the small "in <folder>" badge on rows when
+  // viewing the "All domains" scope (where rows can come from any
+  // folder, so the placement is non-obvious).
+  const folderNameById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const f of folders) m.set(f.id, f.name);
+    return m;
+  }, [folders]);
 
   return (
     <main className="mx-auto max-w-7xl px-5 py-6">
@@ -350,8 +436,31 @@ export default function DomainsPage() {
         <section className="min-w-0 flex-1">
           <DomainBreadcrumb folders={folders} selected={scope} onSelect={setScope} />
 
-          {/* Bulk-action bar appears only when 1+ rows are selected. Kept
-              outside the table so the count stays visible while scrolling. */}
+          {/* Search bar — debounced 200 ms server-side so even a 50k-row
+              account can type without blocking. */}
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div className="flex flex-1 items-center gap-2">
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={t("domains.searchPlaceholder")}
+                className="block w-full max-w-md rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+              />
+              {loadingList && (
+                <span className="text-xs text-neutral-500 dark:text-neutral-400">
+                  {t("common.loading")}
+                </span>
+              )}
+            </div>
+            <span className="text-xs text-neutral-500 dark:text-neutral-400">
+              {t("domains.totalCount", { count: total })}
+            </span>
+          </div>
+
+          {/* Bulk-action bar — appears only when ≥ 1 row is selected.
+              Selection persists across pages: the count here is the
+              full selection, not just "on this page". */}
           {selectedIds.size > 0 && (
             <div className="mb-2 flex items-center justify-between rounded-md border border-neutral-300 bg-neutral-50 px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900">
               <span className="text-neutral-700 dark:text-neutral-300">
@@ -383,8 +492,8 @@ export default function DomainsPage() {
                   <th className="w-8 px-3 py-2">
                     <input
                       type="checkbox"
-                      checked={allSelected}
-                      onChange={toggleSelectAll}
+                      checked={allOnPageSelected}
+                      onChange={toggleSelectAllOnPage}
                       aria-label={t("common.selectAll")}
                     />
                   </th>
@@ -399,23 +508,29 @@ export default function DomainsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
-                {domains === null && (
+                {pickerData === null && (
                   <tr>
                     <td colSpan={9} className="px-3 py-8 text-center text-neutral-500">
                       {t("common.loading")}
                     </td>
                   </tr>
                 )}
-                {domains !== null && domains.length === 0 && (
+                {pickerData !== null && items.length === 0 && (
                   <tr>
                     <td colSpan={9} className="px-3 py-8 text-center text-neutral-500">
-                      {t("domains.empty")}
+                      {debouncedQuery
+                        ? t("domains.emptySearch", { q: debouncedQuery })
+                        : t("domains.empty")}
                     </td>
                   </tr>
                 )}
-                {domains?.map((d) => {
+                {items.map((d) => {
                   const tr = testResults[d.id];
                   const isChecked = selectedIds.has(d.id);
+                  const folderName =
+                    scope === "all" && d.folder_id != null
+                      ? folderNameById.get(d.folder_id)
+                      : undefined;
                   return (
                     <tr
                       key={d.id}
@@ -434,6 +549,11 @@ export default function DomainsPage() {
                       </td>
                       <td className="px-3 py-2 font-medium text-neutral-900 dark:text-neutral-100">
                         {d.name}
+                        {folderName && (
+                          <span className="ml-2 text-[10px] font-normal text-neutral-500">
+                            {t("domains.inFolder", { folder: folderName })}
+                          </span>
+                        )}
                       </td>
                       <td className="px-3 py-2 font-mono text-xs text-neutral-700 dark:text-neutral-300">
                         {d.base_url}
@@ -493,10 +613,11 @@ export default function DomainsPage() {
                       </td>
                       <td className="px-3 py-2 text-right text-xs">
                         <button
-                          onClick={() => setModal({ kind: "edit", domain: d })}
-                          className="mr-3 text-neutral-700 hover:underline dark:text-neutral-300"
+                          onClick={() => void onEditClick(d.id)}
+                          disabled={editLoadingId === d.id}
+                          className="mr-3 text-neutral-700 hover:underline disabled:opacity-50 dark:text-neutral-300"
                         >
-                          {t("common.edit")}
+                          {editLoadingId === d.id ? t("common.loading") : t("common.edit")}
                         </button>
                         <button
                           onClick={() => onDelete(d)}
@@ -511,27 +632,73 @@ export default function DomainsPage() {
               </tbody>
             </table>
           </div>
+
+          {/* Pagination footer. Hidden when the result fits on one
+              page — no use of vertical space for a "page 1 of 1" line. */}
+          {(total > pageSize || page > 1) && (
+            <div className="mt-2 flex items-center justify-between text-xs text-neutral-600 dark:text-neutral-400">
+              <div className="flex items-center gap-2">
+                <span>{t("domains.pageSizeLabel")}</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) =>
+                    setPageSize(
+                      Number(e.target.value) as (typeof PAGE_SIZE_OPTIONS)[number],
+                    )
+                  }
+                  className="rounded-md border border-neutral-300 bg-white px-2 py-0.5 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+                >
+                  {PAGE_SIZE_OPTIONS.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="tabular-nums">
+                  {t("domains.pageOfTotal", { page, total: totalPages })}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page <= 1 || loadingList}
+                  className="rounded-md border border-neutral-300 px-2 py-0.5 disabled:opacity-40 dark:border-neutral-700"
+                >
+                  {t("common.prev")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => p + 1)}
+                  disabled={!hasMore || loadingList}
+                  className="rounded-md border border-neutral-300 px-2 py-0.5 disabled:opacity-40 dark:border-neutral-700"
+                >
+                  {t("common.next")}
+                </button>
+              </div>
+            </div>
+          )}
         </section>
       </div>
 
       {modal.kind === "create" && (
         <DomainModal
           onClose={() => setModal({ kind: "closed" })}
-          onSaved={upsert}
+          onSaved={afterDomainSaved}
         />
       )}
       {modal.kind === "edit" && (
         <DomainModal
           domain={modal.domain}
           onClose={() => setModal({ kind: "closed" })}
-          onSaved={upsert}
+          onSaved={afterDomainSaved}
         />
       )}
       {modal.kind === "import" && (
         <DomainCsvImportModal
           onClose={() => setModal({ kind: "closed" })}
           onImported={() => {
-            void loadDomains(scope);
+            void loadList();
             void loadFolders();
           }}
         />
@@ -540,7 +707,7 @@ export default function DomainsPage() {
         <DomainJsonImportModal
           onClose={() => setModal({ kind: "closed" })}
           onImported={() => {
-            void loadDomains(scope);
+            void loadList();
             void loadFolders();
           }}
         />

@@ -299,18 +299,20 @@ class CsvImportResult(BaseModel):
 
 
 class DomainPickerItem(BaseModel):
-    """Lite shape for the domain picker — used by the bulk + single publish
-    modal comboboxes when the user has thousands of domains.
+    """Lite shape for the domain picker — used by the modal comboboxes
+    AND by the paginated /publish/domains list page (extended for the
+    list page in Phase B post-fix).
 
     Deliberately omits the heavy ``publish_config`` and ``custom_config``
     JSONB blobs (those are 1–2 KB per row for a typical 8-field WP
-    profile). The picker only needs enough to render a result row and
-    decide which entries are credentialled; the full ``Domain`` is
-    fetched on demand via the existing ``GET /domains/{id}`` after the
-    user actually selects something.
+    profile). The picker needs enough to render a row and decide which
+    entries are credentialled; the full ``Domain`` is fetched on demand
+    via ``GET /domains/{id}`` when the user clicks Edit.
 
-    ``languages`` is included because the modal derives the per-domain
-    Language picker from it; it's small (handful of short strings).
+    ``auth_type`` + ``multilingual_plugin`` were added when the
+    /publish/domains list page switched off the full /domains endpoint
+    onto this paginated one — they're each ~30 bytes, well within the
+    "still cheap at 5k rows" budget. The combobox callers ignore them.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -319,8 +321,14 @@ class DomainPickerItem(BaseModel):
     name: str
     base_url: str
     cms_type: CmsType
+    auth_type: AuthType
     has_credentials: bool
     languages: list[str]
+    multilingual_plugin: MultilingualPlugin
+    # Folder placement so the list page can show "in Projects/Casino"
+    # next to a row when the user is in "All domains" mode. Null for
+    # implicit-root rows.
+    folder_id: int | None
 
 
 class DomainPickerResponse(BaseModel):

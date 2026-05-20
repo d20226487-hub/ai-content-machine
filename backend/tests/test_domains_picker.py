@@ -21,15 +21,24 @@ from app.schemas.domain import DomainPickerItem, DomainPickerResponse
 
 def test_picker_item_has_only_lite_fields():
     """The lite shape MUST NOT carry publish_config or custom_config —
-    they're what the picker exists to avoid serializing."""
+    they're what the picker exists to avoid serializing.
+
+    `auth_type`, `multilingual_plugin`, and `folder_id` were added when
+    the /publish/domains list page started using this endpoint for its
+    paginated table — small fields (each ~30 bytes or less), well
+    within the "still cheap at 5k rows" budget.
+    """
     item = DomainPickerItem.model_validate(
         {
             "id": 1,
             "name": "Site A",
             "base_url": "https://a.example.com",
             "cms_type": "wordpress",
+            "auth_type": "wp_app_password",
             "has_credentials": True,
             "languages": ["en", "ru"],
+            "multilingual_plugin": "polylang",
+            "folder_id": 7,
         }
     )
     dumped = item.model_dump()
@@ -38,8 +47,11 @@ def test_picker_item_has_only_lite_fields():
         "name",
         "base_url",
         "cms_type",
+        "auth_type",
         "has_credentials",
         "languages",
+        "multilingual_plugin",
+        "folder_id",
     }
     # Belt: confirm the two heavy keys are not part of the schema.
     assert "publish_config" not in dumped
@@ -84,8 +96,11 @@ def test_picker_response_has_more_signals_next_page():
                 name=f"d{i}",
                 base_url=f"https://d{i}",
                 cms_type="wordpress",
+                auth_type="wp_app_password",
                 has_credentials=True,
                 languages=[],
+                multilingual_plugin="none",
+                folder_id=None,
             )
             for i in range(50)
         ],

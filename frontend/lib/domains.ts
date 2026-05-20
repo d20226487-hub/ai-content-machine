@@ -142,8 +142,13 @@ export interface DomainPickerItem {
   name: string;
   base_url: string;
   cms_type: CmsType;
+  auth_type: AuthType;
   has_credentials: boolean;
   languages: string[];
+  multilingual_plugin: MultilingualPlugin;
+  /** Folder placement (null = implicit root). Lets the list page show
+   *  "in <folder>" badges when the user is in "All domains" mode. */
+  folder_id: number | null;
 }
 
 export interface DomainPickerResponse {
@@ -164,12 +169,17 @@ export interface DomainPickerResponse {
 export function listDomainsPicker(params: {
   q?: string;
   cms_type?: CmsType;
+  /** Folder scope. Number = that folder. "root" = no-folder. Omit = no
+   *  folder filter (every folder). Same semantics as listDomains(). */
+  folder_id?: number | "root";
   page?: number;
   page_size?: number;
 } = {}) {
   const qs = new URLSearchParams();
   if (params.q && params.q.trim()) qs.set("q", params.q.trim());
   if (params.cms_type) qs.set("cms_type", params.cms_type);
+  if (params.folder_id !== undefined)
+    qs.set("folder_id", String(params.folder_id));
   if (params.page) qs.set("page", String(params.page));
   if (params.page_size) qs.set("page_size", String(params.page_size));
   const query = qs.toString();
