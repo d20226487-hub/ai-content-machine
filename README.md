@@ -32,13 +32,13 @@ backend/
     api/         FastAPI routers
     core/        config, security, crypto, ssrf
     db/          base, async session, models
-    providers/   AI Studio / OpenRouter / GitHub Models
+    providers/   AI Studio / Vertex AI / OpenRouter / GitHub Models
     cms/         WordPress + Custom CMS clients
     services/    prompts, ai_assist, bulk_generation, rate_limit, retry,
                  publish_single, publish_bulk, media_cache, login_throttle, ...
     tasks/       celery_app, bulk_generation, publish_single, publish_bulk
     schemas/     Pydantic v2 request/response models
-  alembic/versions/   0001..0014
+  alembic/versions/   0001..0028
   tests/              pytest suite (SSRF, JWT, publish state machine, ...)
   Dockerfile          dev (single-stage, --reload)
   Dockerfile.prod     prod (multi-stage, non-root, tini, no reload)
@@ -230,6 +230,7 @@ need rotation; the loader treats it as a one-key list.
 | ----------------------------------- | --------------------------------------------------- | ------------------ |
 | User passwords                      | `users.password_hash`                               | bcrypt (one-way)   |
 | LLM provider API keys               | `providers.api_key_encrypted`                       | Fernet             |
+| LLM provider structured creds       | `providers.extra_config_encrypted` (Vertex SA JSON, project_id, location) | Fernet |
 | WordPress / Custom CMS credentials  | `domains.credentials_encrypted`                     | Fernet             |
 | JWT signing secret                  | `JWT_SECRET` env var                                | n/a (server-side)  |
 | Fernet key(s)                       | `FERNET_KEY` / `FERNET_KEYS` env var                | n/a (server-side)  |

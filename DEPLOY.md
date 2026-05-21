@@ -394,6 +394,7 @@ admin UI) right before any deploy that includes a migration. The README's
 | ----------------------------------- | --------------------------------------------------- | ------------------ |
 | User passwords                      | `users.password_hash`                               | bcrypt (one-way)   |
 | LLM provider API keys               | `providers.api_key_encrypted`                       | Fernet             |
+| LLM provider structured creds       | `providers.extra_config_encrypted` (Vertex SA JSON, project_id, location) | Fernet |
 | WordPress / Custom CMS credentials  | `domains.credentials_encrypted`                     | Fernet             |
 | S3 backup access keys               | `app_settings.backup_config`                        | Fernet             |
 | JWT signing secret                  | `JWT_SECRET` env var                                | n/a (server-side)  |

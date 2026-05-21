@@ -7,9 +7,22 @@
 В системе зарегистрировано несколько провайдеров. У каждого — карточка с настройками:
 
 - **AI Studio** (Google) — Gemini-модели через Google AI Studio.
+- **Vertex AI** (Google Cloud) — корпоративные квоты Gemini через GCP.
 - **OpenRouter** — единый шлюз ко многим моделям через OpenAI-совместимый API.
 - **GitHub Models** — OpenAI-совместимый эндпойнт GitHub.
-- **Vertex AI** — зарегистрирован, но **не реализован**. При попытке Test connection возвращается «provider recognised but not implemented yet».
+
+## Vertex AI — два режима авторизации
+
+В отличие от остальных провайдеров, Vertex AI работает в двух режимах — карточка сама подстраивается под то, что вы заполнили:
+
+- **Service-account JSON (рекомендуется для прода)** — нужны три поля:
+  - **GCP project ID** — например, `my-content-project-123`.
+  - **Location** — регион aiplatform, например `us-central1` или `europe-west4`.
+  - **Service-account JSON** — целиком вставьте JSON, скачанный из GCP Console (IAM → Service Accounts → Keys → Add Key). У сервисного аккаунта должна быть роль **Vertex AI User** на проекте.
+  Бэкенд минтит OAuth2 access-token и обращается к региональному `{location}-aiplatform.googleapis.com`. Полная квота тарифа, без ограничений Express.
+- **Vertex Express (API-ключ)** — заполните **только** обычное поле API key выше; project_id, location и SA JSON оставьте пустыми. Бэкенд пойдёт на глобальный `aiplatform.googleapis.com/?key=…`. Удобно для пробы, но квоты тугие.
+
+JSON сервисного аккаунта при сохранении шифруется Fernet и обратно в UI не показывается — кнопка **Clear** под полем стирает все три поля сразу. Тест-коннект использует сохранённые поля (если поменяли JSON — сначала сохраните, потом тестируйте).
 
 ## Включение провайдера
 
