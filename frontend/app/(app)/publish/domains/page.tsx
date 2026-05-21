@@ -602,7 +602,15 @@ export default function DomainsPage() {
             </div>
           )}
 
-          <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
+          {/* `overflow-x-auto` (not `overflow-hidden`): when the viewport is
+              narrower than the table's content width — happens on ~1280px
+              laptops once you have the checkbox + 7 data columns + the
+              edit/delete column — the user can horizontally scroll instead
+              of having the rightmost Edit / Delete column silently clipped
+              off-screen. `overflow-hidden` was hiding them entirely on
+              narrow viewports. The rounded corners still work fine with
+              `auto` because the container itself stays inside its border. */}
+          <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
             <table className="min-w-full divide-y divide-neutral-200 text-sm dark:divide-neutral-800">
               <thead className="bg-neutral-50 dark:bg-neutral-900/50">
                 <tr className="text-left text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
