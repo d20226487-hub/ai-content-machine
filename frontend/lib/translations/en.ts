@@ -842,6 +842,7 @@ export const en = {
   "publish.tabDomains": "Domains",
   "publish.tabSingleRuns": "Single Runs",
   "publish.tabBulkRuns": "Bulk Runs",
+  "publish.tabLanguages": "Languages",
 
   // domains page
   "domains.title": "Domains",
@@ -1248,6 +1249,95 @@ export const en = {
   "bulkRun.onSlugUpsertHint":
     "Rows whose slug already exists on the target are patched instead of creating a new post (per-language).",
   "bulkPub.andMore": "…and {count} more",
+
+  // Pre-flight language sync (Multi-mode bulk publish, Custom CMS)
+  "langSync.title": "Sync languages to target sites first",
+  "langSync.subtitle":
+    "Push the language sets each site needs (derived from this table) before publishing. Already-existing languages are no-ops.",
+  "langSync.syncButton": "Sync to {count} site(s)",
+  "langSync.syncing": "Syncing…",
+  "langSync.summary":
+    "Done — {ok} ok, {fail} failed, {skip} skipped",
+  "langSync.skipped": "Skipped",
+  "langSync.viewThisRun": "View this run →",
+  "langSync.viewHistory": "View run history",
+
+  // Standalone language-sync page (/publish/languages)
+  "langPage.title": "Languages",
+  "langPage.subtitle":
+    "Push language sets to Custom CMS sites. History of every sync is kept here.",
+  "langPage.newSync": "Run new sync",
+  "langPage.newSyncTitle": "Run a new sync",
+  "langPage.newSyncHint":
+    "Pick a Custom CMS domain and type the languages to upsert (comma-separated or one per line).",
+  "langPage.fieldDomain": "Target domain",
+  "langPage.fieldDomains": "Target domains",
+  "langPage.fieldLanguages": "Languages",
+  "langPage.languagesPlaceholder": "en, es, fr — or one per line",
+  "langPage.overridePerSite": "Use different languages per site",
+  "langPage.chipRemove": "Remove",
+  "langPage.willApplyToCount":
+    "Will push [{langs}] to {count} site(s).",
+  "langPage.willSyncCount": "Will sync {count} site(s) in one run.",
+  "langPage.importCsv": "Import CSV…",
+
+  // CSV import modal for language sync
+  "langCsv.title": "Import sites + languages from CSV",
+  "langCsv.subtitle":
+    "Upload a CSV to populate the form with up to 500 sites at once. Each row becomes one chip with its own language list.",
+  "langCsv.hint":
+    "Format: two columns — `domain` and `languages`. Languages can be comma-, space-, or semicolon-separated inside the cell. Header row is optional.",
+  "langCsv.downloadSample": "Download sample CSV",
+  "langCsv.fileLabel": "CSV file",
+  "langCsv.validating": "Validating domain names…",
+  "langCsv.previewTitle": "Ready to apply — {count} sites parsed:",
+  "langCsv.applyButton": "Apply to form",
+  "langCsv.errorRead": "Could not read file: {err}",
+  "langCsv.errorEmpty": "The CSV file is empty.",
+  "langCsv.errorNoRows": "No usable rows found in the CSV.",
+  "langCsv.errorRowShape": "Line {line}: expected 2 columns, got {cols}.",
+  "langCsv.errorRowEmptyDomain": "Line {line}: domain cell is empty.",
+  "langCsv.errorRowEmptyLangs":
+    "Line {line} ({domain}): languages cell is empty.",
+  "langCsv.errorUnknown":
+    "{count} domain name(s) don't exist in /publish/domains — import rejected:",
+  "langCsv.errorUnknownFix":
+    "Fix the CSV (rename or remove these rows) and upload again. Nothing has been sent yet.",
+  // Multi-domain picker (popover with search + checkboxes)
+  "multiPicker.openEmpty": "Pick Custom CMS domains…",
+  "multiPicker.openWithCount": "Picked: {count}",
+  "multiPicker.searchPlaceholder": "Search domains by name…",
+  "multiPicker.loading": "Loading…",
+  "multiPicker.empty": "No matching domains.",
+  "multiPicker.noCreds": "no creds",
+  "multiPicker.tickedCount": "{count} ticked",
+  "multiPicker.apply": "Apply",
+  "multiPicker.cancel": "Cancel",
+  "langPage.cancel": "Cancel",
+  "langPage.startSync": "Sync",
+  "langPage.runningSync": "Syncing…",
+  "langPage.historyTitle": "Past runs",
+  "langPage.historyEmpty": "No runs yet — trigger one from a bulk-publish modal or above.",
+  "langPage.colWhen": "When",
+  "langPage.colBy": "By",
+  "langPage.colSource": "Source",
+  "langPage.colTotals": "Counts",
+  "langPage.colActions": "",
+  "langPage.viewLink": "View",
+  "langPage.sourceBulkModal": "Bulk modal",
+  "langPage.sourceStandalone": "Standalone",
+  "langPage.runTitle": "Run #{id}",
+  "langPage.runBack": "← Back to language runs",
+  "langPage.runMeta": "{date} · by {by} · {source}",
+  "langPage.runCounts": "{total} total · {ok} ok · {fail} failed · {skip} skipped",
+  "langPage.resultDomain": "Domain",
+  "langPage.resultLanguages": "Languages",
+  "langPage.resultStatus": "Status",
+  "langPage.resultDetail": "Detail",
+  "langPage.resultElapsed": "Elapsed",
+  "langPage.resultOk": "ok",
+  "langPage.resultFail": "failed",
+  "langPage.resultSkipped": "skipped",
   "bulkPub.missingRequired": "Missing column for required field(s): {fields}",
   "bulkPub.noRowsSelected": "No rows selected.",
   "bulkPub.failedToStart": "Failed to start run",

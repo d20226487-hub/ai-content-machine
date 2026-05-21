@@ -9,6 +9,7 @@ import { CellFilter } from "@/components/bulkPublish/CellFilter";
 import { CmsTypeSegmented } from "@/components/bulkPublish/CmsTypeSegmented";
 import { CustomCmsActionPanel } from "@/components/bulkPublish/CustomCmsActionPanel";
 import { FieldMapping } from "@/components/bulkPublish/FieldMapping";
+import { LanguageSync } from "@/components/bulkPublish/LanguageSync";
 import { MultiModeSection } from "@/components/bulkPublish/MultiModeSection";
 import { RowFilter } from "@/components/bulkPublish/RowFilter";
 import { SingleModeSection } from "@/components/bulkPublish/SingleModeSection";
@@ -233,36 +234,48 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
   }, [selected, wpProfiles, profileName]);
 
   // Multi-mode field map applies to every row regardless of which
-  // domain that row resolves to. We use the first WP domain's first
-  // profile as the canonical schema (the user's stated invariant is
-  // that all sites share the same fields).
+  // domain that row resolves to. We use the first credentialled domain
+  // of the SELECTED CMS type as the canonical schema (the user's stated
+  // invariant is that all sites of a given type share the same fields).
   //
   // Phase A: we no longer have all domains preloaded, so we fetch one
-  // WP domain via the picker on entering multi mode. Cached in
-  // `multiCanonicalDomain`; null until the fetch lands (DEFAULT_WP_FIELDS
-  // fallback below covers the empty / pre-load window).
+  // domain via the picker on entering multi mode. Cached in
+  // `multiCanonicalDomain`; flipping the CMS-type segmented control
+  // invalidates the cache so we re-fetch a matching domain — without
+  // this reset, switching WP → Custom would keep showing the WP fields
+  // (the original bug: Custom CMS Multi mode showed predefined WP slots).
   const multiCanonicalTokenRef = useRef(0);
   useEffect(() => {
     if (mode !== "multi") return;
-    if (multiCanonicalDomain) return; // cache: fetch once per modal open
+    // Invalidate stale cache when the user flips CMS-type while in Multi
+    // mode: a previously-fetched WP domain isn't a valid schema source
+    // for a Custom CMS run and vice versa.
+    if (multiCanonicalDomain && multiCanonicalDomain.cms_type !== cmsTypeFilter) {
+      setMultiCanonicalDomain(null);
+      return; // wait for the next effect run after state settles
+    }
+    if (multiCanonicalDomain) return; // cache: fetch once per modal open per type
     const token = ++multiCanonicalTokenRef.current;
-    listDomainsPicker({ cms_type: "wordpress", page_size: 1 })
+    listDomainsPicker({ cms_type: cmsTypeFilter, page_size: 1 })
       .then((r) => {
         if (token !== multiCanonicalTokenRef.current) return;
-        if (r.items.length === 0) return; // no WP domain → fallback fields
+        if (r.items.length === 0) return; // no domain of this type → fallback fields
         return getDomain(r.items[0].id).then((d) => {
           if (token !== multiCanonicalTokenRef.current) return;
           setMultiCanonicalDomain(d);
         });
       })
       .catch(() => {
-        // Non-fatal — the slot derivation falls back to DEFAULT_WP_FIELDS.
+        // Non-fatal — the slot derivation falls back below.
       });
-  }, [mode, multiCanonicalDomain]);
+  }, [mode, cmsTypeFilter, multiCanonicalDomain]);
 
   const multiCanonicalProfile = useMemo<PublishProfile | null>(() => {
     if (mode !== "multi") return null;
     if (!multiCanonicalDomain) return null;
+    // Custom CMS has no profiles concept — return null and let the slot
+    // derivation below take the body_template-placeholders branch.
+    if (multiCanonicalDomain.cms_type !== "wordpress") return null;
     const profiles = multiCanonicalDomain.publish_config?.profiles;
     if (profiles && profiles.length > 0) return profiles[0];
     return { name: "Default", post_type: "posts", fields: DEFAULT_WP_FIELDS };
@@ -271,6 +284,21 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
   // Compute the set of field "slots" the user must map columns to.
   const slots: FieldSlot[] = useMemo(() => {
     if (mode === "multi") {
+      // Custom CMS Multi mode: pull placeholders from the canonical
+      // Custom CMS domain's body_template, not WP fields. Bug fix —
+      // the previous version always rendered DEFAULT_WP_FIELDS in
+      // Multi mode even when the user had picked Custom CMS.
+      if (
+        cmsTypeFilter === "custom" &&
+        multiCanonicalDomain?.cms_type === "custom"
+      ) {
+        const placeholders = collectPlaceholders(
+          multiCanonicalDomain.custom_config?.body_template,
+        );
+        return placeholders
+          .filter((p) => p !== "language")
+          .map((p) => ({ key: p, label: p, required: false }));
+      }
       const fields = multiCanonicalProfile?.fields ?? DEFAULT_WP_FIELDS;
       return fields.map((f) => ({
         key: f.key,
@@ -292,7 +320,7 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
     return placeholders
       .filter((p) => p !== "language")
       .map((p) => ({ key: p, label: p, required: false }));
-  }, [mode, multiCanonicalProfile, selected, activeProfile]);
+  }, [mode, cmsTypeFilter, multiCanonicalDomain, multiCanonicalProfile, selected, activeProfile]);
 
   // When `slots` resolves to empty, render a context-specific reason in
   // the FieldMapping panel instead of the generic
@@ -566,6 +594,134 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
       .sort((a, b) => b[1] - a[1])
       .map(([name, count]) => ({ name, count }));
   }, [mode, domainColumnId, rowFilter, rangeStart, rangeEnd, cellFilter, postIdTarget, selectedRowIds, table]);
+
+  // Language-sync targets — drives the LanguageSync pre-flight panel.
+  //
+  // Built by walking the candidate rows once and grouping each row's
+  // language value under its domain value. Empty cells in either column
+  // are skipped here on purpose — the sync UI is meant as a quick win,
+  // not a row-by-row validation pass; bad rows will get caught later by
+  // the actual publish.
+  //
+  // Custom-CMS-only by design: the upstream `/index.php?__add_language=1`
+  // endpoint only exists on the user's Custom CMS sites. The backend
+  // also filters non-Custom domains as a `skipped` result, but cutting
+  // them client-side keeps the preview honest — no false promises.
+  const languageSyncTargets = useMemo<
+    { domain_name: string; languages: string[] }[]
+  >(() => {
+    // Custom-CMS-only by design (the upstream endpoint doesn't exist on
+    // WP sites). Single mode has a chosen domain + either a language
+    // column (per-row) OR the run-level language picker — fall back to
+    // the run-level when there's no column. Multi mode requires both
+    // columns (domain + language) as before; without them we can't tell
+    // which languages go to which site.
+    if (cmsTypeFilter !== "custom") return [];
+
+    if (mode === "single") {
+      // Single mode: one target — the picked domain. Languages come from
+      // (a) the language column if set [unique values across candidate
+      // rows], or (b) the run-level language picker as a single-element
+      // list. If neither is set or the domain isn't loaded, nothing to do.
+      if (!selected) return [];
+      // Belt: don't surface for a domain that's somehow not Custom CMS.
+      if (selected.cms_type !== "custom") return [];
+
+      if (languageColumnId !== "") {
+        const langs = collectCandidateLanguages(
+          Number(languageColumnId),
+          table,
+          rowFilter,
+          rangeStart,
+          rangeEnd,
+          cellFilter,
+          postIdTarget,
+          selectedRowIds,
+        );
+        if (langs.length === 0) return [];
+        return [{ domain_name: selected.name, languages: langs }];
+      }
+      const runLang = (language || "").trim().toLowerCase();
+      if (!runLang) return [];
+      return [{ domain_name: selected.name, languages: [runLang] }];
+    }
+
+    // mode === "multi"
+    if (domainColumnId === "" || languageColumnId === "") return [];
+
+    const domainColId = Number(domainColumnId);
+    const langColId = Number(languageColumnId);
+
+    // Same candidate-row computation as `multiBreakdown` above. Kept
+    // inline rather than factored out because the two memos depend on
+    // slightly different inputs and a shared helper would have to take
+    // 8 params.
+    let candidateIds: Set<number>;
+    if (rowFilter === "selected") {
+      candidateIds = new Set(selectedRowIds);
+    } else if (rowFilter === "range") {
+      const s = Math.max(1, Number(rangeStart) || 1) - 1;
+      const e = Math.max(0, Number(rangeEnd) || 0);
+      candidateIds = new Set(table.rows.slice(s, e).map((r) => r.id));
+    } else {
+      candidateIds = new Set(table.rows.map((r) => r.id));
+    }
+    if (cellFilter !== "all" && postIdTarget !== "") {
+      const filterColId = Number(postIdTarget);
+      const filled: Record<number, string> = {};
+      for (const c of table.cells) {
+        if (c.column_id === filterColId) filled[c.row_id] = c.value || "";
+      }
+      for (const rid of Array.from(candidateIds)) {
+        if (filled[rid]) candidateIds.delete(rid);
+      }
+    }
+
+    // Index domain + language by row in one pass each. Avoids O(rows²)
+    // for tables with thousands of cells.
+    const domainByRow = new Map<number, string>();
+    const langByRow = new Map<number, string>();
+    for (const cell of table.cells) {
+      if (!candidateIds.has(cell.row_id)) continue;
+      const v = (cell.value || "").trim();
+      if (!v) continue;
+      if (cell.column_id === domainColId) domainByRow.set(cell.row_id, v);
+      else if (cell.column_id === langColId) {
+        // Lowercase + trim — matches the backend's normalization, so
+        // "EN" + "en" in different rows collapse to one item.
+        langByRow.set(cell.row_id, v.toLowerCase());
+      }
+    }
+
+    const byDomain = new Map<string, Set<string>>();
+    for (const [rowId, domainName] of domainByRow) {
+      const lang = langByRow.get(rowId);
+      if (!lang) continue;
+      if (!byDomain.has(domainName)) byDomain.set(domainName, new Set());
+      byDomain.get(domainName)!.add(lang);
+    }
+
+    return Array.from(byDomain.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([domain_name, langs]) => ({
+        domain_name,
+        languages: Array.from(langs).sort(),
+      }));
+  }, [
+    mode,
+    cmsTypeFilter,
+    selected,
+    language,
+    domainColumnId,
+    languageColumnId,
+    rowFilter,
+    rangeStart,
+    rangeEnd,
+    cellFilter,
+    postIdTarget,
+    selectedRowIds,
+    table,
+  ]);
 
   function setSlot(key: string, colId: number | null) {
     setFieldToColumn((m) => {
@@ -888,6 +1044,16 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
           </div>
         )}
 
+        {/* Pre-flight language sync. Meaningful on Custom CMS runs in
+            both modes — Single mode pushes the run's one language to
+            the picked domain; Multi mode pushes each domain's set of
+            languages derived from the table's columns. The targets
+            memo handles all the conditions; rendering null when empty
+            lets us include the panel unconditionally. */}
+        {languageSyncTargets.length > 0 && (
+          <LanguageSync targets={languageSyncTargets} />
+        )}
+
         <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
           <input
             type="checkbox"
@@ -963,6 +1129,54 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
       </form>
     </Modal>
   );
+}
+
+/**
+ * Single-mode helper: collect the unique non-empty language values from
+ * a specific column, restricted to the rows that match the run's filters.
+ *
+ * Same filter logic as the `languageSyncTargets` Multi-mode branch above,
+ * just collapsed to a single output (the column's distinct values) since
+ * Single mode has only one target site.
+ */
+function collectCandidateLanguages(
+  langColId: number,
+  table: BulkTable,
+  rowFilter: RowFilterValue,
+  rangeStart: string,
+  rangeEnd: string,
+  cellFilter: CellFilterValue,
+  postIdTarget: number | "",
+  selectedRowIds: number[],
+): string[] {
+  let candidateIds: Set<number>;
+  if (rowFilter === "selected") {
+    candidateIds = new Set(selectedRowIds);
+  } else if (rowFilter === "range") {
+    const s = Math.max(1, Number(rangeStart) || 1) - 1;
+    const e = Math.max(0, Number(rangeEnd) || 0);
+    candidateIds = new Set(table.rows.slice(s, e).map((r) => r.id));
+  } else {
+    candidateIds = new Set(table.rows.map((r) => r.id));
+  }
+  if (cellFilter !== "all" && postIdTarget !== "") {
+    const filterColId = Number(postIdTarget);
+    const filled: Record<number, string> = {};
+    for (const c of table.cells) {
+      if (c.column_id === filterColId) filled[c.row_id] = c.value || "";
+    }
+    for (const rid of Array.from(candidateIds)) {
+      if (filled[rid]) candidateIds.delete(rid);
+    }
+  }
+  const langs = new Set<string>();
+  for (const cell of table.cells) {
+    if (cell.column_id !== langColId) continue;
+    if (!candidateIds.has(cell.row_id)) continue;
+    const v = (cell.value || "").trim().toLowerCase();
+    if (v) langs.add(v);
+  }
+  return Array.from(langs).sort();
 }
 
 const PLACEHOLDER_RE = /\{\{\s*([A-Za-z_][\w\.\- ]*?)\s*\}\}/g;

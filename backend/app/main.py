@@ -20,6 +20,7 @@ from app.api import (
     prompts,
     publish as publish_router,
     publish_bulk as publish_bulk_router,
+    publish_languages as publish_languages_router,
     settings as settings_router,
     tags,
     users as users_module,
@@ -102,6 +103,7 @@ app.include_router(domains_router.router)
 app.include_router(domain_folders_router.router)
 app.include_router(publish_router.router)
 app.include_router(publish_bulk_router.router)
+app.include_router(publish_languages_router.router)
 app.include_router(backup_router.router)
 
 

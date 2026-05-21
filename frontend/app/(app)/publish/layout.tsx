@@ -9,6 +9,7 @@ const TABS: { href: string; labelKey: TranslationKey }[] = [
   { href: "/publish/domains", labelKey: "publish.tabDomains" },
   { href: "/publish/post", labelKey: "publish.tabSingleRuns" },
   { href: "/publish/runs", labelKey: "publish.tabBulkRuns" },
+  { href: "/publish/languages", labelKey: "publish.tabLanguages" },
 ];
 
 export default function PublishLayout({ children }: { children: React.ReactNode }) {

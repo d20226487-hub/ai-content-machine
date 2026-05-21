@@ -885,6 +885,7 @@ export const ru: Record<keyof typeof en, string> = {
   "publish.tabDomains": "Домены",
   "publish.tabSingleRuns": "Одиночные публикации",
   "publish.tabBulkRuns": "Массовые публикации",
+  "publish.tabLanguages": "Языки",
 
   // domains page
   "domains.title": "Домены",
@@ -1308,6 +1309,95 @@ export const ru: Record<keyof typeof en, string> = {
   "bulkRun.onSlugUpsertHint":
     "Строки с уже существующим slug обновляют существующий пост вместо создания нового (по языкам).",
   "bulkPub.andMore": "…и ещё {count}",
+
+  // Pre-flight language sync (Multi-mode bulk publish, Custom CMS)
+  "langSync.title": "Сначала синхронизируйте языки на сайтах",
+  "langSync.subtitle":
+    "Отправьте на каждый сайт набор языков, который ему нужен (берётся из таблицы). Уже существующие языки игнорируются — это безопасно.",
+  "langSync.syncButton": "Отправить на {count} сайт(а)",
+  "langSync.syncing": "Отправка…",
+  "langSync.summary":
+    "Готово — {ok} ок, {fail} с ошибкой, {skip} пропущено",
+  "langSync.skipped": "Пропущено",
+  "langSync.viewThisRun": "Открыть этот прогон →",
+  "langSync.viewHistory": "История прогонов",
+
+  // Standalone language-sync page (/publish/languages)
+  "langPage.title": "Языки",
+  "langPage.subtitle":
+    "Отправка наборов языков на Custom CMS-сайты. История всех прогонов хранится здесь.",
+  "langPage.newSync": "Новая синхронизация",
+  "langPage.newSyncTitle": "Запустить новую синхронизацию",
+  "langPage.newSyncHint":
+    "Выберите Custom CMS-домен и впишите языки для upsert (через запятую или по одному на строку).",
+  "langPage.fieldDomain": "Целевой домен",
+  "langPage.fieldDomains": "Целевые домены",
+  "langPage.fieldLanguages": "Языки",
+  "langPage.languagesPlaceholder": "en, es, fr — или по одному на строку",
+  "langPage.overridePerSite": "Свой набор языков для каждого сайта",
+  "langPage.chipRemove": "Убрать",
+  "langPage.willApplyToCount":
+    "Будут отправлены [{langs}] на {count} сайт(ов).",
+  "langPage.willSyncCount": "Будет {count} сайт(ов) в одном прогоне.",
+  "langPage.importCsv": "Импорт CSV…",
+
+  // CSV import modal for language sync
+  "langCsv.title": "Импорт сайтов и языков из CSV",
+  "langCsv.subtitle":
+    "Загрузите CSV, чтобы заполнить форму сразу до 500 сайтов. Каждая строка станет отдельным чипом со своим набором языков.",
+  "langCsv.hint":
+    "Формат: два столбца — `domain` и `languages`. Языки можно перечислять через запятую, пробел или точку с запятой внутри ячейки. Заголовок необязателен.",
+  "langCsv.downloadSample": "Скачать образец CSV",
+  "langCsv.fileLabel": "CSV-файл",
+  "langCsv.validating": "Проверка имён доменов…",
+  "langCsv.previewTitle": "Готово к применению — распознано сайтов: {count}",
+  "langCsv.applyButton": "Применить к форме",
+  "langCsv.errorRead": "Не удалось прочитать файл: {err}",
+  "langCsv.errorEmpty": "CSV-файл пуст.",
+  "langCsv.errorNoRows": "В CSV не найдено пригодных строк.",
+  "langCsv.errorRowShape": "Строка {line}: ожидается 2 столбца, получено {cols}.",
+  "langCsv.errorRowEmptyDomain": "Строка {line}: ячейка domain пуста.",
+  "langCsv.errorRowEmptyLangs":
+    "Строка {line} ({domain}): ячейка languages пуста.",
+  "langCsv.errorUnknown":
+    "Имён доменов нет в /publish/domains — импорт отклонён ({count}):",
+  "langCsv.errorUnknownFix":
+    "Исправьте CSV (переименуйте или удалите эти строки) и загрузите снова. Ничего не отправлено.",
+  // Multi-domain picker (popover with search + checkboxes)
+  "multiPicker.openEmpty": "Выберите Custom CMS-домены…",
+  "multiPicker.openWithCount": "Выбрано: {count}",
+  "multiPicker.searchPlaceholder": "Поиск доменов по имени…",
+  "multiPicker.loading": "Загрузка…",
+  "multiPicker.empty": "Подходящих доменов нет.",
+  "multiPicker.noCreds": "без ключей",
+  "multiPicker.tickedCount": "Отмечено: {count}",
+  "multiPicker.apply": "Применить",
+  "multiPicker.cancel": "Отмена",
+  "langPage.cancel": "Отмена",
+  "langPage.startSync": "Синхронизировать",
+  "langPage.runningSync": "Отправка…",
+  "langPage.historyTitle": "Прошлые прогоны",
+  "langPage.historyEmpty": "Прогонов пока нет — запустите из модалки массовой публикации или с этой страницы.",
+  "langPage.colWhen": "Когда",
+  "langPage.colBy": "Кто",
+  "langPage.colSource": "Источник",
+  "langPage.colTotals": "Счётчики",
+  "langPage.colActions": "",
+  "langPage.viewLink": "Открыть",
+  "langPage.sourceBulkModal": "Модалка публикации",
+  "langPage.sourceStandalone": "Со страницы",
+  "langPage.runTitle": "Прогон #{id}",
+  "langPage.runBack": "← К списку прогонов языков",
+  "langPage.runMeta": "{date} · автор: {by} · {source}",
+  "langPage.runCounts": "{total} всего · {ok} ок · {fail} с ошибкой · {skip} пропущено",
+  "langPage.resultDomain": "Домен",
+  "langPage.resultLanguages": "Языки",
+  "langPage.resultStatus": "Статус",
+  "langPage.resultDetail": "Детали",
+  "langPage.resultElapsed": "Время",
+  "langPage.resultOk": "ок",
+  "langPage.resultFail": "с ошибкой",
+  "langPage.resultSkipped": "пропущено",
   "bulkPub.missingRequired":
     "Не выбрана колонка для обязательных полей: {fields}",
   "bulkPub.noRowsSelected": "Не выбрано ни одной строки.",
