@@ -79,8 +79,16 @@ class WordPressClient(CmsClient):
     def _auth_header(self) -> dict[str, str]:
         if not self.credentials:
             return {"User-Agent": _USER_AGENT}
-        # Stored as "user:application_password"
-        token = base64.b64encode(self.credentials.encode("utf-8")).decode("ascii")
+        # Stored as "user:application_password". Normalize whitespace
+        # around the colon — a natural paste pattern is "user: app_pass"
+        # (with a space after the colon) which silently broke auth on
+        # Custom CMS and would break here too. Splitting on the FIRST
+        # colon + stripping each half handles the common case; a colon-
+        # less paste passes through unchanged so the upstream can return
+        # a sensible error rather than us silently rewriting it.
+        login, sep, password = self.credentials.partition(":")
+        clean = f"{login.strip()}:{password.strip()}" if sep else self.credentials
+        token = base64.b64encode(clean.encode("utf-8")).decode("ascii")
         return {
             "Authorization": f"Basic {token}",
             "User-Agent": _USER_AGENT,

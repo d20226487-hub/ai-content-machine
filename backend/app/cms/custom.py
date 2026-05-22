@@ -63,7 +63,11 @@ class CustomCmsClient(CmsClient):
         if not self.credentials:
             return {}
         if self.auth_type == "bearer":
-            return {"Authorization": f"Bearer {self.credentials}"}
+            # A pasted token often picks up surrounding whitespace (trailing
+            # newline from a copy, leading space from "Bearer xyz" being
+            # pasted without the prefix). Strip both — real bearer tokens
+            # don't carry whitespace.
+            return {"Authorization": f"Bearer {self.credentials.strip()}"}
         if self.auth_type == "api_key_header":
             try:
                 parsed = json.loads(self.credentials)
@@ -73,11 +77,26 @@ class CustomCmsClient(CmsClient):
                 return {}
             if not header or not value:
                 return {}
-            return {header: value}
+            return {header.strip(): value.strip()}
         if self.auth_type == "basic_auth":
-            # credentials stored as "login:password" — same shape as WP App
-            # Password creds, so the encoding logic mirrors WordPressClient.
-            token = base64.b64encode(self.credentials.encode("utf-8")).decode("ascii")
+            # Credentials stored as "login:password". A natural paste
+            # pattern is "login: password" (with a space after the colon)
+            # which silently broke auth — the password field would carry
+            # a leading space and the upstream would 401. Normalize by
+            # splitting on the FIRST colon and stripping each half before
+            # re-encoding. ":password" still parses as login="" /
+            # password="password"; we leave that to the upstream to
+            # reject. The login-doesn't-contain-colon assumption is true
+            # for every CMS we talk to.
+            login, sep, password = self.credentials.partition(":")
+            if sep:
+                clean = f"{login.strip()}:{password.strip()}"
+            else:
+                # No colon at all — pass through unchanged so the
+                # upstream can return a sensible "malformed creds" error
+                # instead of us silently rewriting the value.
+                clean = self.credentials
+            token = base64.b64encode(clean.encode("utf-8")).decode("ascii")
             return {"Authorization": f"Basic {token}"}
         return {}
 
