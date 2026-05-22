@@ -38,15 +38,25 @@ from app.services.media_cache import MediaCache
 from app.services.publish_rate_limit import domain_rate_key, resolve_for_domain
 from app.services.rate_limit import get_rate_limiter
 
-# Field keys whose value is treated as a slug / URL path and gets its
-# surrounding slashes stripped before being sent to a Custom CMS upstream.
-# Operators routinely paste path-style values into bulk-table slug columns
-# (`/fr/`, `/where-to-watch/`, `/live-stream`). WP's REST API auto-runs
-# sanitize_title server-side and strips the slashes for us; Custom CMS has
-# no such guarantee, so the same cell that publishes cleanly to WP would
-# create double-slash URLs (or worse, get stored verbatim and break later
-# slug lookups) on a Custom site. Normalizing to bare-slug here is the
-# Custom-side analog of WP's server-side sanitizer.
+# Field keys whose value is treated as a slug / URL path and normalized
+# before being sent to a Custom CMS upstream. Two transforms are applied:
+#
+#   1. Surrounding slashes stripped: `/fr/` → `fr`, `/where-to-watch/` →
+#      `where-to-watch`. Operators routinely paste path-style values into
+#      bulk-table slug columns; WP's REST API auto-runs `sanitize_title`
+#      server-side and strips them for us, but Custom CMS has no such
+#      guarantee — the same cell that publishes cleanly to WP would
+#      produce double-slash URLs on a Custom site.
+#
+#   2. A slashes-only value (`/`, `//`, etc.) → the **homepage marker**
+#      (default `"home"`, overridable per-domain via
+#      `custom_config.homepage_slug`). This is the convention the user's
+#      Custom CMS fleet uses to mark a language homepage — the upstream
+#      maps `slug=home` + `lang=es` → URL `/es/`, and `slug=home` +
+#      default-language → URL `/`. Using `/` in the bulk-table cell is
+#      the intuitive way for operators to express "this row IS the
+#      homepage for its language" without having to memorize the
+#      upstream's sentinel word.
 #
 # Scoped to known slug-like keys rather than every field — we don't want
 # to silently rewrite an HTML or text field that happens to contain a
@@ -54,6 +64,7 @@ from app.services.rate_limit import get_rate_limiter
 _CUSTOM_CMS_SLUG_LIKE_FIELDS = frozenset(
     {"slug", "url", "permalink", "path", "post_slug"}
 )
+_CUSTOM_CMS_DEFAULT_HOMEPAGE_SLUG = "home"
 
 
 # ---------- per-row target resolution ----------
@@ -434,19 +445,32 @@ async def publish_one_row(
     # find_post → update_post / publish_post branching below.
     if domain.cms_type == "custom":
         fields.setdefault("action", run.operation)
-        # Strip surrounding slashes from slug-like fields so values like
-        # `/where-to-watch/`, `/fr/`, or `/live-stream` go on the wire as
-        # bare slugs. See the constant's comment above for the full
-        # rationale (WP normalizes server-side, Custom CMS does not).
-        # We only touch values that actually have leading or trailing
-        # slashes — `where-to-watch` passes through untouched.
+        # Normalize slug-like fields before they go on the wire. See the
+        # _CUSTOM_CMS_SLUG_LIKE_FIELDS constant's docstring for the full
+        # rationale. Two transforms:
+        #   * `/foo/` → `foo`  (strip surrounding slashes)
+        #   * `/` or `//`  → the homepage marker (default "home",
+        #     overridable per-domain via custom_config.homepage_slug)
+        # Clean values (`where-to-watch`) pass through untouched.
+        homepage_slug = str(
+            (domain.custom_config or {}).get("homepage_slug")
+            or _CUSTOM_CMS_DEFAULT_HOMEPAGE_SLUG
+        )
         for fkey in list(fields.keys()):
-            if fkey.lower() in _CUSTOM_CMS_SLUG_LIKE_FIELDS:
-                raw = fields[fkey]
-                if isinstance(raw, str) and raw and (
-                    raw.startswith("/") or raw.endswith("/")
-                ):
-                    fields[fkey] = raw.strip("/")
+            if fkey.lower() not in _CUSTOM_CMS_SLUG_LIKE_FIELDS:
+                continue
+            raw = fields[fkey]
+            if not isinstance(raw, str) or not raw:
+                continue
+            stripped = raw.strip("/")
+            if not stripped and "/" in raw:
+                # Cell was slashes-only — operator's marker for "this is
+                # the language homepage". Replace with the upstream's
+                # sentinel word so the body carries `slug=home` (or
+                # whatever the domain configured).
+                fields[fkey] = homepage_slug
+            elif stripped != raw:
+                fields[fkey] = stripped
         # For Custom CMS, the per-row language already lives in the body
         # (via field_to_column['lang']). Carry it into PublishJob.language
         # too so the run-detail UI Lang column matches reality, instead of
