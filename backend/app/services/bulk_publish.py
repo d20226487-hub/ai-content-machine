@@ -39,7 +39,7 @@ from app.services.publish_rate_limit import domain_rate_key, resolve_for_domain
 from app.services.rate_limit import get_rate_limiter
 
 # Field keys whose value is treated as a slug / URL path and normalized
-# before being sent to a Custom CMS upstream. Two transforms are applied:
+# before being sent to a Custom CMS upstream. Three transforms are applied:
 #
 #   1. Surrounding slashes stripped: `/fr/` → `fr`, `/where-to-watch/` →
 #      `where-to-watch`. Operators routinely paste path-style values into
@@ -58,9 +58,21 @@ from app.services.rate_limit import get_rate_limiter
 #      homepage for its language" without having to memorize the
 #      upstream's sentinel word.
 #
-# Scoped to known slug-like keys rather than every field — we don't want
-# to silently rewrite an HTML or text field that happens to contain a
-# leading slash. Match is case-insensitive against `field_to_column` keys.
+#   3. A slug that equals the row's resolved language code (after the
+#      strip in step 1) is ALSO treated as the homepage marker. Without
+#      this, a cell like `/es/` for a `lang=es` row would publish to
+#      `/es/es/` — a double-slug nobody asked for. Operators routinely
+#      keep their language-homepage rows as `/es/`, `/fr/` etc. in the
+#      bulk table; this safeguard makes the obvious interpretation
+#      ("the es row IS /es/") the actual behavior. Case-insensitive
+#      comparison against the effective per-row language. Operators who
+#      genuinely want a `/es/es/` URL can type `es/es` directly — the
+#      strip leaves embedded slashes alone.
+#
+# All three transforms are scoped to known slug-like keys rather than
+# every field — we don't want to silently rewrite an HTML or text field
+# that happens to contain a leading slash. Match is case-insensitive
+# against `field_to_column` keys.
 _CUSTOM_CMS_SLUG_LIKE_FIELDS = frozenset(
     {"slug", "url", "permalink", "path", "post_slug"}
 )
@@ -445,13 +457,23 @@ async def publish_one_row(
     # find_post → update_post / publish_post branching below.
     if domain.cms_type == "custom":
         fields.setdefault("action", run.operation)
+        # Resolve effective language BEFORE the slug normalization — the
+        # slug-equals-lang safeguard (transform #3 in the constant's
+        # docstring) needs to compare the slug against the language that
+        # will actually be sent. For Custom CMS the per-row language
+        # already lives in the body (via field_to_column['lang']);
+        # promote it into effective_language so the run-detail UI Lang
+        # column also matches what was sent, instead of showing the run-
+        # level fallback.
+        lang_from_field = (fields.get("lang") or "").strip()
+        if lang_from_field:
+            effective_language = lang_from_field
+        effective_lang_lc = (effective_language or "").strip().lower()
+
         # Normalize slug-like fields before they go on the wire. See the
         # _CUSTOM_CMS_SLUG_LIKE_FIELDS constant's docstring for the full
-        # rationale. Two transforms:
-        #   * `/foo/` → `foo`  (strip surrounding slashes)
-        #   * `/` or `//`  → the homepage marker (default "home",
-        #     overridable per-domain via custom_config.homepage_slug)
-        # Clean values (`where-to-watch`) pass through untouched.
+        # rationale. Clean values (`where-to-watch`) pass through
+        # untouched.
         homepage_slug = str(
             (domain.custom_config or {}).get("homepage_slug")
             or _CUSTOM_CMS_DEFAULT_HOMEPAGE_SLUG
@@ -466,18 +488,21 @@ async def publish_one_row(
             if not stripped and "/" in raw:
                 # Cell was slashes-only — operator's marker for "this is
                 # the language homepage". Replace with the upstream's
-                # sentinel word so the body carries `slug=home` (or
-                # whatever the domain configured).
+                # sentinel word so the body carries `slug=home`.
+                fields[fkey] = homepage_slug
+            elif (
+                effective_lang_lc
+                and stripped
+                and stripped.lower() == effective_lang_lc
+            ):
+                # Slug equals the row's language code (e.g. `/es/` for a
+                # lang=es row, or a bare `es`). Treat as the language
+                # homepage to avoid the double-slug `/es/es/` URL —
+                # honoring how operators keep their per-language home
+                # rows in bulk tables.
                 fields[fkey] = homepage_slug
             elif stripped != raw:
                 fields[fkey] = stripped
-        # For Custom CMS, the per-row language already lives in the body
-        # (via field_to_column['lang']). Carry it into PublishJob.language
-        # too so the run-detail UI Lang column matches reality, instead of
-        # showing the run-level fallback everywhere.
-        lang_from_field = (fields.get("lang") or "").strip()
-        if lang_from_field:
-            effective_language = lang_from_field
 
     try:
         media_cache = MediaCache(db, domain.id) if domain.cms_type == "wordpress" else None
