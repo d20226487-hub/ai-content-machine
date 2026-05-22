@@ -38,6 +38,23 @@ from app.services.media_cache import MediaCache
 from app.services.publish_rate_limit import domain_rate_key, resolve_for_domain
 from app.services.rate_limit import get_rate_limiter
 
+# Field keys whose value is treated as a slug / URL path and gets its
+# surrounding slashes stripped before being sent to a Custom CMS upstream.
+# Operators routinely paste path-style values into bulk-table slug columns
+# (`/fr/`, `/where-to-watch/`, `/live-stream`). WP's REST API auto-runs
+# sanitize_title server-side and strips the slashes for us; Custom CMS has
+# no such guarantee, so the same cell that publishes cleanly to WP would
+# create double-slash URLs (or worse, get stored verbatim and break later
+# slug lookups) on a Custom site. Normalizing to bare-slug here is the
+# Custom-side analog of WP's server-side sanitizer.
+#
+# Scoped to known slug-like keys rather than every field — we don't want
+# to silently rewrite an HTML or text field that happens to contain a
+# leading slash. Match is case-insensitive against `field_to_column` keys.
+_CUSTOM_CMS_SLUG_LIKE_FIELDS = frozenset(
+    {"slug", "url", "permalink", "path", "post_slug"}
+)
+
 
 # ---------- per-row target resolution ----------
 
@@ -116,8 +133,13 @@ async def resolve_row_target(
 
     Single mode: returns the run-level (domain, profile_name).
     Multi mode: reads cells from run.domain_column_id / .profile_column_id,
-    looks up domain by name, validates it isn't Custom-CMS (not supported
-    in multi mode v1).
+    looks up domain by name. Both WordPress and Custom CMS domains are
+    accepted — for Custom CMS rows we just skip profile resolution
+    (Custom CMS has no profiles concept) and the per-row publish branches
+    on ``domain.cms_type`` further down. If the run's ``field_to_column``
+    map doesn't cover a particular Custom CMS site's template fields,
+    that row will fail individually with a clear field-name error — the
+    same per-row failure model WordPress already uses.
 
     In BOTH modes, if ``run.language_column_id`` is set, the per-row
     language is read from the cell and validated against the resolved
@@ -177,17 +199,15 @@ async def resolve_row_target(
     if domain is None:
         return ResolveError(message=f"Domain not found: {domain_value!r}.")
 
-    if domain.cms_type != "wordpress":
-        return ResolveError(
-            message=(
-                f"Multi-site publish to Custom CMS is not supported in this "
-                f"version. Use Single mode for {domain.name}."
-            ),
-            domain_id=domain.id,
-        )
-
+    # Profile resolution. Profiles are a WordPress-only concept (Custom
+    # CMS publishes through a single body_template, no profile branching),
+    # so for Custom CMS rows we always leave profile_name = "" regardless
+    # of whether the run carries a profile_column_id. This matches Single
+    # mode behavior — a Custom CMS run never has a profile_name. It also
+    # makes mixed-CMS tables (WP + Custom rows in one table) workable:
+    # the WP rows use the profile column, the Custom rows ignore it.
     profile_name = ""
-    if run.profile_column_id is not None:
+    if domain.cms_type == "wordpress" and run.profile_column_id is not None:
         profile_value = await _read_cell_value(
             db, row_id=row_id, column_id=run.profile_column_id
         )
@@ -414,6 +434,19 @@ async def publish_one_row(
     # find_post → update_post / publish_post branching below.
     if domain.cms_type == "custom":
         fields.setdefault("action", run.operation)
+        # Strip surrounding slashes from slug-like fields so values like
+        # `/where-to-watch/`, `/fr/`, or `/live-stream` go on the wire as
+        # bare slugs. See the constant's comment above for the full
+        # rationale (WP normalizes server-side, Custom CMS does not).
+        # We only touch values that actually have leading or trailing
+        # slashes — `where-to-watch` passes through untouched.
+        for fkey in list(fields.keys()):
+            if fkey.lower() in _CUSTOM_CMS_SLUG_LIKE_FIELDS:
+                raw = fields[fkey]
+                if isinstance(raw, str) and raw and (
+                    raw.startswith("/") or raw.endswith("/")
+                ):
+                    fields[fkey] = raw.strip("/")
         # For Custom CMS, the per-row language already lives in the body
         # (via field_to_column['lang']). Carry it into PublishJob.language
         # too so the run-detail UI Lang column matches reality, instead of

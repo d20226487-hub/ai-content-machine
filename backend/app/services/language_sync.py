@@ -130,15 +130,66 @@ async def sync_one_domain(
             elapsed_ms=elapsed,
         )
 
-    # Truncate the upstream body so a verbose error doesn't blow up the
-    # response payload. 600 chars is enough for "missing field foo" style
-    # messages or the success JSON.
-    body_snippet = (resp.text or "")[:600]
+    # Success is defined by the API contract — JSON body with `ok: true` —
+    # NOT by HTTP status alone. A site without the `__add_language=1`
+    # endpoint installed will happily 200 with the rendered homepage HTML,
+    # which used to slip through as "ok" and dump a wall of HTML in the
+    # Details column. Parse first, then decide.
+    raw_body = resp.text or ""
+    body_snippet = raw_body[:600]
+    parsed: Any = None
+    try:
+        parsed = resp.json()
+    except (ValueError, httpx.DecodingError):
+        parsed = None
+
+    if isinstance(parsed, dict) and parsed.get("ok") is True:
+        return LanguageSyncOneResult(
+            domain_name=domain.name,
+            domain_id=domain.id,
+            ok=True,
+            status_code=resp.status_code,
+            detail=body_snippet,
+            elapsed_ms=elapsed,
+        )
+
+    # Failure path. Build a useful detail rather than dumping raw HTML —
+    # surfaces (1) the upstream's JSON `error` if any, (2) the cf-ray /
+    # WWW-Authenticate headers that help diagnose Cloudflare or rate-limit
+    # blocks when the upstream returns the same opaque 401 for every input,
+    # (3) a hint when the body isn't JSON at all (e.g. homepage HTML —
+    # endpoint not installed).
+    if isinstance(parsed, dict):
+        upstream_err = parsed.get("error") or parsed.get("message")
+        prefix = f"{upstream_err}" if upstream_err else body_snippet
+    else:
+        # Non-JSON body. Likely the homepage rendered after a silent
+        # query-string ignore, or an HTML error page.
+        looks_like_html = raw_body.lstrip().lower().startswith(("<!doctype", "<html"))
+        if looks_like_html:
+            prefix = (
+                "Upstream returned HTML, not JSON — the __add_language=1 "
+                "endpoint is probably not installed on this site."
+            )
+        else:
+            prefix = body_snippet or "Empty response body"
+
+    diag_bits: list[str] = []
+    cf_ray = resp.headers.get("cf-ray")
+    if cf_ray:
+        diag_bits.append(f"cf-ray={cf_ray}")
+    www_auth = resp.headers.get("www-authenticate")
+    if www_auth:
+        diag_bits.append(f"WWW-Authenticate={www_auth}")
+    diag = f" [{'; '.join(diag_bits)}]" if diag_bits else ""
+
+    detail = f"{prefix}{diag}"
+
     return LanguageSyncOneResult(
         domain_name=domain.name,
         domain_id=domain.id,
-        ok=resp.status_code < 400,
+        ok=False,
         status_code=resp.status_code,
-        detail=body_snippet,
+        detail=detail[:600],
         elapsed_ms=elapsed,
     )

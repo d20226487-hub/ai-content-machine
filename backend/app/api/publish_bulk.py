@@ -139,11 +139,11 @@ async def create_bulk_publish_run(
                     ),
                 )
     else:
-        # Multi mode: domain_column_id required (Pydantic enforced); profile
-        # column required when ANY domain in the table is WordPress. We can't
-        # know that at this point without scanning rows, so we require both
-        # column refs unconditionally for v1 — Custom-CMS-only multi runs are
-        # blocked elsewhere with a clear "not supported in multi mode" error.
+        # Multi mode: domain_column_id required (Pydantic enforced). The
+        # profile column is optional — it's only consumed for WordPress
+        # rows; Custom CMS rows ignore it (no profile concept). A mixed-
+        # CMS table can set the profile column and the resolver will use
+        # it for WP rows and skip it for Custom rows.
         if payload.domain_column_id is None:
             raise HTTPException(
                 status_code=400, detail="domain_column_id is required in multi mode"
