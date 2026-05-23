@@ -8,7 +8,7 @@ import { DomainCsvImportModal } from "@/components/DomainCsvImportModal";
 import { DomainJsonImportModal } from "@/components/DomainJsonImportModal";
 import { DomainModal } from "@/components/DomainModal";
 import { DomainBreadcrumb } from "@/components/domains/DomainBreadcrumb";
-import { DomainFolderSidebar } from "@/components/domains/DomainFolderSidebar";
+import { DomainFolderCard } from "@/components/domains/DomainFolderCard";
 import { MoveToFolderModal } from "@/components/domains/MoveToFolderModal";
 import { ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -473,6 +473,12 @@ export default function DomainsPage() {
             </Link>
           )}
           <button
+            onClick={() => void onCreateFolder(scope === "all" || scope === "root" ? null : scope)}
+            className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800"
+          >
+            {t("domainFolders.newFolderButton")}
+          </button>
+          <button
             onClick={() => setModal({ kind: "import" })}
             className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800"
           >
@@ -500,19 +506,49 @@ export default function DomainsPage() {
         </div>
       )}
 
-      <div className="flex gap-4">
-        <DomainFolderSidebar
-          folders={folders}
-          selected={scope}
-          onSelect={setScope}
-          onCreate={onCreateFolder}
-          onRename={onRenameFolder}
-          onDelete={onDeleteFolder}
-          reloading={loadingFolders}
-        />
+      <section className="min-w-0">
+        <DomainBreadcrumb folders={folders} selected={scope} onSelect={setScope} />
 
-        <section className="min-w-0 flex-1">
-          <DomainBreadcrumb folders={folders} selected={scope} onSelect={setScope} />
+        {/* Folder cards — library-style. At "all"/"root" scope we render
+            every top-level folder; inside a specific folder we render
+            its immediate subfolders. This replaces the persistent left
+            sidebar tree: folder navigation is now visual, and goes one
+            level at a time via the breadcrumb. Hidden entirely when
+            there are no relevant folders to show. */}
+        {(() => {
+          const visibleFolders =
+            typeof scope === "number"
+              ? folders.filter((f) => f.parent_id === scope)
+              : folders.filter((f) => f.parent_id === null);
+          if (visibleFolders.length === 0) return null;
+          const headingKey =
+            typeof scope === "number"
+              ? "domainFolders.subfoldersHeading"
+              : "domainFolders.foldersHeading";
+          return (
+            <div className="mb-4">
+              <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                {t(headingKey)} ({visibleFolders.length})
+              </h2>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {visibleFolders.map((f) => (
+                  <DomainFolderCard
+                    key={f.id}
+                    folder={f}
+                    onOpen={() => setScope(f.id)}
+                    onRename={() => void onRenameFolder(f)}
+                    onDelete={() => void onDeleteFolder(f)}
+                  />
+                ))}
+              </div>
+              {loadingFolders && (
+                <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+                  {t("common.loading")}
+                </p>
+              )}
+            </div>
+          );
+        })()}
 
           {/* Search bar — debounced 200 ms server-side so even a 50k-row
               account can type without blocking. */}
@@ -803,8 +839,7 @@ export default function DomainsPage() {
               </div>
             </div>
           )}
-        </section>
-      </div>
+      </section>
 
       {modal.kind === "create" && (
         <DomainModal

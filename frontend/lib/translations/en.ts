@@ -876,6 +876,13 @@ export const en = {
   "domainFolders.renamePrompt": "Rename folder:",
   "domainFolders.confirmDelete":
     "Delete folder {name}? Only empty folders can be deleted.",
+  "domainFolders.cardDomainCount": "{count} domain",
+  "domainFolders.cardDomainCountPlural": "{count} domains",
+  "domainFolders.cardSubfolderCount": "{count} subfolder",
+  "domainFolders.cardSubfolderCountPlural": "{count} subfolders",
+  "domainFolders.newFolderButton": "New folder",
+  "domainFolders.foldersHeading": "Folders",
+  "domainFolders.subfoldersHeading": "Subfolders",
 
   // move-to-folder modal
   "moveToFolder.title": "Move {count} domain(s) to folder",

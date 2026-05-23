@@ -920,6 +920,13 @@ export const ru: Record<keyof typeof en, string> = {
   "domainFolders.renamePrompt": "Новое название папки:",
   "domainFolders.confirmDelete":
     "Удалить папку {name}? Удалить можно только пустую папку.",
+  "domainFolders.cardDomainCount": "Доменов: {count}",
+  "domainFolders.cardDomainCountPlural": "Доменов: {count}",
+  "domainFolders.cardSubfolderCount": "Подпапок: {count}",
+  "domainFolders.cardSubfolderCountPlural": "Подпапок: {count}",
+  "domainFolders.newFolderButton": "Новая папка",
+  "domainFolders.foldersHeading": "Папки",
+  "domainFolders.subfoldersHeading": "Подпапки",
 
   // move-to-folder modal
   "moveToFolder.title": "Переместить домены ({count}) в папку",
