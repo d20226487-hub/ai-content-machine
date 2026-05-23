@@ -453,7 +453,7 @@ export default function DomainsPage() {
   }, [folders]);
 
   return (
-    <main className="mx-auto max-w-7xl px-5 py-6">
+    <main className="w-full px-5 py-6">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
