@@ -274,7 +274,14 @@ export function SingleGenerator() {
           </button>
         </div>
 
-        {!selectedPrompt && (
+        {/* "Select a prompt to begin" placeholder only when there's
+            also nothing to view — opening a saved generation populates
+            `result` without selecting a prompt (the source prompt may
+            be deleted, or just not the one currently picked), and the
+            old guard `!selectedPrompt` hid the loaded output behind the
+            placeholder. Bug symptom: click a saved generation, nothing
+            visibly happens. */}
+        {!selectedPrompt && !result && (
           <div className="rounded-lg border border-dashed border-neutral-300 bg-white p-10 text-center text-sm text-neutral-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-400">
             {t("single.selectToBegin")}
           </div>
@@ -409,70 +416,77 @@ export function SingleGenerator() {
                 </button>
               </div>
             </form>
-
-            {result && (
-              <div className="mt-6 space-y-3">
-                {viewingSaved && (
-                  <>
-                    <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800 dark:border-blue-900/60 dark:bg-blue-950/40 dark:text-blue-200">
-                      {t("single.viewingSaved")} <b>{viewingSaved.name}</b>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setResult(null);
-                          setSavedId(null);
-                          setViewingSaved(null);
-                        }}
-                        className="ml-3 underline"
-                      >
-                        {t("single.clear")}
-                      </button>
-                    </div>
-                    <PublishedToHistory generationId={viewingSaved.id} />
-                  </>
-                )}
-
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                    {t("single.generatedWith", { provider: result.provider_used, model: result.model_used })}
-                    {result.finish_reason && ` · ${result.finish_reason}`}
-                  </p>
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setPublishOpen(true)}
-                      className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
-                    >
-                      {t("single.publishTo")}
-                    </button>
-                    {!viewingSaved && (
-                      <button
-                        type="button"
-                        onClick={onSave}
-                        disabled={saving || savedId != null}
-                        className={
-                          "rounded-md px-3 py-1.5 text-xs font-medium " +
-                          (savedId != null
-                            ? "border border-green-300 text-green-700 dark:border-green-800 dark:text-green-300"
-                            : "bg-neutral-900 text-white hover:bg-neutral-800 disabled:opacity-60 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200")
-                        }
-                      >
-                        {saving ? t("common.saving") : savedId != null ? t("single.alreadySaved") : t("common.save")}
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {saveError != null && <ErrorPanel title={t("single.saveFailed")} error={saveError} />}
-
-                <HtmlViewer
-                  content={result.text}
-                  title={viewingSaved ? viewingSaved.name : t("single.generatedContent")}
-                  height="h-[28rem]"
-                />
-              </div>
-            )}
           </>
+        )}
+
+        {/* Result panel — intentionally OUTSIDE the `selectedPrompt &&`
+            block above. Opening a saved generation populates `result`
+            without changing the prompt selection (and the source prompt
+            may have been deleted entirely — `viewingSaved.prompt_id`
+            can be null). Gating this on `selectedPrompt` used to hide
+            the loaded output behind the empty-state placeholder; the
+            click did fire and state did update, but nothing rendered. */}
+        {result && (
+          <div className="mt-6 space-y-3">
+            {viewingSaved && (
+              <>
+                <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800 dark:border-blue-900/60 dark:bg-blue-950/40 dark:text-blue-200">
+                  {t("single.viewingSaved")} <b>{viewingSaved.name}</b>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setResult(null);
+                      setSavedId(null);
+                      setViewingSaved(null);
+                    }}
+                    className="ml-3 underline"
+                  >
+                    {t("single.clear")}
+                  </button>
+                </div>
+                <PublishedToHistory generationId={viewingSaved.id} />
+              </>
+            )}
+
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                {t("single.generatedWith", { provider: result.provider_used, model: result.model_used })}
+                {result.finish_reason && ` · ${result.finish_reason}`}
+              </p>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setPublishOpen(true)}
+                  className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                >
+                  {t("single.publishTo")}
+                </button>
+                {!viewingSaved && (
+                  <button
+                    type="button"
+                    onClick={onSave}
+                    disabled={saving || savedId != null}
+                    className={
+                      "rounded-md px-3 py-1.5 text-xs font-medium " +
+                      (savedId != null
+                        ? "border border-green-300 text-green-700 dark:border-green-800 dark:text-green-300"
+                        : "bg-neutral-900 text-white hover:bg-neutral-800 disabled:opacity-60 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200")
+                    }
+                  >
+                    {saving ? t("common.saving") : savedId != null ? t("single.alreadySaved") : t("common.save")}
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {saveError != null && <ErrorPanel title={t("single.saveFailed")} error={saveError} />}
+
+            <HtmlViewer
+              content={result.text}
+              title={viewingSaved ? viewingSaved.name : t("single.generatedContent")}
+              height="h-[28rem]"
+            />
+          </div>
         )}
 
         {showSavedList && (
