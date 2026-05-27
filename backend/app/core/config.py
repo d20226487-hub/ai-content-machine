@@ -25,7 +25,14 @@ class Settings(BaseSettings):
 
     JWT_SECRET: str
     JWT_ALG: str = "HS256"
-    JWT_EXPIRE_MINUTES: int = 60
+    # 1 day (1440 min). Was 60 — users routinely got bounced back to the
+    # login screen every hour mid-task. There's no refresh-token flow yet,
+    # so the access-token lifetime is the only knob. Bumping to a day is a
+    # reasonable trade-off for an internal tool: long enough that nobody
+    # sees the login screen during a normal workday, short enough that a
+    # stolen token still expires the same calendar day. Override via the
+    # JWT_EXPIRE_MINUTES env var for sites with stricter policies.
+    JWT_EXPIRE_MINUTES: int = 1440
 
     CORS_ORIGINS: str = "http://localhost:3000"
 
