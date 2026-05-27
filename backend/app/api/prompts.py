@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.providers.base import ProviderError
 from app.providers.registry import ProviderNotConfigured
 from app.schemas.prompt import (
+    PromptBulkMove,
     PromptCreate,
     PromptDetail,
     PromptDraftRequest,
@@ -781,6 +782,44 @@ async def get_prompt_at_version(
     )
     detail.variables = extract_variables(target.content)
     return detail
+
+
+# ---------- bulk-move ----------
+
+@router.post("/bulk-move", response_model=dict)
+async def bulk_move_prompts(
+    payload: PromptBulkMove,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Move N active prompts into a category (or out of any category).
+
+    Used by the "Move to folder…" bulk action on /prompts. Mirrors
+    ``bulk_move_domains`` / ``bulk_move_tables`` so the frontend's
+    MoveToFolderModal can be reused as-is.
+
+    Trashed prompts are silently skipped — only active rows can be
+    moved. The same ``_verify_category`` guard the patch endpoints use
+    runs first when the target isn't null, so a bogus id 400s before
+    any rows are touched.
+
+    Body: ``{"prompt_ids": [int, ...], "category_id": int | null}``.
+    Returns ``{"moved": <count>}`` so the UI can confirm.
+    """
+    if payload.category_id is not None:
+        await _verify_category(db, payload.category_id)
+
+    rows = (
+        await db.execute(
+            select(Prompt).where(
+                Prompt.id.in_(payload.prompt_ids),
+                Prompt.deleted_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    for p in rows:
+        p.category_id = payload.category_id
+    await db.commit()
+    return {"moved": len(rows)}
 
 
 # ---------- delete (soft) + trash surface ----------

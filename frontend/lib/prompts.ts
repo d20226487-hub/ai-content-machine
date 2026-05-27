@@ -198,6 +198,20 @@ export function deletePrompt(id: number): Promise<void> {
   return api<void>(`/prompts/${id}`, { method: "DELETE" });
 }
 
+/**
+ * Move N prompts into a category (or out of any category) in one
+ * round-trip. ``category_id: null`` = move to uncategorized.
+ */
+export function bulkMovePrompts(payload: {
+  prompt_ids: number[];
+  category_id: number | null;
+}): Promise<{ moved: number }> {
+  return api<{ moved: number }>(`/prompts/bulk-move`, {
+    method: "POST",
+    body: payload,
+  });
+}
+
 // ---- Trash ----
 
 export function listPromptTrash(opts: { q?: string; page?: number; page_size?: number } = {}): Promise<PromptListResponse> {

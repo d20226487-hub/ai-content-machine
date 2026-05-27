@@ -45,6 +45,7 @@ from app.schemas.bulk import (
     GenerateRequest,
     GenerateResponse,
     RowRead,
+    TableBulkMove,
     TableCreate,
     TableListItem,
     TableListResponse,
@@ -537,6 +538,47 @@ async def update_table(
         created_at=t.created_at,
         updated_at=t.updated_at,
     )
+
+
+@router.post("/tables/bulk-move", response_model=dict)
+async def bulk_move_tables(
+    payload: TableBulkMove,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Move N active tables to a folder (or out of any folder).
+
+    Used by the "Move to folder…" bulk action on /library. Mirrors
+    ``bulk_move_domains`` so the frontend's MoveToFolderModal can be
+    reused as-is.
+
+    Trashed tables are silently skipped — only active rows can be
+    moved (a trashed table shouldn't suddenly hop into a folder behind
+    the user's back). Non-owners (when actor isn't admin/manager) are
+    also silently skipped via the same ownership filter used by the
+    list endpoints.
+
+    Body: ``{"table_ids": [int, ...], "folder_id": int | null}``.
+    Returns ``{"moved": <count>}`` so the UI can confirm.
+    """
+    if payload.folder_id is not None:
+        await _verify_folder(db, payload.folder_id)
+
+    role = _role_name(actor)
+    sees_all = role in {"admin", "manager"}
+
+    stmt = select(BulkTable).where(
+        BulkTable.id.in_(payload.table_ids),
+        BulkTable.deleted_at.is_(None),
+    )
+    if not sees_all:
+        stmt = stmt.where(BulkTable.created_by_id == actor.id)
+
+    rows = (await db.execute(stmt)).scalars().all()
+    for t in rows:
+        t.folder_id = payload.folder_id
+    await db.commit()
+    return {"moved": len(rows)}
 
 
 @router.delete("/tables/{table_id}", status_code=status.HTTP_204_NO_CONTENT)

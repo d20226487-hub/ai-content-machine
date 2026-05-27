@@ -7,9 +7,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ErrorPanel } from "@/components/ErrorPanel";
 import { ImportCsvModal } from "@/components/ImportCsvModal";
 import { UserChip } from "@/components/UserChip";
+import { MoveToFolderModal } from "@/components/folders/MoveToFolderModal";
 import { ApiError } from "@/lib/api";
 import { useT } from "@/lib/i18n-context";
 import {
+  bulkMoveTables,
   createFolder,
   createTable,
   deleteFolder,
@@ -76,6 +78,12 @@ export default function LibraryPage() {
   const [showImport, setShowImport] = useState(false);
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  // Bulk-select: cross-page persistent selection (same model used by
+  // /publish/domains). Only cleared by the "Clear" button or a
+  // successful bulk action.
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [showMoveModal, setShowMoveModal] = useState(false);
+  const [moving, setMoving] = useState(false);
 
   useEffect(() => {
     setSearchDraft(q);
@@ -218,6 +226,52 @@ export default function LibraryPage() {
     }
   }
 
+  // ----- bulk selection -----
+
+  function toggleSelect(id: number) {
+    setSelectedIds((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  const allOnPageSelected =
+    items != null && items.length > 0 && items.every((it) => selectedIds.has(it.id));
+
+  function toggleSelectAllOnPage() {
+    if (!items) return;
+    setSelectedIds((s) => {
+      const next = new Set(s);
+      if (allOnPageSelected) {
+        for (const it of items) next.delete(it.id);
+      } else {
+        for (const it of items) next.add(it.id);
+      }
+      return next;
+    });
+  }
+
+  async function onConfirmBulkMove(folderId: number | null) {
+    if (selectedIds.size === 0 || moving) return;
+    setMoving(true);
+    try {
+      await bulkMoveTables({
+        table_ids: Array.from(selectedIds),
+        folder_id: folderId,
+      });
+      setSelectedIds(new Set());
+      setShowMoveModal(false);
+      await refreshTables();
+      await refreshFolders();
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : t("common.saveFailed"));
+    } finally {
+      setMoving(false);
+    }
+  }
+
   async function onConfirmRename(id: number) {
     const name = renameValue.trim();
     if (!name) {
@@ -340,9 +394,49 @@ export default function LibraryPage() {
         </section>
       )}
 
+      {/* Bulk-action bar — appears only when ≥ 1 card is checked.
+          Selection persists across pages: the count here is the full
+          selection, not just "on this page". */}
+      {selectedIds.size > 0 && (
+        <div className="mt-4 flex items-center justify-between rounded-md border border-neutral-300 bg-neutral-50 px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900">
+          <span className="text-neutral-700 dark:text-neutral-300">
+            {t("library.selectedCount", { count: selectedIds.size })}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSelectedIds(new Set())}
+              className="text-xs text-neutral-500 hover:underline dark:text-neutral-400"
+            >
+              {t("common.clearSelection")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowMoveModal(true)}
+              className="rounded-md bg-neutral-900 px-3 py-1 text-xs font-medium text-white dark:bg-neutral-100 dark:text-neutral-900"
+            >
+              {t("library.moveToFolder")}
+            </button>
+          </div>
+        </div>
+      )}
+
       <section className="mt-6">
-        <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
-          {t("library.tablesHeading")} {total > 0 && `(${total})`}
+        <h2 className="mb-2 flex items-center justify-between text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+          <span>
+            {t("library.tablesHeading")} {total > 0 && `(${total})`}
+          </span>
+          {items && items.length > 0 && (
+            <label className="inline-flex items-center gap-1.5 normal-case tracking-normal text-[11px] text-neutral-500 dark:text-neutral-400">
+              <input
+                type="checkbox"
+                checked={allOnPageSelected}
+                onChange={toggleSelectAllOnPage}
+                className="h-3.5 w-3.5"
+              />
+              {t("library.selectAllOnPage")}
+            </label>
+          )}
         </h2>
 
         {!items && !error && (
@@ -379,12 +473,29 @@ export default function LibraryPage() {
 
         {items && items.length > 0 && (
           <ul className="grid gap-4 sm:grid-cols-2">
-            {items.map((tab) => (
+            {items.map((tab) => {
+              const isChecked = selectedIds.has(tab.id);
+              return (
               <li
                 key={tab.id}
-                className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm transition hover:border-neutral-300 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-neutral-700"
+                className={
+                  "rounded-lg border bg-white p-4 shadow-sm transition dark:bg-neutral-900 " +
+                  (isChecked
+                    ? "border-neutral-500 dark:border-neutral-500"
+                    : "border-neutral-200 hover:border-neutral-300 dark:border-neutral-800 dark:hover:border-neutral-700")
+                }
               >
                 <div className="flex items-start justify-between gap-3">
+                  {/* Selection checkbox — placed before the title so the
+                      visual order matches the keyboard tab order, and
+                      so the checkbox is the first hit-target. */}
+                  <input
+                    type="checkbox"
+                    checked={isChecked}
+                    onChange={() => toggleSelect(tab.id)}
+                    aria-label={t("library.selectTable", { name: tab.name })}
+                    className="mt-0.5 h-4 w-4 shrink-0"
+                  />
                   <div className="min-w-0 flex-1">
                     {renamingId === tab.id ? (
                       <input
@@ -471,7 +582,8 @@ export default function LibraryPage() {
                   </button>
                 </div>
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
 
@@ -527,6 +639,18 @@ export default function LibraryPage() {
         <ImportCsvModal
           onClose={() => setShowImport(false)}
           onImported={onImported}
+        />
+      )}
+
+      {showMoveModal && (
+        <MoveToFolderModal
+          folders={folders}
+          selectedCount={selectedIds.size}
+          onClose={() => setShowMoveModal(false)}
+          onConfirm={(fid) => void onConfirmBulkMove(fid)}
+          busy={moving}
+          titleKey="library.moveModalTitle"
+          subtitleKey="library.moveModalSubtitle"
         />
       )}
     </main>

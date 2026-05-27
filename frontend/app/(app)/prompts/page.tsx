@@ -7,9 +7,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { NewPromptModal } from "@/components/NewPromptModal";
 import { TestPromptModal } from "@/components/TestPromptModal";
 import { UserChip } from "@/components/UserChip";
+import { MoveToFolderModal } from "@/components/folders/MoveToFolderModal";
 import { ApiError } from "@/lib/api";
 import { useT } from "@/lib/i18n-context";
 import {
+  bulkMovePrompts,
   createCategory,
   deleteCategory,
   getPrompt,
@@ -76,6 +78,12 @@ export default function PromptsPage() {
   const [testingPrompt, setTestingPrompt] = useState<PromptDetail | null>(null);
   const [testLoadingId, setTestLoadingId] = useState<number | null>(null);
   const [trashCount, setTrashCount] = useState(0);
+  // Bulk-select state — persistent across pages, same model as /library
+  // and /publish/domains. Only cleared by the "Clear" button or a
+  // successful bulk action.
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [showMoveModal, setShowMoveModal] = useState(false);
+  const [moving, setMoving] = useState(false);
 
   const refreshTrashCount = useCallback(async () => {
     try {
@@ -89,6 +97,40 @@ export default function PromptsPage() {
   useEffect(() => {
     void refreshTrashCount();
   }, [refreshTrashCount, refreshTick]);
+
+  // ----- bulk selection -----
+
+  function toggleSelect(id: number) {
+    setSelectedIds((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // Reset to empty during folder/tag/search/page changes? Intentionally
+  // NOT — selection persistence across navigation is by design (matches
+  // /publish/domains and /library). Only the explicit "Clear" button or
+  // a successful bulk action wipes it.
+
+  async function onConfirmBulkMove(categoryId: number | null) {
+    if (selectedIds.size === 0 || moving) return;
+    setMoving(true);
+    try {
+      await bulkMovePrompts({
+        prompt_ids: Array.from(selectedIds),
+        category_id: categoryId,
+      });
+      setSelectedIds(new Set());
+      setShowMoveModal(false);
+      setRefreshTick((n) => n + 1);
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : t("common.saveFailed"));
+    } finally {
+      setMoving(false);
+    }
+  }
 
   async function onOpenTest(promptId: number) {
     setTestLoadingId(promptId);
@@ -395,8 +437,59 @@ export default function PromptsPage() {
 
       {/* Prompts section */}
       <section className="mt-6">
-        <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
-          {t("prompts.promptsHeading")} {total > 0 && `(${total})`}
+        {/* Bulk-action bar — appears only when ≥ 1 row is checked.
+            Selection persists across page / folder / tag / search
+            changes; only the explicit "Clear" or a successful Move
+            wipes it. */}
+        {selectedIds.size > 0 && (
+          <div className="mb-3 flex items-center justify-between rounded-md border border-neutral-300 bg-neutral-50 px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900">
+            <span className="text-neutral-700 dark:text-neutral-300">
+              {t("prompts.selectedCount", { count: selectedIds.size })}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedIds(new Set())}
+                className="text-xs text-neutral-500 hover:underline dark:text-neutral-400"
+              >
+                {t("common.clearSelection")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowMoveModal(true)}
+                className="rounded-md bg-neutral-900 px-3 py-1 text-xs font-medium text-white dark:bg-neutral-100 dark:text-neutral-900"
+              >
+                {t("prompts.moveToFolder")}
+              </button>
+            </div>
+          </div>
+        )}
+
+        <h2 className="mb-2 flex items-center justify-between text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+          <span>
+            {t("prompts.promptsHeading")} {total > 0 && `(${total})`}
+          </span>
+          {prompts && prompts.length > 0 && (
+            <label className="inline-flex items-center gap-1.5 normal-case tracking-normal text-[11px] text-neutral-500 dark:text-neutral-400">
+              <input
+                type="checkbox"
+                checked={prompts.every((p) => selectedIds.has(p.id))}
+                onChange={(e) => {
+                  setSelectedIds((s) => {
+                    const next = new Set(s);
+                    if (e.target.checked) {
+                      for (const p of prompts) next.add(p.id);
+                    } else {
+                      for (const p of prompts) next.delete(p.id);
+                    }
+                    return next;
+                  });
+                }}
+                className="h-3.5 w-3.5"
+              />
+              {t("prompts.selectAllOnPage")}
+            </label>
+          )}
         </h2>
 
         {!prompts && !loadError && (
@@ -421,9 +514,27 @@ export default function PromptsPage() {
 
         {prompts && prompts.length > 0 && (
           <ul className="divide-y divide-neutral-200 overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-sm dark:divide-neutral-800 dark:border-neutral-800 dark:bg-neutral-900">
-            {prompts.map((p) => (
-              <li key={p.id} className="px-5 py-4 hover:bg-neutral-50 dark:hover:bg-neutral-800/40">
-                <div className="flex items-start justify-between gap-4">
+            {prompts.map((p) => {
+              const isChecked = selectedIds.has(p.id);
+              return (
+              <li
+                key={p.id}
+                className={
+                  "px-5 py-4 " +
+                  (isChecked
+                    ? "bg-neutral-50 dark:bg-neutral-800/40"
+                    : "hover:bg-neutral-50 dark:hover:bg-neutral-800/40")
+                }
+              >
+                <div className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={isChecked}
+                    onChange={() => toggleSelect(p.id)}
+                    aria-label={t("prompts.selectRow", { name: p.name })}
+                    className="mt-0.5 h-4 w-4 shrink-0"
+                  />
+                <div className="flex flex-1 items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
                     <Link
                       href={`/prompts/${p.id}`}
@@ -461,7 +572,8 @@ export default function PromptsPage() {
                       {new Date(p.updated_at).toLocaleDateString()}
                     </p>
                   </div>
-                </div>
+                </div>{/* /flex-1 inner wrap */}
+                </div>{/* /outer flex (checkbox + content) */}
                 {p.tags.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1">
                     {p.tags.map((tag) => (
@@ -511,7 +623,8 @@ export default function PromptsPage() {
                   />
                 </div>
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
 
@@ -585,6 +698,18 @@ export default function PromptsPage() {
         <TestPromptModal
           prompt={testingPrompt}
           onClose={() => setTestingPrompt(null)}
+        />
+      )}
+
+      {showMoveModal && (
+        <MoveToFolderModal
+          folders={categories}
+          selectedCount={selectedIds.size}
+          onClose={() => setShowMoveModal(false)}
+          onConfirm={(fid) => void onConfirmBulkMove(fid)}
+          busy={moving}
+          titleKey="prompts.moveModalTitle"
+          subtitleKey="prompts.moveModalSubtitle"
         />
       )}
     </main>

@@ -174,6 +174,19 @@ class TableUpdate(BaseModel):
     folder_id: int | None = None
 
 
+class TableBulkMove(BaseModel):
+    """Body for ``POST /library/tables/bulk-move``.
+
+    Mirrors ``DomainBulkMove`` so the frontend's MoveToFolderModal can
+    use the same shape across surfaces. ``folder_id`` is required here
+    (not Optional in the sense of "omit to leave unchanged"); pass
+    ``null`` to move out of any folder.
+    """
+
+    table_ids: list[int] = Field(min_length=1, max_length=10_000)
+    folder_id: int | None
+
+
 # ----- CSV import -----
 
 class CsvImportRequest(BaseModel):

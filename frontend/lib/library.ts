@@ -62,6 +62,25 @@ export function renameTable(
   });
 }
 
+/**
+ * Move N tables to a folder (or out of any folder) in one round-trip.
+ *
+ * `folder_id` semantics here are NOT the same as `listTables`:
+ *   * `null` = move out of any folder (uncategorized)
+ *   * any positive integer = the target folder id
+ * (There's no "leave folder unchanged" option — that's what `renameTable`
+ * with a body that omits `folder_id` is for.)
+ */
+export function bulkMoveTables(payload: {
+  table_ids: number[];
+  folder_id: number | null;
+}): Promise<{ moved: number }> {
+  return api<{ moved: number }>("/library/tables/bulk-move", {
+    method: "POST",
+    body: payload,
+  });
+}
+
 // ----- Folders -----
 
 export interface BulkFolder {

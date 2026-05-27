@@ -109,6 +109,19 @@ class PromptMetaUpdate(BaseModel):
     tag_ids: list[int] | None = None  # null leaves unchanged; [] clears all
 
 
+class PromptBulkMove(BaseModel):
+    """Body for ``POST /prompts/bulk-move``.
+
+    Mirrors ``DomainBulkMove`` / ``TableBulkMove`` so the frontend's
+    MoveToFolderModal can use the same shape across surfaces.
+    ``category_id`` is required here (pass ``null`` to move out of any
+    category).
+    """
+
+    prompt_ids: list[int] = Field(min_length=1, max_length=10_000)
+    category_id: int | None
+
+
 class PromptVersionCreate(BaseModel):
     """Creates a new version (i.e. an edit to content)."""
 
