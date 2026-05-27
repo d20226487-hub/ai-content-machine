@@ -1,4 +1,5 @@
 from app.db.models.backup_run import BackupRun
+from app.db.models.bulk_generation_run import BulkGenerationRun
 from app.db.models.bulk_publish import BulkPublishRun, BulkTablePublishMapping
 from app.db.models.bulk_table import (
     BulkTable,
@@ -25,6 +26,7 @@ from app.db.models.user import User
 __all__ = [
     "AppSetting",
     "BackupRun",
+    "BulkGenerationRun",
     "BulkPublishRun",
     "BulkTable",
     "BulkTableCell",

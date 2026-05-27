@@ -1446,4 +1446,30 @@ export const ru: Record<keyof typeof en, string> = {
 
   // user chip
   "userChip.tooltip": "Создал: {name}",
+
+  // ----- Прогресс bulk-генерации + страница деталей (миграция 0030) -----
+  "genBanner.generating": "Генерация {done}/{total}",
+  "genBanner.failedCount": "Ошибок: {n}",
+  "genBanner.skippedCount": "Отменено: {n}",
+  "genBanner.details": "Подробнее →",
+  "genBanner.cancel": "Отменить",
+  "genBanner.cancelConfirm":
+    "Отменить генерацию? Незавершённые ячейки получат статус «Отменено».",
+
+  "genRun.title": "Генерация #{id}",
+  "genRun.meta": "Запустил: {by} · {when}",
+  "genRun.backToTable": "← Назад к таблице",
+  "genRun.cancel": "Отменить",
+  "genRun.cancelConfirm":
+    "Отменить генерацию? Незавершённые ячейки получат статус «Отменено».",
+  "genRun.counters": "{done} из {total} ячеек",
+  "genRun.colDone": "Готово",
+  "genRun.colFailed": "Ошибка",
+  "genRun.colSkipped": "Отменено",
+  "genRun.elapsed": "Время: {elapsed}",
+  "genRun.statusQueued": "В очереди",
+  "genRun.statusRunning": "Идёт",
+  "genRun.statusDone": "Готово",
+  "genRun.statusCancelled": "Отменено",
+  "genRun.statusFailed": "Сбой",
 };

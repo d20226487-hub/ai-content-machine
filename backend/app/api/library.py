@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from app.api.deps import get_current_user, require_role
 from app.db.models import (
     AppSetting,
+    BulkGenerationRun,
     BulkPublishRun,
     BulkTable,
     BulkTableCell,
@@ -33,6 +34,8 @@ from app.db.models import (
 )
 from app.db.session import get_db
 from app.schemas.bulk import (
+    BulkGenerationRunDetail,
+    BulkGenerationRunRead,
     CellsBatchUpsert,
     CellUpsert,
     ColumnCreate,
@@ -1392,17 +1395,46 @@ async def enqueue_generation(
             to_enqueue.append((row.id, col.id))
 
     enqueued: list[int] = []
+    run_id: int | None = None
     if to_enqueue:
         from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+        # Create the run BEFORE we mark cells, so we can stamp each
+        # cell with its run_id in the same upsert. The seed status is
+        # "running" — there's no "queued before workers see it" phase
+        # to model, the Celery push is microseconds after the commit.
+        run = BulkGenerationRun(
+            table_id=table_id,
+            status="running",
+            total=len(to_enqueue),
+            done=0,
+            failed=0,
+            skipped=0,
+            created_by_id=actor.id,
+            started_at=datetime.now(timezone.utc),
+        )
+        db.add(run)
+        await db.flush()  # populate run.id before child inserts
+        run_id = run.id
+
         rows_payload = [
-            {"row_id": rid, "column_id": cid, "status": "generating", "error": None}
+            {
+                "row_id": rid,
+                "column_id": cid,
+                "status": "generating",
+                "error": None,
+                "generation_run_id": run_id,
+            }
             for rid, cid in to_enqueue
         ]
         stmt = pg_insert(BulkTableCell).values(rows_payload)
         stmt = stmt.on_conflict_do_update(
             constraint="uq_bulk_cells_row_column",
-            set_={"status": "generating", "error": None},
+            set_={
+                "status": "generating",
+                "error": None,
+                "generation_run_id": run_id,
+            },
         ).returning(BulkTableCell.id)
         result = await db.execute(stmt)
         enqueued = [int(r[0]) for r in result.all()]
@@ -1419,6 +1451,7 @@ async def enqueue_generation(
                 cid,
                 override_provider_code=payload.override_provider_code,
                 override_model=payload.override_model,
+                run_id=run_id,
             )
 
     mode_label = {"empty": "empty", "failed": "failed", "all": "all"}[effective_mode]
@@ -1426,8 +1459,126 @@ async def enqueue_generation(
     if skipped:
         msg += f" Skipped {skipped} cell(s) that didn't match the filter."
     return GenerateResponse(
-        enqueued_cell_ids=enqueued, skipped=skipped, message=msg
+        enqueued_cell_ids=enqueued, skipped=skipped, message=msg, run_id=run_id
     )
+
+
+# ---------- Generation run lifecycle ----------
+
+async def _get_gen_run_or_404(
+    db: AsyncSession, run_id: int
+) -> BulkGenerationRun:
+    run = await db.get(BulkGenerationRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Generation run not found")
+    return run
+
+
+@router.get(
+    "/tables/{table_id}/active-gen-run",
+    response_model=BulkGenerationRunRead | None,
+)
+async def get_active_gen_run(
+    table_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BulkGenerationRun | None:
+    """Return the currently-active (queued/running) bulk generation run
+    for the table, or None if none is active.
+
+    The editor polls this every couple of seconds while a generation
+    might be in flight. We deliberately ignore historical runs here —
+    use ``GET /library/gen-runs/{id}`` for that.
+    """
+    await _get_table_or_404(db, table_id, actor, level="read")
+    row = (
+        await db.execute(
+            select(BulkGenerationRun)
+            .where(
+                BulkGenerationRun.table_id == table_id,
+                BulkGenerationRun.status.in_(["queued", "running"]),
+            )
+            .order_by(BulkGenerationRun.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return row
+
+
+@router.get("/gen-runs/{run_id}", response_model=BulkGenerationRunDetail)
+async def get_gen_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BulkGenerationRunDetail:
+    """Full state for one generation run — counters, status, who
+    started it, when. The detail page polls this every ~2s while the
+    run is active, then stops on a terminal status."""
+    run = await _get_gen_run_or_404(db, run_id)
+    # Authorisation: any reader of the underlying table can see its
+    # gen-runs. _get_table_or_404 throws if not allowed.
+    await _get_table_or_404(db, run.table_id, actor, level="read")
+
+    creator_name: str | None = None
+    if run.created_by_id is not None:
+        u = await db.get(User, run.created_by_id)
+        if u is not None:
+            creator_name = u.full_name
+
+    return BulkGenerationRunDetail(
+        id=run.id,
+        table_id=run.table_id,
+        status=run.status,  # type: ignore[arg-type]
+        total=run.total,
+        done=run.done,
+        failed=run.failed,
+        skipped=run.skipped,
+        error=run.error,
+        created_by_id=run.created_by_id,
+        created_at=run.created_at,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        created_by_name=creator_name,
+    )
+
+
+@router.post("/gen-runs/{run_id}/cancel", response_model=BulkGenerationRunRead)
+async def cancel_gen_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BulkGenerationRun:
+    """Request cancellation of an in-flight generation run.
+
+    Sets status='cancelled' immediately. Workers consult run.status
+    before processing each cell and bail out (incrementing skipped)
+    when they see this. The run's finished_at is stamped on the
+    transition to a terminal state by the LAST worker — not here —
+    so the duration in the UI reflects actual elapsed work.
+
+    No-op on terminal states (done / failed / cancelled): returns the
+    current row without bumping anything.
+    """
+    run = await _get_gen_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+
+    if run.status in ("cancelled", "done", "failed"):
+        return run
+
+    run.status = "cancelled"
+    # If no cells finish after this point (rare — the queue was
+    # already drained except for ours, or the worker is bottlenecked),
+    # we still want finished_at populated so the UI doesn't show a
+    # cancelled run as "ongoing forever". The worker stamps it on the
+    # last counter update; this catches the no-more-updates edge case.
+    if (
+        run.done + run.failed + run.skipped >= run.total
+        and run.finished_at is None
+    ):
+        run.finished_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(run)
+    return run
 
 
 @router.get("/tables/{table_id}/export.csv")

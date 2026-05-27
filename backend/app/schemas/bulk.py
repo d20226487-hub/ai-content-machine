@@ -232,3 +232,44 @@ class GenerateResponse(BaseModel):
     enqueued_cell_ids: list[int]
     skipped: int
     message: str
+    # New in migration 0030: when at least one cell is enqueued, a
+    # BulkGenerationRun is created and its id surfaces here so the
+    # editor UI can immediately link to the progress banner / detail
+    # page. None when nothing was enqueued (no cells matched the
+    # filter, no rows, etc.) — no run, no id.
+    run_id: int | None = None
+
+
+# ----- Generation runs (added in migration 0030) -----
+
+BulkGenerationRunStatus = Literal[
+    "queued", "running", "cancelled", "done", "failed"
+]
+
+
+class BulkGenerationRunRead(BaseModel):
+    """One bulk-generation run — counters + lifecycle stamps. Used by
+    both the polled detail page and the inline editor banner."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    table_id: int
+    status: BulkGenerationRunStatus
+    total: int
+    done: int
+    failed: int
+    skipped: int
+    error: str | None = None
+    created_by_id: int | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class BulkGenerationRunDetail(BulkGenerationRunRead):
+    """Same payload as the summary today — kept as a separate type so
+    we can extend with per-error breakdowns / per-column counts later
+    without breaking the summary endpoint."""
+
+    created_by_name: str | None = None

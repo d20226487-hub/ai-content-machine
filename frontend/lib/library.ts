@@ -288,6 +288,9 @@ export interface GenerateResponsePayload {
   enqueued_cell_ids: number[];
   skipped: number;
   message: string;
+  /** New in migration 0030: id of the BulkGenerationRun created for
+   *  this batch. Null when nothing was enqueued. */
+  run_id: number | null;
 }
 
 export function enqueueGeneration(
@@ -297,6 +300,59 @@ export function enqueueGeneration(
   return api<GenerateResponsePayload>(`/library/tables/${tableId}/generate`, {
     method: "POST",
     body: payload,
+  });
+}
+
+// ----- Bulk generation runs -----
+
+export type BulkGenerationRunStatus =
+  | "queued"
+  | "running"
+  | "cancelled"
+  | "done"
+  | "failed";
+
+export interface BulkGenerationRun {
+  id: number;
+  table_id: number;
+  status: BulkGenerationRunStatus;
+  total: number;
+  done: number;
+  failed: number;
+  skipped: number;
+  error: string | null;
+  created_by_id: number | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface BulkGenerationRunDetail extends BulkGenerationRun {
+  created_by_name: string | null;
+}
+
+/** Returns the table's currently-active (queued/running) generation
+ *  run, or null when nothing is in flight. The editor banner polls
+ *  this every few seconds. */
+export function getActiveGenerationRun(
+  tableId: number,
+): Promise<BulkGenerationRun | null> {
+  return api<BulkGenerationRun | null>(
+    `/library/tables/${tableId}/active-gen-run`,
+  );
+}
+
+export function getGenerationRun(
+  runId: number,
+): Promise<BulkGenerationRunDetail> {
+  return api<BulkGenerationRunDetail>(`/library/gen-runs/${runId}`);
+}
+
+/** Sets status='cancelled' on the run. In-flight cells finish; the
+ *  next pick-up by workers short-circuits with a "Cancelled" note. */
+export function cancelGenerationRun(runId: number): Promise<BulkGenerationRun> {
+  return api<BulkGenerationRun>(`/library/gen-runs/${runId}/cancel`, {
+    method: "POST",
   });
 }
 

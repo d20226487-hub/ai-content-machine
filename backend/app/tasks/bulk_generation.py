@@ -28,10 +28,18 @@ def generate_bulk_cell(
     *,
     override_provider_code: str | None = None,
     override_model: str | None = None,
+    run_id: int | None = None,
 ) -> dict:
     """Generate one cell. The override pair, when both non-None, replaces
     the per-column provider/model for this run only — see the queue-wide
-    override option in GenerationQueueModal."""
+    override option in GenerationQueueModal.
+
+    ``run_id`` ties this cell to a BulkGenerationRun added in migration
+    0030. The service consults the run's status before doing any work
+    (so a Cancel click short-circuits in-flight tasks) and atomically
+    bumps the run's counters on completion. Legacy callers that omit
+    run_id still work — the service skips the run bookkeeping entirely.
+    """
     asyncio.run(
         _run(
             table_id,
@@ -39,6 +47,7 @@ def generate_bulk_cell(
             column_id,
             override_provider_code=override_provider_code,
             override_model=override_model,
+            run_id=run_id,
         )
     )
     return {"table_id": table_id, "row_id": row_id, "column_id": column_id, "ok": True}
@@ -51,6 +60,7 @@ async def _run(
     *,
     override_provider_code: str | None,
     override_model: str | None,
+    run_id: int | None = None,
 ) -> None:
     settings = get_settings()
     engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
@@ -66,6 +76,7 @@ async def _run(
                 column_id=column_id,
                 override_provider_code=override_provider_code,
                 override_model=override_model,
+                run_id=run_id,
             )
     finally:
         await engine.dispose()

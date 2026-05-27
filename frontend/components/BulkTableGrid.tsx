@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CellEditorModal } from "@/components/CellEditorModal";
 import { ColumnConfigModal } from "@/components/ColumnConfigModal";
 import { BulkPublishModal } from "@/components/BulkPublishModal";
+import { GenerationProgressBanner } from "@/components/GenerationProgressBanner";
 import { GenerationQueueModal } from "@/components/GenerationQueueModal";
 import { Modal } from "@/components/Modal";
 import { useT, type TranslationKey } from "@/lib/i18n-context";
@@ -602,8 +603,30 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
     setViewing({ row, column: col, cell });
   }
 
+  // Refresh the table when a generation run finishes so the cell
+  // statuses ('generated' / 'failed') paint in without a manual
+  // reload. Re-fetches via getTable rather than mutating state in
+  // place — the workers update cells server-side and the local
+  // pendingRef / autosave state has nothing to merge.
+  const refreshOnRunFinish = useCallback(async () => {
+    try {
+      const fresh = await getTable(tableRef.current.id);
+      onTableChangeRef.current(fresh);
+    } catch {
+      // Best-effort; if the refresh fails the next manual interaction
+      // will catch up.
+    }
+  }, []);
+
   return (
     <>
+      {/* Progress banner for an in-flight bulk-generation run. Hides
+          itself when no run is active for the table. */}
+      <GenerationProgressBanner
+        tableId={table.id}
+        onRunFinished={refreshOnRunFinish}
+      />
+
       {/* Generation toolbar */}
       <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-neutral-200 bg-white px-3 py-2 text-xs dark:border-neutral-800 dark:bg-neutral-900">
         <span className="text-neutral-500 dark:text-neutral-400">

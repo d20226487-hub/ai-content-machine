@@ -1383,4 +1383,30 @@ export const en = {
 
   // user chip
   "userChip.tooltip": "Created by {name}",
+
+  // ----- Bulk-generation run banner + detail page (migration 0030) -----
+  "genBanner.generating": "Generating {done}/{total}",
+  "genBanner.failedCount": "{n} failed",
+  "genBanner.skippedCount": "{n} skipped",
+  "genBanner.details": "Details →",
+  "genBanner.cancel": "Cancel",
+  "genBanner.cancelConfirm":
+    "Cancel this generation run? In-flight cells finish; the rest get a \"Cancelled\" status.",
+
+  "genRun.title": "Generation run #{id}",
+  "genRun.meta": "Started by {by} · {when}",
+  "genRun.backToTable": "← Back to table",
+  "genRun.cancel": "Cancel run",
+  "genRun.cancelConfirm":
+    "Cancel this generation run? In-flight cells finish; the rest get a \"Cancelled\" status.",
+  "genRun.counters": "{done} of {total} cells",
+  "genRun.colDone": "Done",
+  "genRun.colFailed": "Failed",
+  "genRun.colSkipped": "Cancelled",
+  "genRun.elapsed": "Elapsed: {elapsed}",
+  "genRun.statusQueued": "Queued",
+  "genRun.statusRunning": "Running",
+  "genRun.statusDone": "Done",
+  "genRun.statusCancelled": "Cancelled",
+  "genRun.statusFailed": "Failed",
 } as const;

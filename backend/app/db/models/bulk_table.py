@@ -14,6 +14,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     DateTime,
     ForeignKey,
     Integer,
@@ -152,4 +153,14 @@ class BulkTableCell(Base):
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
+    )
+    # Back-link to the bulk_generation_runs row that scheduled this
+    # cell. NULL for cells generated before migration 0030 or for
+    # cells written via the inline edit / non-batch paths. ON DELETE
+    # SET NULL on the FK so a finished run can be hard-deleted without
+    # taking the cell's content with it.
+    generation_run_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("bulk_generation_runs.id", ondelete="SET NULL"),
+        nullable=True,
     )

@@ -8,10 +8,11 @@ the web request. Status transitions:
 """
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
+    BulkGenerationRun,
     BulkTable,
     BulkTableCell,
     BulkTableColumn,
@@ -106,6 +107,66 @@ async def mark_cell_generating(
     return cell.id
 
 
+async def _is_run_cancelled(db: AsyncSession, run_id: int) -> bool:
+    """Fast pre-check: is this run cancelled? Avoids loading the full
+    row when all we need is the status."""
+    res = await db.execute(
+        text("SELECT status FROM bulk_generation_runs WHERE id = :id"),
+        {"id": run_id},
+    )
+    row = res.first()
+    return row is not None and row[0] == "cancelled"
+
+
+async def _bump_run_counter(
+    db: AsyncSession, run_id: int, *, field: str
+) -> None:
+    """Atomically increment one of ``done`` / ``failed`` / ``skipped`` on
+    the run row, then mark the run done + stamp finished_at if all cells
+    have been accounted for. The last-worker-finishes pattern keeps the
+    finished_at honest (not the cancel click).
+
+    The two SQL statements run in one transaction so a peer worker
+    bumping a different counter in parallel either sees our increment
+    as already applied or our terminal flip as already taken. Neither
+    statement guards against the run id not existing (callers verify
+    that upstream)."""
+    assert field in ("done", "failed", "skipped"), field
+    # Inline the column name — it's whitelisted above, no SQL injection
+    # risk, and we want a single round-trip.
+    await db.execute(
+        text(
+            f"UPDATE bulk_generation_runs "
+            f"SET {field} = {field} + 1 WHERE id = :id"
+        ),
+        {"id": run_id},
+    )
+    await db.execute(
+        text(
+            "UPDATE bulk_generation_runs "
+            "SET status = 'done', finished_at = NOW() "
+            "WHERE id = :id "
+            "  AND status = 'running' "
+            "  AND done + failed + skipped >= total"
+        ),
+        {"id": run_id},
+    )
+    # Same idea for cancelled-and-now-fully-drained: stamp finished_at
+    # so the UI shows a real elapsed time on the detail page.
+    await db.execute(
+        text(
+            "UPDATE bulk_generation_runs "
+            "SET finished_at = NOW() "
+            "WHERE id = :id "
+            "  AND status = 'cancelled' "
+            "  AND finished_at IS NULL "
+            "  AND done + failed + skipped >= total"
+        ),
+        {"id": run_id},
+    )
+    await db.commit()
+
+
 async def generate_one_cell(
     db: AsyncSession,
     *,
@@ -114,13 +175,29 @@ async def generate_one_cell(
     column_id: int,
     override_provider_code: str | None = None,
     override_model: str | None = None,
+    run_id: int | None = None,
 ) -> None:
     """Do the work and persist either success or failure. Caller commits.
 
     `override_provider_code` + `override_model`: queue-wide override. When
     both are non-None, they replace the per-column settings for this call.
     Validated together at the API layer; we just trust the pair here.
+
+    `run_id`: BulkGenerationRun the cell belongs to. If the run has been
+    cancelled before we reach this cell, we short-circuit (mark the cell
+    failed with a "Cancelled before completion" note, bump run.skipped)
+    instead of doing a provider call. Legacy callers (none in tree
+    today, but kept for safety) can omit run_id and the bookkeeping is
+    just skipped.
     """
+    # Cancellation pre-check. Cheap query, no provider cost.
+    if run_id is not None and await _is_run_cancelled(db, run_id):
+        await _write_failure(
+            db, row_id, column_id, "Cancelled before completion"
+        )
+        await _bump_run_counter(db, run_id, field="skipped")
+        return
+
     col = await _load_column(db, column_id)
 
     # Sanity: must be an output column with a prompt assignment.
@@ -128,6 +205,8 @@ async def generate_one_cell(
         await _write_failure(
             db, row_id, column_id, "Column has no prompt assigned"
         )
+        if run_id is not None:
+            await _bump_run_counter(db, run_id, field="failed")
         return
 
     try:
@@ -136,6 +215,8 @@ async def generate_one_cell(
         )
     except ValueError as e:
         await _write_failure(db, row_id, column_id, str(e))
+        if run_id is not None:
+            await _bump_run_counter(db, run_id, field="failed")
         return
 
     row_values = await _load_row_cells_by_column(db, row_id)
@@ -160,12 +241,16 @@ async def generate_one_cell(
         await _write_failure(
             db, row_id, column_id, "No AI provider is enabled. Configure one in Settings."
         )
+        if run_id is not None:
+            await _bump_run_counter(db, run_id, field="failed")
         return
 
     try:
         provider = await get_provider(db, code)
     except ProviderNotConfigured as e:
         await _write_failure(db, row_id, column_id, str(e))
+        if run_id is not None:
+            await _bump_run_counter(db, run_id, field="failed")
         return
 
     # Load the provider row for rate-limit settings + per-column model override fallback.
@@ -208,6 +293,8 @@ async def generate_one_cell(
             model=chosen_model,
             error=e,
         )
+        if run_id is not None:
+            await _bump_run_counter(db, run_id, field="failed")
         return
     except Exception as e:  # last-resort
         await _write_failure(db, row_id, column_id, f"Unexpected error: {e}")
@@ -226,6 +313,8 @@ async def generate_one_cell(
             resource_type="cell",
             resource_id=f"{row_id}:{column_id}",
         )
+        if run_id is not None:
+            await _bump_run_counter(db, run_id, field="failed")
         return
 
     cell = await _ensure_cell(db, row_id, column_id)
@@ -261,6 +350,9 @@ async def generate_one_cell(
             "column_id": column_id,
         },
     )
+
+    if run_id is not None:
+        await _bump_run_counter(db, run_id, field="done")
 
 
 async def _write_failure(
