@@ -173,8 +173,13 @@ export default function DomainsPage() {
     setFetchToken(token);
     setLoadingList(true);
     try {
-      const folder_id =
-        scope === "all" ? undefined : scope === "root" ? "root" : scope;
+      // Root view ("all" scope) filters to domains NOT in any folder.
+      // The backend's "root" sentinel is the no-folder filter, and
+      // collapsing "all" onto it matches the principle now used on
+      // /library and /prompts: items inside a folder only appear when
+      // you navigate INTO that folder. Without this, a domain moved
+      // into a folder still cluttered the root list.
+      const folder_id = typeof scope === "number" ? scope : "root";
       const r = await listDomainsPicker({
         q: debouncedQuery,
         folder_id,
@@ -399,8 +404,9 @@ export default function DomainsPage() {
     if (selectingAll) return;
     setSelectingAll(true);
     try {
-      const folder_id =
-        scope === "all" ? undefined : scope === "root" ? "root" : scope;
+      // Same scope→folder_id mapping as loadList — keep them in lock-
+      // step so the bulk-select cap matches what's actually rendered.
+      const folder_id = typeof scope === "number" ? scope : "root";
       const { ids } = await listDomainsPickerIds({
         q: debouncedQuery,
         folder_id,

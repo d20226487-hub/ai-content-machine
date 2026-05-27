@@ -139,7 +139,12 @@ export default function PromptsPage() {
 
   useEffect(() => {
     setPrompts(null);
-    const categoryParam = folder;
+    // Root view filters to prompts NOT in any folder (category_id=0 is
+    // the backend's "uncategorized" sentinel — see prompts.list_prompts).
+    // Previously the root sent no category_id param and the backend
+    // returned everything, which surfaced prompts that already lived
+    // inside a folder and made the root view feel cluttered.
+    const categoryParam = folder ?? 0;
 
     listPrompts({
       category_id: categoryParam,

@@ -110,8 +110,13 @@ export default function LibraryPage() {
   const refreshTables = useCallback(async () => {
     setItems(null);
     try {
+      // Root view filters to tables NOT in any folder (folder_id=0 is
+      // the backend's "uncategorized" sentinel — see library.list_tables).
+      // Previously the root sent no folder_id param and the backend
+      // returned everything, which cluttered the page with tables that
+      // already lived inside a folder.
       const r = await listTables({
-        folder_id: folder,
+        folder_id: folder ?? 0,
         q,
         page,
         page_size: pageSize,
