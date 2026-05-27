@@ -690,6 +690,23 @@ async def revert_prompt(
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> PromptDetail:
+    """Revert the current pointer to an earlier version — no new version
+    row is created.
+
+    Old behavior (≤2026-05-23) cloned the target version's content into a
+    fresh row, so reverting to v2 actually created v3 with v2's content.
+    Users found this confusing: "I reverted to v2, why is my prompt v3?".
+
+    New behavior just shifts ``current_version_id`` to the target row.
+    Editing afterwards still creates a new version off the now-current
+    one (i.e. an edit after reverting to v2 produces v3), so the end
+    state of "edit after revert" is identical to the old flow — minus
+    the spurious intermediate version with cloned content.
+
+    ``payload.change_note`` is accepted for backward compatibility but
+    ignored (there's no new row to attach it to). The schema is kept
+    unchanged so existing clients aren't forced to update.
+    """
     p = await _get_prompt_or_404(db, prompt_id)
     target = next(
         (v for v in p.versions if v.version_number == payload.target_version_number),
@@ -701,22 +718,9 @@ async def revert_prompt(
             detail=f"No version {payload.target_version_number} for this prompt",
         )
 
-    next_n = await _next_version_number(db, p.id)
-    note = (
-        payload.change_note
-        or f"Reverted to v{payload.target_version_number}"
-    )
-    v = PromptVersion(
-        prompt_id=p.id,
-        version_number=next_n,
-        content=target.content,
-        change_note=note,
-        created_by_id=actor.id,
-    )
-    db.add(v)
-    await db.flush()
-    p.current_version_id = v.id
-    await db.commit()
+    if p.current_version_id != target.id:
+        p.current_version_id = target.id
+        await db.commit()
     fresh = await _get_prompt_or_404(db, p.id)
     return await _to_detail_with_users(db, fresh)
 

@@ -11,13 +11,24 @@ interface Props {
   initialValue: string;
   onSave: (next: string) => void | Promise<void>;
   onClose: () => void;
+  /** Which mode to land in when the modal opens. Output cells default
+   *  to preview so the user can read the generated content first and
+   *  flip to edit only if they want to tweak it. Input cells default
+   *  to edit since previewing raw text is rarely useful. */
+  defaultMode?: Mode;
 }
 
 type Mode = "edit" | "preview";
 
-export function CellEditorModal({ title, initialValue, onSave, onClose }: Props) {
+export function CellEditorModal({
+  title,
+  initialValue,
+  onSave,
+  onClose,
+  defaultMode = "edit",
+}: Props) {
   const { t } = useT();
-  const [mode, setMode] = useState<Mode>("edit");
+  const [mode, setMode] = useState<Mode>(defaultMode);
   const [draft, setDraft] = useState(initialValue);
   const [saving, setSaving] = useState(false);
 
@@ -36,6 +47,19 @@ export function CellEditorModal({ title, initialValue, onSave, onClose }: Props)
     setSaving(true);
     try {
       await onSave(draft);
+      // Close ourselves on success — historically the parent's onSave
+      // also called setViewing(null), but if the parent's downstream
+      // flush hangs or races during unmount, the button could stay
+      // stuck on "Saving…" with no way out except closing the window.
+      // Owning the close inside the modal is idempotent (parents that
+      // also call onClose are no-ops the second time).
+      onClose();
+    } catch (err) {
+      // Surface unexpected errors instead of silently swallowing them
+      // so a stuck save at least shows something. The parent already
+      // owns network-error reporting via its own UI; this is the
+      // defense-in-depth path.
+      console.error("[CellEditor] save failed", err);
     } finally {
       setSaving(false);
     }

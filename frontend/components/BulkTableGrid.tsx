@@ -1012,12 +1012,30 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
             n: table.rows.findIndex((r) => r.id === viewing.row.id) + 1,
           })}`}
           initialValue={getCellValue(viewing.row.id, viewing.column.id)}
+          // Output columns land in preview by default — the user
+          // usually wants to read the generated HTML first and only
+          // flip to edit if they want to tweak. Input columns stay
+          // on edit (their content is what the user types in, no
+          // rendered preview makes sense).
+          defaultMode={viewing.column.kind === "output" ? "preview" : "edit"}
           onClose={() => setViewing(null)}
           onSave={async (next) => {
-            // Push directly through the same upsert path the inline textarea uses,
-            // so status flips to 'manual' and the table state stays in sync.
+            // Push directly through the same upsert path the inline
+            // textarea uses, so status flips to 'manual' and the table
+            // state stays in sync.
             const rowId = viewing.row.id;
             const colId = viewing.column.id;
+            // Clear focusedCellRef first. The autosave path deliberately
+            // SKIPS the focused cell so a quick blur+autosave doesn't
+            // clobber in-progress typing — but on an explicit modal
+            // Save, that heuristic backfires: if the inline textarea
+            // for this same cell still holds focus (browser timing
+            // varies on click→blur ordering when opening the modal),
+            // flushPending would skip our write, the snapshot becomes
+            // empty, the function returns immediately, and the user
+            // experiences a no-op save where the button feels stuck
+            // until something else triggers a real flush.
+            focusedCellRef.current = null;
             pendingRef.current.set(`${rowId}:${colId}`, next === "" ? null : next);
             await flushPending();
             setViewing(null);
