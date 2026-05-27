@@ -1233,13 +1233,17 @@ export const ru: Record<keyof typeof en, string> = {
   "bulkPub.customCreateHint":
     "Отправляется action=create. Слаг, заголовок, контент (и любые другие поля body_template) создают новую страницу на сайте.",
   "bulkPub.customUpdateHint":
-    "Отправляется action=update с upstream id. Сопоставьте колонку таблицы с полем 'id' ниже; остальные сопоставленные поля будут обновлены на существующей странице.",
+    "Отправляется action=update. Укажите колонку с upstream id строки в разделе «Найти существующие записи по»; остальные сопоставленные поля будут обновлены на странице (включая новый slug, если переименовываете).",
   "bulkPub.customUpsertHint":
-    "Отправляется action=upsert. Сервер ищет страницу по slug — если нашёл, обновляет; если нет, создаёт новую.",
+    "Отправляется action=upsert. Сервер ищет страницу по slug — если нашёл, обновляет; если нет, создаёт новую. Переименовать slug через upsert нельзя — используйте Update.",
   "bulkPub.upsertCustomOnly":
     "Upsert поддерживается только для Custom CMS. Для WordPress используйте Create или Update.",
   "bulkPub.customUpdateNeedsId":
-    "Для Update в Custom CMS нужно сопоставить поле 'id' с колонкой таблицы.",
+    "Для Update в Custom CMS укажите колонку с id в разделе «Найти существующие записи по».",
+  "bulkPub.customLookupHint":
+    "Выберите колонку с upstream id записи. Переименовываете slug? Сопоставьте новый slug отдельно в разделе «Поля для записи» ниже — поиск идёт по id, тело отправляется с новым slug.",
+  "bulkPub.customLookupSlugDisabled":
+    "Поиск по slug сервером пока не поддерживается — endpoint __add_content не принимает параметр old_slug. Используйте поиск по id; вы всё равно можете переименовать slug, указав его в «Поля для записи».",
   "bulkPub.mode": "Режим",
   "bulkPub.modeSingle": "Один сайт",
   "bulkPub.modeMulti": "Несколько сайтов",

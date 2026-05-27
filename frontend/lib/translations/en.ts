@@ -1173,13 +1173,17 @@ export const en = {
   "bulkPub.customCreateHint":
     "Send action=create. Maps the row's slug, title, content (and any other body_template fields) into a new page on the target.",
   "bulkPub.customUpdateHint":
-    "Send action=update with the upstream id. Map the bulk table's id column to the 'id' field below; any other mapped fields get patched onto the existing page.",
+    "Send action=update. Pick the column that holds each row's upstream post id under \"Find existing posts by\"; any other mapped fields get patched onto the existing page (including a new slug, if you want to rename).",
   "bulkPub.customUpsertHint":
-    "Send action=upsert. The upstream looks up the row's slug; if found, the page is patched in place — otherwise a new page is created.",
+    "Send action=upsert. The upstream looks up the row's slug; if found, the page is patched in place — otherwise a new page is created. Renaming the slug via upsert isn't supported (use Update for that).",
   "bulkPub.upsertCustomOnly":
     "Upsert is supported only for Custom CMS domains. Use Create or Update for WordPress.",
   "bulkPub.customUpdateNeedsId":
-    "Custom CMS Update mode requires the 'id' field to be mapped to a column.",
+    "Custom CMS Update mode requires picking an id column under \"Find existing posts by\".",
+  "bulkPub.customLookupHint":
+    "Pick the column holding each row's upstream post id. Renaming the slug? Map the new slug separately in the \"Fields to set\" section below — the lookup uses the id column, the body sends the new slug.",
+  "bulkPub.customLookupSlugDisabled":
+    "Slug-based lookup isn't supported by the upstream yet — the __add_content endpoint doesn't accept an old_slug parameter. Use id lookup; you can still rename the slug by mapping it in \"Fields to set\".",
   "bulkPub.mode": "Mode",
   "bulkPub.modeSingle": "Single site",
   "bulkPub.modeMulti": "Multi site",

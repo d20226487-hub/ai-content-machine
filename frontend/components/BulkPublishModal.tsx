@@ -452,14 +452,29 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
           if (m.operation && !userTouchedRef.current.operation) {
             setOperation(m.operation);
           }
-          if (m.lookup_kind && !userTouchedRef.current.lookupKind) {
-            setLookupKind(m.lookup_kind);
+          // Legacy back-compat: Custom CMS Update used to encode the
+          // upstream post-id as field_to_column['id'] — there was no
+          // lookup_column_id in the old payload. Migrate transparently
+          // so saved mappings from the old UI surface in the new
+          // "Find existing posts by" picker without the user having
+          // to re-pick the column. Only fires for Custom CMS Update;
+          // leaves WP and Create/Upsert mappings alone.
+          const legacyCustomId =
+            selected?.cms_type === "custom" &&
+            m.operation === "update" &&
+            typeof (m.field_to_column as Record<string, unknown> | undefined)?.id === "number"
+              ? ((m.field_to_column as Record<string, number>).id as number)
+              : null;
+          if (!userTouchedRef.current.lookupKind) {
+            if (m.lookup_kind) setLookupKind(m.lookup_kind);
+            else if (legacyCustomId !== null) setLookupKind("id");
           }
-          setLookupColumnId((cur) =>
-            cur !== ""
-              ? cur
-              : typeof m.lookup_column_id === "number" ? m.lookup_column_id : "",
-          );
+          setLookupColumnId((cur) => {
+            if (cur !== "") return cur;
+            if (typeof m.lookup_column_id === "number") return m.lookup_column_id;
+            if (legacyCustomId !== null) return legacyCustomId;
+            return "";
+          });
           if (m.on_slug_conflict && !userTouchedRef.current.onSlugConflict) {
             setOnSlugConflict(m.on_slug_conflict);
           }
@@ -496,14 +511,29 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
           if (m.operation && !userTouchedRef.current.operation) {
             setOperation(m.operation);
           }
-          if (m.lookup_kind && !userTouchedRef.current.lookupKind) {
-            setLookupKind(m.lookup_kind);
+          // Legacy back-compat (same migration as the single-mode branch
+          // above): if the saved multi mapping is a Custom-CMS Update
+          // that encoded the id via field_to_column['id'], lift it into
+          // the new lookup_column_id. cmsTypeFilter scope lets us
+          // restrict to Custom; for mixed-CMS tables the bridge runs
+          // server-side regardless and the extra body key is harmless
+          // for WP rows.
+          const legacyCustomId =
+            cmsTypeFilter === "custom" &&
+            m.operation === "update" &&
+            typeof (m.field_to_column as Record<string, unknown> | undefined)?.id === "number"
+              ? ((m.field_to_column as Record<string, number>).id as number)
+              : null;
+          if (!userTouchedRef.current.lookupKind) {
+            if (m.lookup_kind) setLookupKind(m.lookup_kind);
+            else if (legacyCustomId !== null) setLookupKind("id");
           }
-          setLookupColumnId((cur) =>
-            cur !== ""
-              ? cur
-              : typeof m.lookup_column_id === "number" ? m.lookup_column_id : "",
-          );
+          setLookupColumnId((cur) => {
+            if (cur !== "") return cur;
+            if (typeof m.lookup_column_id === "number") return m.lookup_column_id;
+            if (legacyCustomId !== null) return legacyCustomId;
+            return "";
+          });
           if (m.on_slug_conflict && !userTouchedRef.current.onSlugConflict) {
             setOnSlugConflict(m.on_slug_conflict);
           }
@@ -787,9 +817,12 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
       }
     }
     if (operation === "update" && cmsType === "custom") {
-      // Custom CMS update sends `id` in the body — must be mapped.
-      if (!("id" in fieldToColumn)) {
-        setError(t("bulkPub.customUpdateNeedsId"));
+      // Custom CMS Update now uses the unified "Find existing posts by"
+      // panel — same shape as WP. The legacy "must map id in field
+      // mapping" requirement is gone (the backend bridges
+      // lookup_column_id → field_to_column['id'] at run creation).
+      if (lookupColumnId === "" && !("id" in fieldToColumn)) {
+        setError(t("bulkPub.updateLookupRequired"));
         return;
       }
     }
@@ -853,10 +886,13 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
       operation,
     };
 
-    if (operation === "update" && cmsTypeFilter === "wordpress") {
-      // WP update uses find_post → PATCH driven by the lookup column.
-      // Custom CMS update reads `id` directly from a field_to_column
-      // mapping, so we deliberately omit lookup_* in that branch.
+    if (operation === "update" && lookupColumnId !== "") {
+      // Send lookup_kind + lookup_column_id for both WP and Custom CMS
+      // Update — the backend bridges the Custom-CMS case into the
+      // legacy field_to_column['id'] format so the worker path is
+      // unchanged. Skip when lookupColumnId is empty (legacy Custom
+      // mappings that still encode the id via field_to_column['id']
+      // pass validation above and reach the worker just fine).
       payload.lookup_kind = lookupKind;
       payload.lookup_column_id = Number(lookupColumnId);
     } else if (operation === "create") {
@@ -975,6 +1011,11 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
           <CustomCmsActionPanel
             operation={operation}
             onOperationChange={setOperationTouched}
+            lookupKind={lookupKind}
+            onLookupKindChange={setLookupKindTouched}
+            lookupColumnId={lookupColumnId}
+            onLookupColumnIdChange={setLookupColumnId}
+            columns={table.columns}
           />
         )}
 
