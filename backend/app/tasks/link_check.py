@@ -1,18 +1,31 @@
-"""Celery task that runs a link-check over a bulk table.
+"""Distributed, resumable link checker (fan-out + crash-resume).
 
-One task per LinkCheckRun. It does the (fast) juxtapose pass inline, then —
-if enabled — crawls the unique output links in batches, persisting progress
-and honoring a Cancel between batches. All DB I/O happens here in the task's
-own session (never inside a concurrent crawl worker).
+Flow:
+  * ``linkcheck.seed`` — flips the run to running, does the (fast, CPU-only)
+    juxtapose inline, materializes one ``LinkCheckCrawlTarget`` per unique
+    crawlable URL (carrying the cell occurrences it appears in), then fans
+    out one ``linkcheck.crawl_chunk`` task per ``LINK_CHUNK_SIZE`` links
+    across all workers. Juxtapose violations + targets + status flip commit
+    in ONE transaction, so a seed crash before that commit re-runs cleanly
+    (status still ``queued``) and a crash after it resumes via the chunks.
+  * ``linkcheck.crawl_chunk`` — claims the ``pending`` targets for its chunk,
+    crawls them in sub-batches, writes occurrence violations + flips targets
+    ``done`` + bumps counters per sub-batch (one commit each). Re-querying
+    ``pending`` makes it idempotent under Celery redelivery / resume.
+  * finalize (advisory-locked, runs once) recomputes authoritative counters
+    from the targets table and sets the run ``done``.
+  * ``linkcheck.watchdog`` (beat) resumes stalled runs; ``linkcheck.resume``
+    re-enqueues a run's pending chunks (also exposed as a button).
 
-Fresh NullPool engine per task for the same event-loop reason as
-``bulk_generation`` — see that module's note.
+Fresh NullPool engine per task — same event-loop reason as bulk_generation.
 """
 import asyncio
 from collections import defaultdict
 from datetime import datetime, timezone
+from typing import Awaitable, Callable
 
-from sqlalchemy import select
+from sqlalchemy import func, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -21,12 +34,14 @@ from app.db.models import (
     BulkTableCell,
     BulkTableColumn,
     BulkTableRow,
+    LinkCheckCrawlTarget,
     LinkCheckRun,
     LinkCheckViolation,
 )
 from app.services.link_check import (
     _MAX_CRAWL_LINKS,
     CRAWL_BATCH,
+    LINK_CHUNK_SIZE,
     crawl_batch,
     crawlable_url,
     extract_expected_links,
@@ -36,18 +51,20 @@ from app.services.link_check import (
 )
 from app.tasks.celery_app import celery_app
 
+# Namespace for the per-run finalize advisory lock (2-int form).
+_ADVISORY_NS = 0x4C43  # 'LC'
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-@celery_app.task(name="linkcheck.run")
-def run_link_check(run_id: int) -> dict:
-    asyncio.run(_run(run_id))
-    return {"run_id": run_id, "ok": True}
+def _batches(seq: list, n: int):
+    for i in range(0, len(seq), n):
+        yield seq[i : i + n]
 
 
-async def _run(run_id: int) -> None:
+async def _with_session(fn: Callable[[AsyncSession], Awaitable[None]]) -> None:
     settings = get_settings()
     engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
     Session: async_sessionmaker[AsyncSession] = async_sessionmaker(
@@ -55,45 +72,52 @@ async def _run(run_id: int) -> None:
     )
     try:
         async with Session() as db:
-            await _process(db, run_id)
-    except Exception as e:  # noqa: BLE001 — record + re-raise for task_failure log
-        async with Session() as db:
-            run = await db.get(LinkCheckRun, run_id)
-            if run is not None and run.status not in ("cancelled", "done", "failed"):
-                run.status = "failed"
-                run.error = str(e)[:2000]
-                run.finished_at = _now()
-                await db.commit()
-        raise
+            await fn(db)
     finally:
         await engine.dispose()
 
 
-def _violation(
-    run_id, row_id, pos, col_id, col_names, problem, link, detail_code, status_code=None
-) -> LinkCheckViolation:
-    return LinkCheckViolation(
-        run_id=run_id,
-        row_id=row_id,
-        row_position=pos,
-        column_id=col_id,
-        column_name=col_names.get(col_id, "—"),
-        problem=problem,
-        link=link,
-        detail_code=detail_code,
-        status_code=status_code,
-    )
+# ---------- Celery entrypoints ----------
 
 
-async def _process(db: AsyncSession, run_id: int) -> None:
+@celery_app.task(name="linkcheck.seed")
+def seed_link_check(run_id: int) -> dict:
+    asyncio.run(_with_session(lambda db: _seed(db, run_id)))
+    return {"run_id": run_id, "ok": True}
+
+
+@celery_app.task(name="linkcheck.crawl_chunk")
+def crawl_chunk(run_id: int, chunk_index: int) -> dict:
+    asyncio.run(_with_session(lambda db: _crawl_chunk(db, run_id, chunk_index)))
+    return {"run_id": run_id, "chunk_index": chunk_index, "ok": True}
+
+
+@celery_app.task(name="linkcheck.resume")
+def resume_link_check(run_id: int) -> dict:
+    asyncio.run(_with_session(lambda db: _resume(db, run_id)))
+    return {"run_id": run_id, "ok": True}
+
+
+@celery_app.task(name="linkcheck.watchdog")
+def link_check_watchdog() -> dict:
+    asyncio.run(_with_session(_watchdog))
+    return {"ok": True}
+
+
+# ---------- seed ----------
+
+
+async def _seed(db: AsyncSession, run_id: int) -> None:
     run = await db.get(LinkCheckRun, run_id)
-    if run is None or run.status != "queued":
+    if run is None or run.status in ("done", "failed", "cancelled"):
         return
-    run.status = "running"
-    run.started_at = _now()
-    await db.commit()
+    if run.status == "running":
+        # Redelivery after a partial seed (targets + status already
+        # committed) — just make sure the crawl continues.
+        await _resume(db, run_id)
+        return
 
-    # Column metadata + the cells we need (selected output cols + expected).
+    # status == 'queued': full seed. Compute everything first, commit once.
     cols = (
         (
             await db.execute(
@@ -113,7 +137,6 @@ async def _process(db: AsyncSession, run_id: int) -> None:
     ]
 
     target_ids = set(selected) | set(expected_cols)
-
     row_pos = {
         rid: pos
         for rid, pos in (
@@ -124,7 +147,6 @@ async def _process(db: AsyncSession, run_id: int) -> None:
             )
         ).all()
     }
-
     by_row: dict[int, dict[int, str | None]] = defaultdict(dict)
     if target_ids:
         cells = (
@@ -144,28 +166,35 @@ async def _process(db: AsyncSession, run_id: int) -> None:
         for c in cells:
             by_row[c.row_id][c.column_id] = c.value
 
-    # ---- juxtapose pass (instant) + collect crawl occurrences ----
     violations: list[LinkCheckViolation] = []
     omitted_n = 0
     halluc_n = 0
-    # (row_id, pos, col_id, original_link)
-    occurrences: list[tuple[int, int, int, str]] = []
+    # url -> [{row_id,row_position,column_id,column_name,link}, …]
+    by_url: dict[str, list[dict]] = defaultdict(list)
 
     do_juxtapose = run.check_juxtapose and bool(expected_cols)
 
-    for row_id, pos in row_pos.items():
-        colvals = by_row.get(row_id, {})
+    for rid, pos in row_pos.items():
+        colvals = by_row.get(rid, {})
         per_col: dict[int, list[str]] = {}
         union: list[str] = []
         for cid in selected:
             links = extract_output_links(colvals.get(cid))
             per_col[cid] = links
             union += links
-            for l in links:
-                occurrences.append((row_id, pos, cid, l))
+            if run.check_crawl:
+                for l in links:
+                    by_url[crawlable_url(l)].append(
+                        {
+                            "row_id": rid,
+                            "row_position": pos,
+                            "column_id": cid,
+                            "column_name": col_names.get(cid, "—"),
+                            "link": l,
+                        }
+                    )
 
         if do_juxtapose:
-            # Union expected links across every expected column for this row.
             expected: list[str] = []
             for ecid in expected_cols:
                 expected += extract_expected_links(colvals.get(ecid))
@@ -178,95 +207,286 @@ async def _process(db: AsyncSession, run_id: int) -> None:
                 if n not in union_norm and n not in seen_omit:
                     seen_omit.add(n)
                     violations.append(
-                        _violation(
-                            run_id, row_id, pos, attr_col, col_names,
-                            "omitted", e, "expected_missing",
-                        )
+                        _violation(rid, pos, attr_col, col_names, "omitted", e, "expected_missing")
                     )
                     omitted_n += 1
             for cid in selected:
                 for l in per_col[cid]:
                     if normalize_link(l) not in exp_norm:
                         violations.append(
-                            _violation(
-                                run_id, row_id, pos, cid, col_names,
-                                "hallucinated", l, "not_in_expected",
-                            )
+                            _violation(rid, pos, cid, col_names, "hallucinated", l, "not_in_expected")
                         )
                         halluc_n += 1
 
+    unique_urls = list(by_url.keys())
+
+    # Cap guard — still save the (valuable) juxtapose result.
+    if run.check_crawl and len(unique_urls) > _MAX_CRAWL_LINKS:
+        for v in violations:
+            v.run_id = run_id
+        db.add_all(violations)
+        run.omitted_count = omitted_n
+        run.hallucinated_count = halluc_n
+        run.status = "failed"
+        run.error = (
+            f"Too many links to crawl ({len(unique_urls)} > {_MAX_CRAWL_LINKS}). "
+            "Narrow the selected columns and retry."
+        )
+        run.started_at = _now()
+        run.finished_at = _now()
+        await db.commit()
+        return
+
+    # ---- one atomic commit: juxtapose violations + targets + status ----
+    for v in violations:
+        v.run_id = run_id
     if violations:
         db.add_all(violations)
     run.omitted_count = omitted_n
     run.hallucinated_count = halluc_n
+    run.status = "running"
+    run.started_at = _now()
+    run.last_progress_at = _now()
+
+    crawl = run.check_crawl and bool(unique_urls)
+    chunk_count = 0
+    if crawl:
+        run.total_links = len(unique_urls)
+        target_rows = [
+            {
+                "run_id": run_id,
+                "url": url,
+                "chunk_index": i // LINK_CHUNK_SIZE,
+                "state": "pending",
+                "occurrences": by_url[url],
+            }
+            for i, url in enumerate(unique_urls)
+        ]
+        chunk_count = (len(unique_urls) + LINK_CHUNK_SIZE - 1) // LINK_CHUNK_SIZE
+        for batch in _batches(target_rows, 1000):
+            # ON CONFLICT so a re-run after a crash doesn't duplicate targets.
+            await db.execute(
+                pg_insert(LinkCheckCrawlTarget)
+                .values(batch)
+                .on_conflict_do_nothing(constraint="uq_lc_targets_run_url")
+            )
+    else:
+        run.status = "done"
+        run.finished_at = _now()
+
     await db.commit()
 
-    # ---- crawl pass (network) ----
-    if run.check_crawl and occurrences:
-        unique = []
-        seen: set[str] = set()
-        for _r, _p, _c, link in occurrences:
-            cu = crawlable_url(link)
-            if cu not in seen:
-                seen.add(cu)
-                unique.append(cu)
+    # Fan out (after the commit so children always find their targets).
+    for ci in range(chunk_count):
+        crawl_chunk.delay(run_id, ci)
 
-        if len(unique) > _MAX_CRAWL_LINKS:
-            run.status = "failed"
-            run.error = (
-                f"Too many links to crawl ({len(unique)} > {_MAX_CRAWL_LINKS}). "
-                "Narrow the selected columns and retry."
-            )
-            run.finished_at = _now()
-            await db.commit()
-            return
 
-        run.total_links = len(unique)
-        await db.commit()
+def _violation(
+    row_id, pos, col_id, col_names, problem, link, detail_code, status_code=None
+) -> LinkCheckViolation:
+    return LinkCheckViolation(
+        row_id=row_id,
+        row_position=pos,
+        column_id=col_id,
+        column_name=col_names.get(col_id, "—"),
+        problem=problem,
+        link=link,
+        detail_code=detail_code,
+        status_code=status_code,
+    )
 
-        results = {}
-        crawled = 0
-        async with make_crawl_client() as client:
-            for i in range(0, len(unique), CRAWL_BATCH):
-                await db.refresh(run)
-                if run.status == "cancelled":
-                    run.finished_at = _now()
-                    await db.commit()
-                    return
-                batch = unique[i : i + CRAWL_BATCH]
-                results.update(await crawl_batch(client, batch))
-                crawled += len(batch)
-                run.crawled = crawled
-                await db.commit()
 
-        rows_out: list[LinkCheckViolation] = []
-        for row_id, pos, cid, link in occurrences:
-            st = results.get(crawlable_url(link))
-            if st is None:
-                continue
-            if st.ok:
-                # Healthy link — only recorded when the operator asked for the
-                # full inventory.
-                if run.include_ok:
-                    rows_out.append(
-                        _violation(
-                            run_id, row_id, pos, cid, col_names,
-                            "ok", link, st.detail_code, st.status_code,
-                        )
-                    )
-                continue
-            rows_out.append(
-                _violation(
-                    run_id, row_id, pos, cid, col_names,
-                    "broken", link, st.detail_code, st.status_code,
+# ---------- crawl chunk ----------
+
+
+async def _crawl_chunk(db: AsyncSession, run_id: int, chunk_index: int) -> None:
+    run = await db.get(LinkCheckRun, run_id)
+    if run is None or run.status in ("done", "failed", "cancelled"):
+        return
+
+    targets = (
+        (
+            await db.execute(
+                select(LinkCheckCrawlTarget).where(
+                    LinkCheckCrawlTarget.run_id == run_id,
+                    LinkCheckCrawlTarget.chunk_index == chunk_index,
+                    LinkCheckCrawlTarget.state == "pending",
                 )
             )
-        if rows_out:
-            db.add_all(rows_out)
-        run.ok_count = sum(1 for s in results.values() if s.ok)
-        run.broken_count = sum(1 for s in results.values() if not s.ok)
-        await db.commit()
+        )
+        .scalars()
+        .all()
+    )
+    if not targets:
+        await _finalize_if_done(db, run_id)
+        return
 
+    async with make_crawl_client() as client:
+        for sub in _batches(list(targets), CRAWL_BATCH):
+            await db.refresh(run)
+            if run.status == "cancelled":
+                return
+            results = await crawl_batch(client, [t.url for t in sub])
+            new_violations: list[LinkCheckViolation] = []
+            ok_n = 0
+            broken_n = 0
+            for t in sub:
+                st = results.get(t.url)
+                if st is None:
+                    continue
+                t.state = "done"
+                t.ok = st.ok
+                t.status_code = st.status_code
+                t.detail_code = st.detail_code
+                if not st.ok:
+                    broken_n += 1
+                    for occ in t.occurrences:
+                        new_violations.append(_occ_violation(run_id, occ, "broken", st))
+                else:
+                    ok_n += 1
+                    if run.include_ok:
+                        for occ in t.occurrences:
+                            new_violations.append(_occ_violation(run_id, occ, "ok", st))
+            if new_violations:
+                db.add_all(new_violations)
+            await db.execute(
+                update(LinkCheckRun)
+                .where(LinkCheckRun.id == run_id)
+                .values(
+                    crawled=LinkCheckRun.crawled + len(sub),
+                    ok_count=LinkCheckRun.ok_count + ok_n,
+                    broken_count=LinkCheckRun.broken_count + broken_n,
+                    last_progress_at=_now(),
+                )
+            )
+            await db.commit()
+
+    await _finalize_if_done(db, run_id)
+
+
+def _occ_violation(run_id: int, occ: dict, problem: str, st) -> LinkCheckViolation:
+    return LinkCheckViolation(
+        run_id=run_id,
+        row_id=occ["row_id"],
+        row_position=occ["row_position"],
+        column_id=occ["column_id"],
+        column_name=occ["column_name"],
+        problem=problem,
+        link=occ["link"],
+        detail_code=st.detail_code,
+        status_code=st.status_code,
+    )
+
+
+# ---------- finalize ----------
+
+
+async def _finalize_if_done(db: AsyncSession, run_id: int) -> None:
+    # Serialize finalize across the workers that may all see "0 pending".
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(:ns, :rid)"),
+        {"ns": _ADVISORY_NS, "rid": run_id},
+    )
+    run = await db.get(LinkCheckRun, run_id)
+    if run is None or run.status != "running":
+        await db.rollback()
+        return
+    pending = (
+        await db.execute(
+            select(func.count())
+            .select_from(LinkCheckCrawlTarget)
+            .where(
+                LinkCheckCrawlTarget.run_id == run_id,
+                LinkCheckCrawlTarget.state == "pending",
+            )
+        )
+    ).scalar_one()
+    if pending > 0:
+        await db.rollback()
+        return
+
+    # Authoritative counters from the targets table (corrects any drift from
+    # the incremental bumps).
+    done = (
+        await db.execute(
+            select(func.count())
+            .select_from(LinkCheckCrawlTarget)
+            .where(LinkCheckCrawlTarget.run_id == run_id)
+        )
+    ).scalar_one()
+    okc = (
+        await db.execute(
+            select(func.count())
+            .select_from(LinkCheckCrawlTarget)
+            .where(
+                LinkCheckCrawlTarget.run_id == run_id,
+                LinkCheckCrawlTarget.ok.is_(True),
+            )
+        )
+    ).scalar_one()
+    run.crawled = done
+    run.ok_count = okc
+    run.broken_count = done - okc
     run.status = "done"
     run.finished_at = _now()
     await db.commit()
+
+
+# ---------- resume + watchdog ----------
+
+
+async def _resume(db: AsyncSession, run_id: int) -> None:
+    run = await db.get(LinkCheckRun, run_id)
+    if run is None:
+        return
+    if run.status == "queued":
+        seed_link_check.delay(run_id)
+        return
+    if run.status != "running":
+        return
+    # Debounce the watchdog so it doesn't re-pick this run next tick.
+    run.last_progress_at = _now()
+    await db.commit()
+
+    chunks = (
+        (
+            await db.execute(
+                select(LinkCheckCrawlTarget.chunk_index)
+                .where(
+                    LinkCheckCrawlTarget.run_id == run_id,
+                    LinkCheckCrawlTarget.state == "pending",
+                )
+                .distinct()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not chunks:
+        await _finalize_if_done(db, run_id)
+        return
+    for ci in chunks:
+        crawl_chunk.delay(run_id, ci)
+
+
+async def _watchdog(db: AsyncSession) -> None:
+    """Re-enqueue runs that have stalled (worker death / lost message)."""
+    rows = (
+        (
+            await db.execute(
+                select(LinkCheckRun.id).where(
+                    text(
+                        "(status = 'running' AND check_crawl = true AND "
+                        " (last_progress_at IS NULL OR "
+                        "  last_progress_at < now() - interval '3 minutes')) "
+                        "OR (status = 'queued' AND "
+                        "    created_at < now() - interval '2 minutes')"
+                    )
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for rid in rows:
+        resume_link_check.delay(rid)

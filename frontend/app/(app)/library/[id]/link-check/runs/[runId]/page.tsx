@@ -12,6 +12,7 @@ import { getTable, upsertCells } from "@/lib/library";
 import {
   cancelLinkCheckRun,
   getLinkCheckRun,
+  resumeLinkCheckRun,
   type LinkCheckRunDetail,
   type LinkProblem,
   type LinkViolation,
@@ -34,6 +35,7 @@ export default function LinkCheckRunPage({
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [resuming, setResuming] = useState(false);
   const [columns, setColumns] = useState<BulkColumn[]>([]);
   const [cellValues, setCellValues] = useState<Map<string, string>>(new Map());
   const [editing, setEditing] = useState<LinkViolation | null>(null);
@@ -124,6 +126,20 @@ export default function LinkCheckRunPage({
     }
   }
 
+  async function onResume() {
+    if (!run || resuming) return;
+    setResuming(true);
+    try {
+      await resumeLinkCheckRun(run.id);
+      stoppedRef.current = false;
+      await tick(page);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setResuming(false);
+    }
+  }
+
   async function saveEdit(next: string) {
     if (!editing) return;
     await upsertCells(tableId, [
@@ -181,6 +197,17 @@ export default function LinkCheckRunPage({
             </div>
             <div className="flex items-center gap-2">
               <LinkCheckStatusChip status={run.status} />
+              {isActive && run.check_crawl && (
+                <button
+                  type="button"
+                  onClick={onResume}
+                  disabled={resuming}
+                  title={t("linkCheckRun.resumeHint")}
+                  className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-60 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                >
+                  {resuming ? t("common.loading") : t("linkCheckRun.resume")}
+                </button>
+              )}
               {isActive && (
                 <button
                   type="button"

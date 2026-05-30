@@ -1550,6 +1550,9 @@ export const en = {
   "linkCheckRun.title": "Link check #{id}",
   "linkCheckRun.meta": "by {by} · {when}",
   "linkCheckRun.cancel": "Cancel",
+  "linkCheckRun.resume": "Resume",
+  "linkCheckRun.resumeHint":
+    "Re-enqueue any pending links if the crawl looks stuck (also happens automatically).",
   "linkCheckRun.confirmCancel": "Stop this link check?",
   "linkCheckRun.crawling": "Crawling {done} / {total} links…",
   "linkCheckRun.preparing": "Preparing…",

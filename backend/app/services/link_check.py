@@ -37,7 +37,12 @@ _BARE_RE = re.compile(
     re.IGNORECASE,
 )
 
-_MAX_CRAWL_LINKS = 2000
+# Sanity bound on UNIQUE links per run. The crawl is distributed across
+# workers now, so this is far higher than the old single-task cap.
+_MAX_CRAWL_LINKS = 50000
+# Unique links per fan-out child task. ~100 keeps each child a few crawl
+# sub-batches long so a crash loses little and chunks spread across workers.
+LINK_CHUNK_SIZE = 100
 
 
 def _dedupe(seq: list[str]) -> list[str]:

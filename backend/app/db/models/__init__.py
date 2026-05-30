@@ -15,7 +15,11 @@ from app.db.models.error_log import AppSetting, ErrorLog
 from app.db.models.find_replace_run import FindReplaceRun
 from app.db.models.generation import Generation
 from app.db.models.language_sync import LanguageSyncResult, LanguageSyncRun
-from app.db.models.link_check_run import LinkCheckRun, LinkCheckViolation
+from app.db.models.link_check_run import (
+    LinkCheckCrawlTarget,
+    LinkCheckRun,
+    LinkCheckViolation,
+)
 from app.db.models.media_upload import MediaUpload
 from app.db.models.prompt import Prompt, PromptVersion
 from app.db.models.provider import Provider
@@ -44,6 +48,7 @@ __all__ = [
     "Generation",
     "LanguageSyncResult",
     "LanguageSyncRun",
+    "LinkCheckCrawlTarget",
     "LinkCheckRun",
     "LinkCheckViolation",
     "MediaUpload",

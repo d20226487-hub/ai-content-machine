@@ -79,7 +79,7 @@ from app.services.find_replace import (
     segment_diff,
 )
 from app.tasks.bulk_generation import generate_bulk_cell
-from app.tasks.link_check import run_link_check
+from app.tasks.link_check import resume_link_check, seed_link_check
 
 router = APIRouter(
     prefix="/library", tags=["library"], dependencies=[Depends(get_current_user)]
@@ -2232,7 +2232,7 @@ async def start_link_check(
     db.add(run)
     await db.commit()
     await db.refresh(run)
-    run_link_check.delay(run.id)
+    seed_link_check.delay(run.id)
     return run
 
 
@@ -2372,11 +2372,31 @@ async def cancel_link_check_run(
     if run.status in ("cancelled", "done", "failed"):
         return run
     run.status = "cancelled"
-    if run.finished_at is None and not run.check_crawl:
-        # Nothing async left to stamp finished_at; do it here.
+    # The crawl is fanned out across workers with no single finalizer, so
+    # stamp finished_at here; the chunk tasks just stop when they see the
+    # cancelled status.
+    if run.finished_at is None:
         run.finished_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(run)
+    return run
+
+
+@router.post("/link-check-runs/{run_id}/resume", response_model=LinkCheckRunRead)
+async def resume_link_check_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LinkCheckRun:
+    """Manually nudge a stalled run: re-enqueue its pending crawl chunks
+    (or re-seed if it never started). A watchdog does this automatically for
+    stalled runs; this is the operator's immediate override. No-op on
+    terminal states."""
+    run = await _get_link_check_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    if run.status in ("done", "failed", "cancelled"):
+        return run
+    resume_link_check.delay(run.id)
     return run
 
 

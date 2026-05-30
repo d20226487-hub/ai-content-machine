@@ -19,6 +19,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -80,6 +81,11 @@ class LinkCheckRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Bumped on every crawl-counter update; the watchdog uses it to detect a
+    # stalled distributed run and re-enqueue its pending chunks.
+    last_progress_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class LinkCheckViolation(Base):
@@ -106,3 +112,33 @@ class LinkCheckViolation(Base):
     # | 'unreachable' | 'blocked' | 'ok' | 'redirect'
     detail_code: Mapped[str | None] = mapped_column(String(24), nullable=True)
     status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class LinkCheckCrawlTarget(Base):
+    """One unique crawlable URL within a run — the unit of distributed work.
+
+    The seed creates these (with the cell occurrences each URL appears in);
+    a ``crawl_chunk`` child claims the ``pending`` rows for its
+    ``chunk_index``, crawls them, writes occurrence violations, and flips
+    them ``done``. Re-querying ``pending`` makes children idempotent under
+    Celery redelivery / watchdog resume.
+    """
+
+    __tablename__ = "link_check_crawl_targets"
+    __table_args__ = (
+        UniqueConstraint("run_id", "url", name="uq_lc_targets_run_url"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("link_check_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    state: Mapped[str] = mapped_column(String(12), nullable=False, default="pending")
+    ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    detail_code: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    occurrences: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)

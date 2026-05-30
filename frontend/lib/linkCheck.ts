@@ -108,3 +108,9 @@ export function cancelLinkCheckRun(runId: number): Promise<LinkCheckRun> {
     method: "POST",
   });
 }
+
+export function resumeLinkCheckRun(runId: number): Promise<LinkCheckRun> {
+  return api<LinkCheckRun>(`/library/link-check-runs/${runId}/resume`, {
+    method: "POST",
+  });
+}

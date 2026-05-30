@@ -1613,6 +1613,9 @@ export const ru: Record<keyof typeof en, string> = {
   "linkCheckRun.title": "Проверка ссылок #{id}",
   "linkCheckRun.meta": "{by} · {when}",
   "linkCheckRun.cancel": "Отменить",
+  "linkCheckRun.resume": "Возобновить",
+  "linkCheckRun.resumeHint":
+    "Повторно поставить в очередь оставшиеся ссылки, если обход завис (также происходит автоматически).",
   "linkCheckRun.confirmCancel": "Остановить проверку ссылок?",
   "linkCheckRun.crawling": "Обход {done} / {total} ссылок…",
   "linkCheckRun.preparing": "Подготовка…",

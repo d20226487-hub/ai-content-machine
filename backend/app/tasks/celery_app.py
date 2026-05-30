@@ -60,6 +60,13 @@ celery_app.conf.update(
             "task": "trash.cleanup",
             "schedule": crontab(hour=3, minute=15),
         },
+        # Resume link-check runs whose crawl has stalled (worker death / lost
+        # message). The task itself only touches runs with no progress in the
+        # last few minutes, so active runs are never disturbed.
+        "link-check-watchdog": {
+            "task": "linkcheck.watchdog",
+            "schedule": 120.0,
+        },
     },
 )
 
