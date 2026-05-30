@@ -19,6 +19,13 @@ import {
   type LanguageSyncTarget,
 } from "@/lib/publishLanguages";
 
+// Page-size options for the history table. Smaller scale than the
+// Domains page (50/100/200) because language sync runs accumulate
+// far more slowly than domains — a 25-row default fits most users'
+// recent-activity scan, and 100 covers the long tail.
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const;
+const DEFAULT_PAGE_SIZE: (typeof PAGE_SIZE_OPTIONS)[number] = 25;
+
 /**
  * Standalone home for the language-sync feature.
  *
@@ -35,25 +42,51 @@ import {
 export default function LanguagesPage() {
   const { t } = useT();
 
-  // History list state.
+  // History list state. Paginated against the backend's
+  // /publish/languages/runs endpoint (`page`, `page_size`, returns
+  // `total`). Pre-2026-05-23 we hardcoded (1, 100) and rendered all
+  // rows — after 100 historical sync runs the rest became invisible.
   const [runs, setRuns] = useState<LanguageSyncRun[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<
+    (typeof PAGE_SIZE_OPTIONS)[number]
+  >(DEFAULT_PAGE_SIZE);
+  const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
 
+  // Reset to page 1 when page-size changes — otherwise a user on page 5
+  // of size=10 (total 50) switching to size=100 lands on page 5 of an
+  // empty result set.
+  useEffect(() => {
+    setPage(1);
+  }, [pageSize]);
+
   useEffect(() => {
     let cancelled = false;
-    listLanguageSyncRuns(1, 100)
+    setLoading(true);
+    listLanguageSyncRuns(page, pageSize)
       .then((r) => {
-        if (!cancelled) setRuns(r.items);
+        if (cancelled) return;
+        setRuns(r.items);
+        setTotal(r.total);
+        setLoadError(null);
       })
       .catch((e) => {
         if (!cancelled)
           setLoadError(e instanceof ApiError ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [reloadTick]);
+  }, [reloadTick, page, pageSize]);
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const hasMore = page < totalPages;
 
   return (
     <div className="space-y-6 p-5">
@@ -77,12 +110,59 @@ export default function LanguagesPage() {
             {loadError}
           </p>
         )}
-        {runs && runs.length === 0 && (
+        {runs && runs.length === 0 && page === 1 && (
           <p className="rounded-md border border-dashed border-neutral-300 bg-neutral-50 px-3 py-6 text-center text-sm text-neutral-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-400">
             {t("langPage.historyEmpty")}
           </p>
         )}
         {runs && runs.length > 0 && <RunsTable runs={runs} />}
+        {/* Pagination footer. Hidden when the result set fits on one
+            page AND we're on page 1 — keeps the "Page 1 of 1" line off
+            small / empty histories. Same shape as the Domains page so
+            the two paginated lists feel consistent. */}
+        {runs !== null && (total > pageSize || page > 1) && (
+          <div className="mt-2 flex items-center justify-between text-xs text-neutral-600 dark:text-neutral-400">
+            <div className="flex items-center gap-2">
+              <span>{t("domains.pageSizeLabel")}</span>
+              <select
+                value={pageSize}
+                onChange={(e) =>
+                  setPageSize(
+                    Number(e.target.value) as (typeof PAGE_SIZE_OPTIONS)[number],
+                  )
+                }
+                className="rounded-md border border-neutral-300 bg-white px-2 py-0.5 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+              >
+                {PAGE_SIZE_OPTIONS.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="tabular-nums">
+                {t("domains.pageOfTotal", { page, total: totalPages })}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1 || loading}
+                className="rounded-md border border-neutral-300 px-2 py-0.5 disabled:opacity-40 dark:border-neutral-700"
+              >
+                {t("common.prev")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setPage((p) => p + 1)}
+                disabled={!hasMore || loading}
+                className="rounded-md border border-neutral-300 px-2 py-0.5 disabled:opacity-40 dark:border-neutral-700"
+              >
+                {t("common.next")}
+              </button>
+            </div>
+          </div>
+        )}
       </section>
     </div>
   );
