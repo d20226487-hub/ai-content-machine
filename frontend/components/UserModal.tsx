@@ -1,7 +1,8 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useState } from "react";
 
+import { Modal } from "@/components/Modal";
 import { ApiError } from "@/lib/api";
 import { useT } from "@/lib/i18n-context";
 import { createUser, resetUserPassword, updateUser } from "@/lib/users";
@@ -24,23 +25,18 @@ export function UserModal(props: Props) {
   const isEdit = props.mode === "edit";
   const target = isEdit ? props.user : null;
 
-  const [email, setEmail] = useState(target?.email ?? "");
-  const [fullName, setFullName] = useState(target?.full_name ?? "");
-  const [roleId, setRoleId] = useState<number>(
-    target?.role.id ?? props.roles[0]?.id ?? 0,
-  );
-  const [isActive, setIsActive] = useState<boolean>(target?.is_active ?? true);
+  const initialEmail = target?.email ?? "";
+  const initialFullName = target?.full_name ?? "";
+  const initialRoleId = target?.role.id ?? props.roles[0]?.id ?? 0;
+  const initialActive = target?.is_active ?? true;
+
+  const [email, setEmail] = useState(initialEmail);
+  const [fullName, setFullName] = useState(initialFullName);
+  const [roleId, setRoleId] = useState<number>(initialRoleId);
+  const [isActive, setIsActive] = useState<boolean>(initialActive);
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") props.onClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [props]);
 
   const allowedRoles = props.roles.filter((r) => {
     if (props.actor.role.name === "manager" && r.name === "admin") return false;
@@ -51,56 +47,100 @@ export function UserModal(props: Props) {
   const editingAdminAsManager =
     isEdit && props.actor.role.name === "manager" && target!.role.name === "admin";
 
+  // Tracks whether the form has any unsaved changes from its initial
+  // state. The Modal wrapper uses this to gate the outside-click /
+  // Escape discard prompt — a stray click on the backdrop now arms the
+  // "Unsaved changes — discard them?" strip instead of nuking the work.
+  const dirty =
+    fullName !== initialFullName ||
+    roleId !== initialRoleId ||
+    isActive !== initialActive ||
+    password.length > 0 ||
+    (!isEdit && email !== initialEmail);
+
+  // For the save-on-outside-click path: only flip the auto-save behaviour
+  // when the form is actually submittable right now. Otherwise the click
+  // falls through to the confirm strip.
+  const valid = isEdit
+    ? dirty && !submitting
+    : dirty &&
+      !submitting &&
+      email.trim().length > 0 &&
+      password.length >= 8 &&
+      roleId > 0;
+
+  const submit = useCallback(
+    async (): Promise<void> => {
+      setSubmitting(true);
+      setError(null);
+      try {
+        if (props.mode === "create") {
+          const created = await createUser({
+            email,
+            full_name: fullName.trim() || null,
+            password,
+            role_id: roleId,
+            is_active: isActive,
+          });
+          props.onSaved(created);
+          props.onClose();
+        } else {
+          const updated = await updateUser(target!.id, {
+            full_name: fullName.trim() || null,
+            role_id: roleId,
+            is_active: isActive,
+          });
+
+          if (password.trim()) {
+            const final = await resetUserPassword(updated.id, password);
+            props.onSaved(final);
+          } else {
+            props.onSaved(updated);
+          }
+          props.onClose();
+        }
+      } catch (err) {
+        setError(err instanceof ApiError ? err.message : t("users.saveFailed"));
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [email, fullName, roleId, isActive, password, target?.id, props.mode],
+  );
+
+  function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    void submit();
+  }
+
   if (editingAdminAsManager) {
     return (
-      <Backdrop onClose={props.onClose}>
+      <Modal onClose={props.onClose} size="max-w-md">
         <p className="text-sm text-red-600 dark:text-red-400">
           {t("users.managersCantEditAdmins")}
         </p>
-        <FooterClose onClose={props.onClose} closeLabel={t("common.close")} />
-      </Backdrop>
+        <div className="mt-5 flex justify-end">
+          <button
+            type="button"
+            onClick={props.onClose}
+            className="rounded-md border border-neutral-300 dark:border-neutral-700 px-4 py-2 text-sm font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-800"
+          >
+            {t("common.close")}
+          </button>
+        </div>
+      </Modal>
     );
   }
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    setSubmitting(true);
-    setError(null);
-    try {
-      if (props.mode === "create") {
-        const created = await createUser({
-          email,
-          full_name: fullName.trim() || null,
-          password,
-          role_id: roleId,
-          is_active: isActive,
-        });
-        props.onSaved(created);
-        props.onClose();
-      } else {
-        const updated = await updateUser(target!.id, {
-          full_name: fullName.trim() || null,
-          role_id: roleId,
-          is_active: isActive,
-        });
-
-        if (password.trim()) {
-          const final = await resetUserPassword(updated.id, password);
-          props.onSaved(final);
-        } else {
-          props.onSaved(updated);
-        }
-        props.onClose();
-      }
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : t("users.saveFailed"));
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
   return (
-    <Backdrop onClose={props.onClose}>
+    <Modal
+      onClose={props.onClose}
+      size="max-w-md"
+      dirty={dirty}
+      valid={valid}
+      onSaveAndClose={() => void submit()}
+    >
       <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
         {isEdit ? t("users.modalEdit", { email: target!.email }) : t("users.modalNew")}
       </h2>
@@ -203,7 +243,7 @@ export function UserModal(props: Props) {
           </button>
         </div>
       </form>
-    </Backdrop>
+    </Modal>
   );
 }
 
@@ -222,40 +262,5 @@ function Field({
       {label}
       {children}
     </label>
-  );
-}
-
-function Backdrop({
-  onClose,
-  children,
-}: {
-  onClose: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      onClick={onClose}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md rounded-xl bg-white dark:bg-neutral-900 p-6 shadow-xl"
-      >
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function FooterClose({ onClose, closeLabel }: { onClose: () => void; closeLabel: string }) {
-  return (
-    <div className="mt-5 flex justify-end">
-      <button
-        onClick={onClose}
-        className="rounded-md border border-neutral-300 dark:border-neutral-700 px-4 py-2 text-sm font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-800"
-      >
-        {closeLabel}
-      </button>
-    </div>
   );
 }

@@ -19,6 +19,11 @@ interface Props {
   title?: string;
   /** Tailwind height utility for the iframe (e.g. "h-96"). */
   height?: string;
+  /** Trim the toolbar down to just Copy. Hides the Preview/Raw mode
+   *  tabs and the Open-in-window button. Use for surfaces where the
+   *  content is plain text (e.g. prompt template translations) and the
+   *  full toolbar is visual noise. */
+  compact?: boolean;
 }
 
 /**
@@ -27,7 +32,7 @@ interface Props {
  * cookies, storage — anything that could harm the host app — even if the model
  * outputs malicious tags.
  */
-export function HtmlViewer({ content, title, height = "h-96" }: Props) {
+export function HtmlViewer({ content, title, height = "h-96", compact = false }: Props) {
   const { t } = useT();
   const [mode, setMode] = useState<Mode>("preview");
   const oversize = content.length > MAX_INLINE_BYTES;
@@ -152,44 +157,56 @@ export function HtmlViewer({ content, title, height = "h-96" }: Props) {
 
   return (
     <div className="rounded-lg border border-neutral-200 bg-white shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
+      {/* Toolbar layout: [Preview/Raw tabs · title · HTML badge] · [Copy · Open]
+       *  The mode tabs live on the LEFT next to the title so the primary
+       *  view-mode action sits adjacent to what it controls. Copy / Open
+       *  stay on the right since they're "send out" actions. */}
       <header className="flex items-center justify-between border-b border-neutral-200 px-4 py-2 dark:border-neutral-800">
         <div className="flex items-center gap-3">
-          <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
-            {title ?? t("htmlViewer.title")}
-          </h3>
-          {looksLikeHtml && (
+          {!compact && (
+            <div className="flex rounded-md border border-neutral-200 p-0.5 text-xs dark:border-neutral-700">
+              <button
+                type="button"
+                onClick={() => setMode("preview")}
+                className={
+                  "rounded px-2 py-0.5 font-medium " +
+                  (mode === "preview"
+                    ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                    : "text-neutral-600 dark:text-neutral-400")
+                }
+              >
+                {t("htmlViewer.preview")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode("raw")}
+                className={
+                  "rounded px-2 py-0.5 font-medium " +
+                  (mode === "raw"
+                    ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                    : "text-neutral-600 dark:text-neutral-400")
+                }
+              >
+                {t("htmlViewer.raw")}
+              </button>
+            </div>
+          )}
+          {/* `title === ""` is the explicit "no heading" opt-out used by
+           *  the cell editor's side-by-side panels (the surrounding label
+           *  already says "Original" / "Translation"). `undefined` keeps
+           *  the historical fallback heading. */}
+          {title !== "" && (
+            <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+              {title ?? t("htmlViewer.title")}
+            </h3>
+          )}
+          {looksLikeHtml && !compact && (
             <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
               HTML
             </span>
           )}
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex rounded-md border border-neutral-200 p-0.5 text-xs dark:border-neutral-700">
-            <button
-              type="button"
-              onClick={() => setMode("preview")}
-              className={
-                "rounded px-2 py-0.5 font-medium " +
-                (mode === "preview"
-                  ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
-                  : "text-neutral-600 dark:text-neutral-400")
-              }
-            >
-              {t("htmlViewer.preview")}
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("raw")}
-              className={
-                "rounded px-2 py-0.5 font-medium " +
-                (mode === "raw"
-                  ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
-                  : "text-neutral-600 dark:text-neutral-400")
-              }
-            >
-              {t("htmlViewer.raw")}
-            </button>
-          </div>
           <button
             type="button"
             onClick={copy}
@@ -197,14 +214,16 @@ export function HtmlViewer({ content, title, height = "h-96" }: Props) {
           >
             {t("common.copy")}
           </button>
-          <button
-            type="button"
-            onClick={openWindow}
-            className="rounded-md border border-neutral-300 px-2 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
-            title={t("htmlViewer.openWindow")}
-          >
-            {t("common.openArrow")}
-          </button>
+          {!compact && (
+            <button
+              type="button"
+              onClick={openWindow}
+              className="rounded-md border border-neutral-300 px-2 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
+              title={t("htmlViewer.openWindow")}
+            >
+              {t("common.openArrow")}
+            </button>
+          )}
         </div>
       </header>
 

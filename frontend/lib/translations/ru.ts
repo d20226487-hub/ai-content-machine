@@ -220,6 +220,38 @@ export const ru: Record<keyof typeof en, string> = {
   "settings.subtitle":
     "Провайдеры ИИ, модели по умолчанию и лимиты запросов для каждого провайдера. Только API-ключи шифруются на диске; вы можете очистить или заменить их в любой момент.",
   "settings.loadingProviders": "Загрузка провайдеров…",
+  "settings.tabsAria": "Разделы настроек",
+  "settings.tab.providers": "Провайдеры",
+  "settings.tab.publishing": "Публикация",
+  "settings.tab.pricing": "Цены",
+  "settings.tab.backups": "Бэкапы",
+  "settings.tab.trash": "Корзина",
+  "settings.tab.brain": "Мозг",
+  "brain.translateTitle": "Промпт для перевода",
+  "brain.translateSubtitle":
+    "Управляет кнопкой «Перевести» в редакторе ячеек bulk-таблиц. Для output-ячеек открывается параллельный перевод, чтобы коллеги, не знающие исходный язык, могли прочитать контент.",
+  "brain.promptLabel": "Системный промпт",
+  "brain.promptHint":
+    "Используйте {{target_language}} как плейсхолдер для запрошенного языка. Значение ячейки передаётся как сообщение пользователя.",
+  "brain.defaultLangLabel": "Язык перевода по умолчанию",
+  "brain.defaultLangHint":
+    "Двухбуквенный код (например, ru, en, pl). Редактор ячеек подставит его по умолчанию; пользователь сможет выбрать другой язык для каждого перевода.",
+  "brain.providerLabel": "Провайдер ИИ для перевода",
+  "brain.providerHint":
+    "Оставьте пустым, чтобы использовать первого включённого провайдера и его модель по умолчанию.",
+  "translate.button": "Перевести",
+  "translate.original": "Оригинал",
+  "translate.translation": "Перевод",
+  "translate.translate": "Перевести",
+  "translate.retranslate": "Перевести заново",
+  "translate.translating": "Переводим…",
+  "translate.emptyHint":
+    "Выберите язык и нажмите «Перевести». Результат кэшируется в ячейке, повторное открытие ничего не стоит.",
+  "translate.noLang": "Сначала выберите язык перевода.",
+  "translate.langSelect": "Популярные языки",
+  "translate.langCustomOption": "Свой…",
+  "translate.langInput": "Код языка",
+  "translate.closePanel": "Закрыть панель перевода",
   "settings.enabled": "Включён",
   "settings.apiKey": "API-ключ",
   "settings.apiKeyPlaceholderSet":
@@ -390,6 +422,12 @@ export const ru: Record<keyof typeof en, string> = {
   "test.pickProviderModel": "Сначала выберите провайдера и модель.",
   "test.missingHint": "Не заполнены переменные: {vars}",
   "test.generate": "Сгенерировать",
+  "test.pageTitle": "Тест промпта",
+  "test.pageSubtitle":
+    "Быстрая песочница для этого промпта. Заполните переменные, сгенерируйте и посмотрите результат. Ничего не сохраняется.",
+  "test.outputSubtitle":
+    "Результат теста. Возврат к форме сохраняет заполненные переменные.",
+  "test.backToPrompt": "Назад к промпту",
   "test.generating": "Генерация…",
   "test.generateFailed": "Не удалось сгенерировать",
   "test.failedLoadProviders": "Не удалось загрузить провайдеров",
@@ -831,6 +869,9 @@ export const ru: Record<keyof typeof en, string> = {
   "create.subtitle": "Сгенерируйте контент по своим промптам.",
   "single.pickPrompt": "Выберите промпт",
   "single.savedGenerations": "Сохранённые генерации",
+  "single.backToForm": "Назад к форме",
+  "single.outputSubtitle":
+    "Сохраните, опубликуйте или переведите результат. Возврат к форме сохраняет всё, что вы заполнили.",
   "single.selectToBegin":
     "Выберите промпт, чтобы начать, или откройте «Сохранённые генерации» сверху.",
   "single.variablesCount": "Переменных: {count}",
@@ -845,6 +886,7 @@ export const ru: Record<keyof typeof en, string> = {
   "single.showPreview": "Показать предпросмотр промпта",
   "single.hidePreview": "Скрыть предпросмотр промпта",
   "single.willBeSent": "Что будет отправлено модели",
+  "single.promptTemplateLabel": "Шаблон промпта",
   "single.unfilledVars": "Незаполненные переменные: {vars}",
   "single.generationFailed": "Ошибка генерации",
   "single.generate": "Сгенерировать",

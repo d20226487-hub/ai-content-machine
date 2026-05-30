@@ -63,6 +63,8 @@ export interface PromptVersionRead {
   created_by_name: string | null;
   created_by_email: string | null;
   created_at: string;
+  /** Memoized translations of `content`. Persists per version. */
+  translations?: Record<string, CellTranslation> | null;
 }
 
 export interface PromptVersionSummary {
@@ -152,6 +154,9 @@ export interface SavedGeneration extends SavedGenerationListItem {
   output: string;
   variables: Record<string, string>;
   finish_reason: string | null;
+  /** Memoized translations of `output`. Persists across reloads when
+   *  the saved generation is opened again. */
+  translations?: Record<string, CellTranslation> | null;
 }
 
 // ----- Library / Bulk -----
@@ -181,6 +186,13 @@ export interface BulkRow {
   position: number;
 }
 
+export interface CellTranslation {
+  text: string;
+  provider_used: string | null;
+  model_used: string | null;
+  translated_at: string | null;
+}
+
 export interface BulkCell {
   id: number;
   row_id: number;
@@ -191,6 +203,10 @@ export interface BulkCell {
   model_used: string | null;
   generated_at: string | null;
   updated_at: string;
+  /** Memoized brain-translate results keyed by lowercase language tag.
+   *  Absent when no translation has ever been requested for this cell.
+   *  Cleared server-side whenever `value` changes. */
+  translations?: Record<string, CellTranslation> | null;
 }
 
 export interface BulkTableListItem {
