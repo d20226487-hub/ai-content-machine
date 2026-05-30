@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ColumnKind = Literal["input", "output"]
 CellStatus = Literal["empty", "manual", "generating", "generated", "failed"]
@@ -393,3 +393,86 @@ class FindReplaceRunDetail(FindReplaceRunRead):
     total_cells: int  # == cell_count, echoed for pagination math
     drifted_count: int
     items: list[ReplacedCell]
+
+
+# ----- Link checker (added in migration 0034) -----
+
+LinkCheckStatus = Literal["queued", "running", "cancelled", "done", "failed"]
+LinkProblem = Literal["omitted", "hallucinated", "broken", "ok"]
+
+
+class LinkCheckRequest(BaseModel):
+    """Start a link-check run.
+
+    ``column_ids`` are the output columns to scan (at least one).
+    ``check_juxtapose`` compares against the union of ``expected_column_ids``
+    (at least one required when juxtapose is on). ``check_crawl`` fetches each
+    link to verify its HTTP status; ``include_ok`` additionally records the
+    healthy links. At least one check must be enabled."""
+
+    column_ids: list[int] = Field(min_length=1)
+    expected_column_ids: list[int] = Field(default_factory=list)
+    check_juxtapose: bool = False
+    check_crawl: bool = False
+    include_ok: bool = False
+
+    @model_validator(mode="after")
+    def _validate(self) -> "LinkCheckRequest":
+        if not self.check_juxtapose and not self.check_crawl:
+            raise ValueError("Enable at least one check (juxtapose or crawl).")
+        if self.check_juxtapose and not self.expected_column_ids:
+            raise ValueError(
+                "At least one expected-links column is required for juxtapose."
+            )
+        return self
+
+
+class LinkCheckRunRead(BaseModel):
+    """Run summary — counters + lifecycle. Polled by the run page while the
+    crawl is in flight, and used for the history list."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    table_id: int
+    status: LinkCheckStatus
+    column_ids: list[int]
+    expected_column_ids: list[int]
+    check_juxtapose: bool
+    check_crawl: bool
+    include_ok: bool
+    total_links: int
+    crawled: int
+    ok_count: int
+    broken_count: int
+    omitted_count: int
+    hallucinated_count: int
+    error: str | None = None
+    created_by_id: int | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class LinkViolationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    row_id: int
+    row_position: int
+    column_id: int
+    column_name: str
+    problem: LinkProblem
+    link: str
+    detail_code: str | None = None
+    status_code: int | None = None
+
+
+class LinkCheckRunDetail(LinkCheckRunRead):
+    created_by_name: str | None = None
+    page: int
+    page_size: int
+    total_violations: int  # count AFTER filters, for pagination
+    # Distinct HTTP codes present across the run's violations (unfiltered) —
+    # populates the status-code filter dropdown.
+    status_codes_present: list[int]
+    items: list[LinkViolationRead]

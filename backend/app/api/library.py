@@ -31,6 +31,8 @@ from app.db.models import (
     BulkTableFolder,
     BulkTableRow,
     FindReplaceRun,
+    LinkCheckRun,
+    LinkCheckViolation,
     User,
 )
 from app.db.session import get_db
@@ -52,6 +54,10 @@ from app.schemas.bulk import (
     FolderUpdate,
     GenerateRequest,
     GenerateResponse,
+    LinkCheckRequest,
+    LinkCheckRunDetail,
+    LinkCheckRunRead,
+    LinkViolationRead,
     MatchedCell,
     ReplacedCell,
     ReplaceRequest,
@@ -73,6 +79,7 @@ from app.services.find_replace import (
     segment_diff,
 )
 from app.tasks.bulk_generation import generate_bulk_cell
+from app.tasks.link_check import run_link_check
 
 router = APIRouter(
     prefix="/library", tags=["library"], dependencies=[Depends(get_current_user)]
@@ -2153,6 +2160,221 @@ async def revert_replace_run(
     run.status = "reverted"
     run.reverted_at = datetime.now(timezone.utc)
     await _bump_table_updated(db, run.table_id)
+    await db.commit()
+    await db.refresh(run)
+    return run
+
+
+# ---------- Link checker (content tool) ----------
+
+
+async def _get_link_check_run_or_404(
+    db: AsyncSession, run_id: int
+) -> LinkCheckRun:
+    run = await db.get(LinkCheckRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Link-check run not found")
+    return run
+
+
+async def _verify_columns_in_table(
+    db: AsyncSession, table_id: int, column_ids: list[int]
+) -> None:
+    if not column_ids:
+        return
+    found = {
+        cid
+        for (cid,) in (
+            await db.execute(
+                select(BulkTableColumn.id).where(
+                    BulkTableColumn.table_id == table_id,
+                    BulkTableColumn.id.in_(column_ids),
+                )
+            )
+        ).all()
+    }
+    missing = [c for c in column_ids if c not in found]
+    if missing:
+        raise HTTPException(
+            status_code=400, detail=f"Unknown column id(s): {missing}"
+        )
+
+
+@router.post(
+    "/tables/{table_id}/link-check",
+    response_model=LinkCheckRunRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def start_link_check(
+    table_id: int,
+    payload: LinkCheckRequest,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LinkCheckRun:
+    """Queue a link-check run and return it immediately (202). The crawl,
+    when enabled, runs in a Celery worker; poll ``GET /link-check-runs/{id}``
+    for progress and results."""
+    await _get_table_or_404(db, table_id, actor, level="read")
+    await _verify_columns_in_table(db, table_id, payload.column_ids)
+    if payload.expected_column_ids:
+        await _verify_columns_in_table(db, table_id, payload.expected_column_ids)
+
+    run = LinkCheckRun(
+        table_id=table_id,
+        created_by_id=actor.id,
+        status="queued",
+        column_ids=list(payload.column_ids),
+        expected_column_ids=list(payload.expected_column_ids),
+        check_juxtapose=payload.check_juxtapose,
+        check_crawl=payload.check_crawl,
+        include_ok=payload.include_ok,
+    )
+    db.add(run)
+    await db.commit()
+    await db.refresh(run)
+    run_link_check.delay(run.id)
+    return run
+
+
+@router.get(
+    "/tables/{table_id}/link-check-runs",
+    response_model=list[LinkCheckRunRead],
+)
+async def list_link_check_runs(
+    table_id: int,
+    limit: int = Query(default=100, ge=1, le=500),
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[LinkCheckRun]:
+    """Link-check history for a table, newest first."""
+    await _get_table_or_404(db, table_id, actor, level="read")
+    runs = (
+        (
+            await db.execute(
+                select(LinkCheckRun)
+                .where(LinkCheckRun.table_id == table_id)
+                .order_by(LinkCheckRun.created_at.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return list(runs)
+
+
+@router.get("/link-check-runs/{run_id}", response_model=LinkCheckRunDetail)
+async def get_link_check_run(
+    run_id: int,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=500),
+    problem: str | None = Query(default=None),
+    status_code: int | None = Query(default=None),
+    q: str | None = Query(default=None),
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LinkCheckRunDetail:
+    """Run state (counters/progress) + the flagged links (paginated). The run
+    page polls this every ~2s while active, then stops on a terminal status.
+
+    Optional filters (server-side so they hold across pages): ``problem``
+    (omitted|hallucinated|broken|ok), ``status_code``, and ``q`` (link
+    substring)."""
+    run = await _get_link_check_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="read")
+
+    base = select(LinkCheckViolation).where(LinkCheckViolation.run_id == run_id)
+    if problem in ("omitted", "hallucinated", "broken", "ok"):
+        base = base.where(LinkCheckViolation.problem == problem)
+    if status_code is not None:
+        base = base.where(LinkCheckViolation.status_code == status_code)
+    if q and q.strip():
+        base = base.where(LinkCheckViolation.link.ilike(f"%{q.strip()}%"))
+
+    total = (
+        await db.execute(
+            select(func.count()).select_from(base.subquery())
+        )
+    ).scalar_one()
+
+    rows = (
+        (
+            await db.execute(
+                base.order_by(
+                    LinkCheckViolation.row_position,
+                    LinkCheckViolation.problem,
+                    LinkCheckViolation.id,
+                )
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    # Distinct status codes across the whole run (unfiltered) for the dropdown.
+    codes = (
+        (
+            await db.execute(
+                select(LinkCheckViolation.status_code)
+                .where(
+                    LinkCheckViolation.run_id == run_id,
+                    LinkCheckViolation.status_code.isnot(None),
+                )
+                .distinct()
+                .order_by(LinkCheckViolation.status_code)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    return LinkCheckRunDetail(
+        id=run.id,
+        table_id=run.table_id,
+        status=run.status,  # type: ignore[arg-type]
+        column_ids=run.column_ids,
+        expected_column_ids=run.expected_column_ids,
+        check_juxtapose=run.check_juxtapose,
+        check_crawl=run.check_crawl,
+        include_ok=run.include_ok,
+        total_links=run.total_links,
+        crawled=run.crawled,
+        ok_count=run.ok_count,
+        broken_count=run.broken_count,
+        omitted_count=run.omitted_count,
+        hallucinated_count=run.hallucinated_count,
+        error=run.error,
+        created_by_id=run.created_by_id,
+        created_at=run.created_at,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        created_by_name=await _resolve_creator_name(db, run.created_by_id),
+        page=page,
+        page_size=page_size,
+        total_violations=total,
+        status_codes_present=list(codes),
+        items=[LinkViolationRead.model_validate(v) for v in rows],
+    )
+
+
+@router.post("/link-check-runs/{run_id}/cancel", response_model=LinkCheckRunRead)
+async def cancel_link_check_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LinkCheckRun:
+    """Request cancellation of an in-flight crawl. The worker checks
+    ``status`` between crawl batches and stops. No-op on terminal states."""
+    run = await _get_link_check_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    if run.status in ("cancelled", "done", "failed"):
+        return run
+    run.status = "cancelled"
+    if run.finished_at is None and not run.check_crawl:
+        # Nothing async left to stamp finished_at; do it here.
+        run.finished_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(run)
     return run

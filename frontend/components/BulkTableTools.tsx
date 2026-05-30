@@ -24,6 +24,12 @@ export function BulkTableTools({ tableId }: { tableId: number }) {
           title={t("tools.findReplace.title")}
           description={t("tools.findReplace.desc")}
         />
+        <ToolCard
+          href={`/library/${tableId}/link-check`}
+          icon="🔗"
+          title={t("tools.linkCheck.title")}
+          description={t("tools.linkCheck.desc")}
+        />
       </div>
     </section>
   );
