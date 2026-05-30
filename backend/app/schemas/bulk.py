@@ -56,6 +56,15 @@ class RowRead(BaseModel):
 
 # ----- Cells -----
 
+class CellTranslation(BaseModel):
+    """One memoized translation entry for a single cell."""
+
+    text: str
+    provider_used: str | None = None
+    model_used: str | None = None
+    translated_at: datetime | None = None
+
+
 class CellRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -68,6 +77,9 @@ class CellRead(BaseModel):
     model_used: str | None
     generated_at: datetime | None
     updated_at: datetime
+    # Lowercase language tag → CellTranslation. Absent when no
+    # translation has ever been requested for this cell.
+    translations: dict[str, CellTranslation] | None = None
 
 
 class CellUpsert(BaseModel):

@@ -237,6 +237,7 @@ async def _table_to_read(db: AsyncSession, table: BulkTable) -> TableRead:
                     "model_used": c.model_used,
                     "generated_at": c.generated_at,
                     "updated_at": c.updated_at,
+                    "translations": c.translations,
                 }
                 for c in cells
             ],
@@ -1201,6 +1202,11 @@ async def _upsert_one_cell(
         )
         db.add(cell)
     else:
+        # Editing the source value invalidates any cached translations —
+        # otherwise the side-by-side translation panel would show stale
+        # output that no longer matches the original.
+        if cell.value != payload.value and cell.translations is not None:
+            cell.translations = None
         cell.value = payload.value
         cell.status = new_status
 
@@ -1242,6 +1248,137 @@ async def upsert_cells(
             }
         )
     return out
+
+
+# ---------- Cell translation ----------
+
+@router.post(
+    "/tables/{table_id}/cells/{row_id}/{column_id}/translate",
+    response_model=dict,
+)
+async def translate_cell(
+    table_id: int,
+    row_id: int,
+    column_id: int,
+    payload: dict,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Run the configured brain `translate` prompt against an output cell.
+
+    Body: ``{"target_language": "ru"}``. Target falls back to the brain
+    default when empty. Result is memoized on
+    ``bulk_table_cells.translations[<lang>]`` so reopens hit the cache.
+    Cached entries for a cell are invalidated whenever the underlying
+    value changes (upsert path + bulk-generation worker).
+    """
+    from app.providers.base import ProviderError as _ProviderError
+    from app.providers.registry import ProviderNotConfigured as _ProviderNotConfigured
+    from app.services.brain import (
+        cache_lookup as _cache_lookup,
+        make_translation_entry as _make_entry,
+        resolve_target_language as _resolve_lang,
+        translate_text as _translate_text,
+    )
+
+    await _get_table_or_404(db, table_id, actor, level="read")
+
+    cell = (
+        await db.execute(
+            select(BulkTableCell)
+            .join(BulkTableColumn, BulkTableColumn.id == BulkTableCell.column_id)
+            .where(
+                BulkTableCell.row_id == row_id,
+                BulkTableCell.column_id == column_id,
+                BulkTableColumn.table_id == table_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if cell is None or not (cell.value and cell.value.strip()):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cell has no content to translate.",
+        )
+
+    requested = await _resolve_lang(db, payload.get("target_language"))
+
+    # `force=true` lets the Re-translate button bypass the memoization —
+    # the user explicitly asked for a fresh LLM call (typically because
+    # the previous output was off and they want another shot).
+    force = bool(payload.get("force"))
+
+    # Cache hit — return what's already stored without an LLM call.
+    if not force:
+        cached = _cache_lookup(cell.translations, requested)
+        if cached is not None:
+            return {
+                "target_language": requested,
+                "cached": True,
+                **cached,
+            }
+
+    try:
+        text, code, model = await _translate_text(
+            db, source_text=cell.value, target_language=requested
+        )
+    except _ProviderNotConfigured as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)
+        )
+    except _ProviderError as e:
+        from app.services.error_log import log_error
+
+        await log_error(
+            db,
+            source="api",
+            category="provider_error",
+            message=str(e),
+            user_id=actor.id,
+            status_code=getattr(e, "status_code", None),
+            context={
+                "endpoint": "/library/.../translate",
+                "table_id": table_id,
+                "row_id": row_id,
+                "column_id": column_id,
+                "target_language": requested,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e)
+        )
+
+    entry = _make_entry(text=text, provider_code=code, model=model)
+    # JSONB mutation: copy + reassign so SQLAlchemy detects the change.
+    next_translations = dict(cell.translations or {})
+    next_translations[requested] = entry
+    cell.translations = next_translations
+    await db.commit()
+
+    # Track-only spend log — translate calls show up under the actor in
+    # /users so an admin can see how much the team is leaning on this.
+    from app.services.usage import record_usage
+
+    await record_usage(
+        db,
+        user_id=actor.id,
+        provider_code=code,
+        model=model,
+        prompt_tokens=None,  # translate path doesn't surface usage today;
+        completion_tokens=None,  # the provider response is text-only.
+        source="brain_translate",
+        source_ref={
+            "table_id": table_id,
+            "row_id": row_id,
+            "column_id": column_id,
+            "target_language": requested,
+        },
+    )
+
+    return {
+        "target_language": requested,
+        "cached": False,
+        **entry,
+    }
 
 
 # ---------- CSV ----------

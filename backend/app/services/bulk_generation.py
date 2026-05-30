@@ -323,6 +323,9 @@ async def generate_one_cell(
     cell.error = None
     cell.model_used = result.model
     cell.generated_at = datetime.now(timezone.utc)
+    # A fresh generation invalidates any prior translations of this cell —
+    # the source they translated no longer exists.
+    cell.translations = None
 
     # Bump the parent table's updated_at so the Library list re-sorts.
     table = (

@@ -16,6 +16,9 @@ class PromptVersionRead(BaseModel):
     created_by_name: str | None = None
     created_by_email: str | None = None
     created_at: datetime
+    # Memoized translations of `content` keyed by lowercase language tag.
+    # Absent when no translation has been requested for this version.
+    translations: dict[str, dict] | None = None
 
 
 class PromptVersionSummary(BaseModel):

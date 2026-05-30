@@ -67,6 +67,9 @@ class SavedGenerationRead(SavedGenerationListItem):
     output: str
     variables: dict[str, str]
     finish_reason: str | None
+    # Memoized translations of `output` keyed by lowercase language tag.
+    # Absent when no translation has been requested for this generation.
+    translations: dict[str, dict] | None = None
 
 
 class SaveGenerationRequest(BaseModel):

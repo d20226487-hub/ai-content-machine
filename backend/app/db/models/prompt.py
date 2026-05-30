@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -71,6 +72,12 @@ class PromptVersion(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+    # On-demand translations memoized per language. Same shape as
+    # bulk_table_cells.translations — see migration 0032 for the schema.
+    # PromptVersions are immutable by architecture (new edits → new
+    # version row), so no invalidation logic is needed here.
+    translations: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     prompt: Mapped[Prompt] = relationship(
         back_populates="versions", foreign_keys=[prompt_id]

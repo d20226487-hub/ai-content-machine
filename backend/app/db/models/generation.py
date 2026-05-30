@@ -1,4 +1,5 @@
 from sqlalchemy import JSON, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin
@@ -35,3 +36,9 @@ class Generation(Base, TimestampMixin):
     created_by_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
+
+    # On-demand translations memoized per language. Same shape as
+    # bulk_table_cells.translations — see migration 0032 for the schema.
+    # Generations are append-only (no edit path mutates `output` today),
+    # so no invalidation logic is needed here.
+    translations: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

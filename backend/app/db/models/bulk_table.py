@@ -23,6 +23,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
@@ -164,3 +165,10 @@ class BulkTableCell(Base):
         ForeignKey("bulk_generation_runs.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # On-demand translations memoized per language. Shape:
+    #   { "ru": { "text": ..., "provider_used": ..., "model_used": ...,
+    #             "translated_at": "<ISO 8601>" }, ... }
+    # NULL when no translation has ever been requested. Cleared by the
+    # upsert path and the bulk-generation worker when the underlying
+    # `value` changes, so a stale translation never outlives its source.
+    translations: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

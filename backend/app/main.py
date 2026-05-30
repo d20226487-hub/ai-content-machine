@@ -9,6 +9,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.api import (
     auth,
     backup as backup_router,
+    brain as brain_router,
     categories,
     domain_folders as domain_folders_router,
     domains as domains_router,
@@ -105,6 +106,7 @@ app.include_router(publish_router.router)
 app.include_router(publish_bulk_router.router)
 app.include_router(publish_languages_router.router)
 app.include_router(backup_router.router)
+app.include_router(brain_router.router)
 
 
 @app.get("/")
