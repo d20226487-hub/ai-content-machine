@@ -4,7 +4,31 @@ import { useEffect, useState } from "react";
 
 import { HtmlViewer } from "@/components/HtmlViewer";
 import { Modal } from "@/components/Modal";
+import { TranslationPanel } from "@/components/TranslationPanel";
+import { translateCell } from "@/lib/brain";
 import { useT } from "@/lib/i18n-context";
+import type { CellTranslation } from "@/lib/types";
+
+type Mode = "edit" | "preview";
+
+/**
+ * Translation context — set only for output cells with a saved value.
+ * When provided, the modal renders a side-by-side "Translate" panel so
+ * a colleague who doesn't know the source language can read the output
+ * in their own language. Translations are view-only — never written
+ * back into the cell's `value`.
+ */
+export interface TranslationContext {
+  tableId: number;
+  rowId: number;
+  columnId: number;
+  /** Last persisted translations (server returns this dict on table fetch). */
+  initial: Record<string, CellTranslation> | null;
+  /** Picker default — falls back to brain config when empty. */
+  defaultTargetLanguage: string;
+  /** Bubble fresh translations up so the table cache stays in sync. */
+  onTranslated: (lang: string, entry: CellTranslation) => void;
+}
 
 interface Props {
   title: string;
@@ -16,9 +40,9 @@ interface Props {
    *  flip to edit only if they want to tweak it. Input cells default
    *  to edit since previewing raw text is rarely useful. */
   defaultMode?: Mode;
+  /** Provided only for output cells with a saved value. */
+  translation?: TranslationContext;
 }
-
-type Mode = "edit" | "preview";
 
 export function CellEditorModal({
   title,
@@ -26,18 +50,26 @@ export function CellEditorModal({
   onSave,
   onClose,
   defaultMode = "edit",
+  translation,
 }: Props) {
   const { t } = useT();
   const [mode, setMode] = useState<Mode>(defaultMode);
   const [draft, setDraft] = useState(initialValue);
   const [saving, setSaving] = useState(false);
+  const [translateOpen, setTranslateOpen] = useState(false);
 
   useEffect(() => {
     setDraft(initialValue);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const dirty = draft !== initialValue;
+  // Translation is a read-side action — it doesn't make sense to offer
+  // it while the user is actively editing the source. Gating on
+  // mode==='preview' also keeps the top toolbar lean when the user is
+  // typing into the textarea.
+  const canTranslate =
+    !!translation && draft.trim().length > 0 && mode === "preview";
 
   async function commit() {
     if (!dirty) {
@@ -47,18 +79,8 @@ export function CellEditorModal({
     setSaving(true);
     try {
       await onSave(draft);
-      // Close ourselves on success — historically the parent's onSave
-      // also called setViewing(null), but if the parent's downstream
-      // flush hangs or races during unmount, the button could stay
-      // stuck on "Saving…" with no way out except closing the window.
-      // Owning the close inside the modal is idempotent (parents that
-      // also call onClose are no-ops the second time).
       onClose();
     } catch (err) {
-      // Surface unexpected errors instead of silently swallowing them
-      // so a stuck save at least shows something. The parent already
-      // owns network-error reporting via its own UI; this is the
-      // defense-in-depth path.
       console.error("[CellEditor] save failed", err);
     } finally {
       setSaving(false);
@@ -72,58 +94,136 @@ export function CellEditorModal({
     }
   }
 
+  // Side-by-side panel widens the modal; otherwise the old size is fine.
+  const modalSize = translateOpen ? "max-w-6xl" : "max-w-3xl";
+
   return (
     <Modal
       onClose={onClose}
-      size="max-w-3xl"
+      size={modalSize}
       dirty={dirty}
       valid={true}
       onSaveAndClose={() => void commit()}
     >
-      <div className="flex items-start justify-between gap-4">
-        <h3 className="truncate text-sm font-medium text-neutral-900 dark:text-neutral-100">
+      {/* Top toolbar collapses when the translate panel is open — each
+       *  HtmlViewer pane carries its own Preview / Raw / Copy / Open
+       *  controls so a duplicate set here is just visual noise. The
+       *  user closes the panel via the X next to the "Translation"
+       *  label which then brings these tabs back. */}
+      <div className="grid grid-cols-3 items-start gap-4">
+        <h3 className="col-span-3 truncate text-sm font-medium text-neutral-900 dark:text-neutral-100 sm:col-span-1">
           {title}
         </h3>
-        <div className="flex shrink-0 rounded-md border border-neutral-200 p-0.5 text-xs dark:border-neutral-700">
-          <button
-            type="button"
-            onClick={() => setMode("edit")}
-            className={
-              "rounded px-3 py-1 font-medium " +
-              (mode === "edit"
-                ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
-                : "text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100")
-            }
-          >
-            {t("cellEditor.edit")}
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode("preview")}
-            className={
-              "rounded px-3 py-1 font-medium " +
-              (mode === "preview"
-                ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
-                : "text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100")
-            }
-          >
-            {t("cellEditor.preview")}
-          </button>
-        </div>
+        {!translateOpen && (
+          <div className="col-span-3 flex shrink-0 items-center justify-center gap-2 sm:col-span-1">
+            <div
+              className="flex rounded-md border border-neutral-200 p-0.5 text-xs dark:border-neutral-700"
+              data-testid="cell-mode-tabs"
+            >
+              <button
+                type="button"
+                onClick={() => setMode("edit")}
+                className={
+                  "rounded px-3 py-1 font-medium " +
+                  (mode === "edit"
+                    ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                    : "text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100")
+                }
+              >
+                {t("cellEditor.edit")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode("preview")}
+                className={
+                  "rounded px-3 py-1 font-medium " +
+                  (mode === "preview"
+                    ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                    : "text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100")
+                }
+              >
+                {t("cellEditor.preview")}
+              </button>
+            </div>
+          </div>
+        )}
+        {!translateOpen && (
+          <div className="col-span-3 flex shrink-0 items-center justify-end sm:col-span-1">
+            {canTranslate && (
+              <button
+                type="button"
+                onClick={() => setTranslateOpen(true)}
+                className="rounded-md border border-neutral-300 px-3 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                data-testid="translate-toggle"
+              >
+                {t("translate.button")}
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
-      <div className="mt-4">
-        {mode === "edit" ? (
-          <textarea
-            autoFocus
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={handleKey}
-            placeholder={t("cellEditor.empty")}
-            className="block h-[28rem] w-full rounded-md border border-neutral-300 bg-white p-3 font-mono text-xs text-neutral-900 focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
+      <div
+        className={
+          "mt-4 grid gap-4 " + (translateOpen ? "grid-cols-2" : "grid-cols-1")
+        }
+      >
+        <div>
+          {translateOpen && (
+            // Pad the label row to match the right pane's form-control
+            // row so the two iframes start at the same Y. Without this
+            // the right row is taller and the text in the panes no
+            // longer lines up.
+            <div className="mb-2 flex min-h-[40px] items-center">
+              <p className="text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                {t("translate.original")}
+              </p>
+            </div>
+          )}
+          {/* When the translate panel is open we force the original side to
+           *  preview mode regardless of the Edit/Preview state — the
+           *  HtmlViewer toolbar already exposes a Raw view, and editing the
+           *  source while a translation hangs next to it is more confusing
+           *  than helpful. Users who want to edit close the panel first. */}
+          {mode === "edit" && !translateOpen ? (
+            <textarea
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={handleKey}
+              placeholder={t("cellEditor.empty")}
+              className="block h-[28rem] w-full rounded-md border border-neutral-300 bg-white p-3 font-mono text-xs text-neutral-900 focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
+            />
+          ) : (
+            <HtmlViewer content={draft} title="" height="h-[28rem]" />
+          )}
+        </div>
+
+        {translateOpen && translation && (
+          <TranslationPanel
+            initialTranslations={translation.initial}
+            defaultTargetLanguage={translation.defaultTargetLanguage}
+            autoRunOnOpen
+            onClose={() => setTranslateOpen(false)}
+            onTranslate={async (lang, force) => {
+              const res = await translateCell(
+                translation.tableId,
+                translation.rowId,
+                translation.columnId,
+                lang,
+                force,
+              );
+              return {
+                text: res.text,
+                provider_used: res.provider_used,
+                model_used: res.model_used,
+                translated_at: res.translated_at,
+              };
+            }}
+            onTranslated={(lang, entry) =>
+              translation.onTranslated(lang, entry)
+            }
           />
-        ) : (
-          <HtmlViewer content={draft} title="" height="h-[28rem]" />
         )}
       </div>
 

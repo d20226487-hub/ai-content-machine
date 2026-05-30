@@ -5,8 +5,9 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { EditPromptModal } from "@/components/EditPromptModal";
-import { TestPromptModal } from "@/components/TestPromptModal";
+import { TranslationPanel } from "@/components/TranslationPanel";
 import { ApiError } from "@/lib/api";
+import { getBrainPrompts, translatePromptVersion } from "@/lib/brain";
 import { useT } from "@/lib/i18n-context";
 import {
   deletePrompt,
@@ -17,7 +18,12 @@ import {
   listTags,
   revertPrompt,
 } from "@/lib/prompts";
-import type { Category, PromptDetail, Tag } from "@/lib/types";
+import type {
+  Category,
+  CellTranslation,
+  PromptDetail,
+  Tag,
+} from "@/lib/types";
 
 export default function PromptDetailPage() {
   const params = useParams<{ id: string }>();
@@ -30,7 +36,6 @@ export default function PromptDetailPage() {
   const [tags, setTags] = useState<Tag[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
-  const [testing, setTesting] = useState(false);
 
   const [versionContents, setVersionContents] = useState<Record<number, string>>({});
   const [openVersions, setOpenVersions] = useState<Set<number>>(new Set());
@@ -41,6 +46,37 @@ export default function PromptDetailPage() {
 
   const VERSIONS_PER_PAGE = 20;
   const [versionPage, setVersionPage] = useState(1);
+
+  // Translation panel for the current-version content. Memoized on
+  // the server via /prompts/{id}/versions/{vnum}/translate, so re-opens
+  // are free. Versions are immutable, so the cache lives forever per
+  // (prompt_id, version_number) tuple.
+  const [translateOpen, setTranslateOpen] = useState(false);
+  const [translateDefaultLang, setTranslateDefaultLang] = useState("ru");
+
+  useEffect(() => {
+    let ignored = false;
+    getBrainPrompts()
+      .then((b) => {
+        if (!ignored) {
+          setTranslateDefaultLang(
+            (b.translate.default_target_language || "ru").toLowerCase(),
+          );
+        }
+      })
+      .catch(() => {
+        /* keep 'ru' fallback */
+      });
+    return () => {
+      ignored = true;
+    };
+  }, []);
+
+  // Switching to a different prompt closes any open translation panel
+  // so we don't show one prompt's translation against another's source.
+  useEffect(() => {
+    setTranslateOpen(false);
+  }, [prompt?.id, prompt?.current_version?.version_number]);
 
   async function commitNote(versionNumber: number) {
     if (!prompt) return;
@@ -191,13 +227,13 @@ export default function PromptDetailPage() {
           )}
         </div>
         <div className="flex shrink-0 gap-2">
-          <button
-            onClick={() => setTesting(true)}
+          <Link
+            href={`/prompts/${prompt.id}/test`}
             title={t("promptDetail.testHint")}
             className="rounded-md border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
           >
             {t("promptDetail.test")}
-          </button>
+          </Link>
           <button
             onClick={() => setEditing(true)}
             className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 dark:hover:bg-neutral-200"
@@ -215,13 +251,82 @@ export default function PromptDetailPage() {
 
       {/* Current content */}
       <section className="mt-6 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5 shadow-sm">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <h2 className="text-sm font-medium text-neutral-700 dark:text-neutral-300">{t("promptDetail.currentContent")}</h2>
-          <span className="text-xs text-neutral-500 dark:text-neutral-400">{t("prompts.versionPrefix")}{currentVN}</span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-neutral-500 dark:text-neutral-400">
+              {t("prompts.versionPrefix")}
+              {currentVN}
+            </span>
+            {prompt.current_version?.content &&
+              prompt.current_version.content.trim().length > 0 &&
+              !translateOpen && (
+                <button
+                  type="button"
+                  onClick={() => setTranslateOpen(true)}
+                  className="rounded-md border border-neutral-300 px-2 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                  data-testid="prompt-translate-toggle"
+                >
+                  {t("translate.button")}
+                </button>
+              )}
+          </div>
         </div>
-        <pre className="mt-3 whitespace-pre-wrap break-words rounded-md bg-neutral-50 dark:bg-neutral-950 p-4 font-mono text-xs text-neutral-800 dark:text-neutral-200">
-          {prompt.current_version?.content ?? t("common.empty")}
-        </pre>
+        {translateOpen && prompt.current_version ? (
+          <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div>
+              <div className="mb-2 flex min-h-[40px] items-center">
+                <p className="text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                  {t("translate.original")}
+                </p>
+              </div>
+              <pre className="h-[28rem] overflow-auto whitespace-pre-wrap break-words rounded-md bg-neutral-50 dark:bg-neutral-950 p-4 font-mono text-xs text-neutral-800 dark:text-neutral-200">
+                {prompt.current_version.content}
+              </pre>
+            </div>
+            <TranslationPanel
+              initialTranslations={prompt.current_version.translations ?? null}
+              defaultTargetLanguage={translateDefaultLang}
+              autoRunOnOpen
+              onClose={() => setTranslateOpen(false)}
+              // Prompt templates are plain text — Preview/Raw and the
+              // Open-in-window button add no value. Trim the toolbar
+              // to just Copy.
+              compact
+              onTranslate={async (lang, force) => {
+                const res = await translatePromptVersion(
+                  prompt.id,
+                  prompt.current_version!.version_number,
+                  lang,
+                  force,
+                );
+                return {
+                  text: res.text,
+                  provider_used: res.provider_used,
+                  model_used: res.model_used,
+                  translated_at: res.translated_at,
+                };
+              }}
+              onTranslated={(lang, entry) => {
+                if (!prompt.current_version) return;
+                setPrompt({
+                  ...prompt,
+                  current_version: {
+                    ...prompt.current_version,
+                    translations: {
+                      ...(prompt.current_version.translations ?? {}),
+                      [lang]: entry,
+                    },
+                  },
+                });
+              }}
+            />
+          </div>
+        ) : (
+          <pre className="mt-3 whitespace-pre-wrap break-words rounded-md bg-neutral-50 dark:bg-neutral-950 p-4 font-mono text-xs text-neutral-800 dark:text-neutral-200">
+            {prompt.current_version?.content ?? t("common.empty")}
+          </pre>
+        )}
 
         {prompt.variables.length > 0 && (
           <div className="mt-4">
@@ -423,7 +528,6 @@ export default function PromptDetailPage() {
           }}
         />
       )}
-      {testing && <TestPromptModal prompt={prompt} onClose={() => setTesting(false)} />}
     </main>
   );
 }

@@ -1,31 +1,37 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { ErrorPanel } from "@/components/ErrorPanel";
-import { HtmlViewer } from "@/components/HtmlViewer";
-import { PublishedToHistory } from "@/components/PublishedToHistory";
-import { PublishToDomainModal } from "@/components/PublishToDomainModal";
 import { SavedGenerationsModal } from "@/components/SavedGenerationsModal";
+import { clearSession, readSession, updateSession } from "@/lib/createSession";
 import { useT } from "@/lib/i18n-context";
-import {
-  generateSingle,
-  listEnabledProviders,
-  renderPrompt,
-  saveGeneration,
-} from "@/lib/generate";
+import { generateSingle, listEnabledProviders } from "@/lib/generate";
 import { getPrompt, listCategories, listPrompts } from "@/lib/prompts";
 import type {
   Category,
   EnabledProvider,
-  GenerateSingleResponse,
   PromptDetail,
   PromptListItem,
   SavedGeneration,
 } from "@/lib/types";
 
+/**
+ * The /create form. Renders just the prompt picker + variable inputs +
+ * provider/model dropdowns + Generate button. The post-Generate result
+ * is no longer shown here — it lives at /create/output so it can take
+ * the full viewport. Hitting Generate writes the result to
+ * sessionStorage and routes to /create/output; on remount this
+ * component re-hydrates the form so "Back to form" feels seamless.
+ *
+ * Saved-generation history is still opened from this page via the
+ * "Saved generations" modal; selecting one writes the session blob and
+ * jumps to /create/output the same way Generate does.
+ */
 export function SingleGenerator() {
   const { t } = useT();
+  const router = useRouter();
   const [prompts, setPrompts] = useState<PromptListItem[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [providers, setProviders] = useState<EnabledProvider[]>([]);
@@ -37,48 +43,72 @@ export function SingleGenerator() {
   const [varValues, setVarValues] = useState<Record<string, string>>({});
   const [providerCode, setProviderCode] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
+  // Preview now shows the raw prompt template (with {{var}} placeholders
+  // intact) rather than the rendered version with values substituted.
+  // The previous behaviour ran POST /generate/render in a useEffect and
+  // displayed the result, but reports surfaced that the box was
+  // occasionally landing on LLM output after a generation cycle.
+  // Sourcing directly from `selectedPrompt.current_version.content`
+  // sidesteps that path entirely.
   const [showPreview, setShowPreview] = useState(false);
-  const [renderedPreview, setRenderedPreview] = useState<string | null>(null);
-  const [previewMissing, setPreviewMissing] = useState<string[]>([]);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [result, setResult] = useState<GenerateSingleResponse | null>(null);
 
-  // Save state. `savedId` !== null means the current `result` is already persisted.
-  const [savedId, setSavedId] = useState<number | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<unknown>(null);
-
-  // Loaded-from-saved view (read-only banner above the viewer).
-  const [viewingSaved, setViewingSaved] = useState<SavedGeneration | null>(null);
   const [showSavedList, setShowSavedList] = useState(false);
-  const [publishOpen, setPublishOpen] = useState(false);
 
-  // Initial load
+  // True once the initial sessionStorage hydration has had a chance to
+  // run — used to avoid a flash where varValues is `{}` and immediately
+  // gets repopulated.
+  const [hydrated, setHydrated] = useState(false);
+
+  // Initial load — categories, providers, prompts list — plus any
+  // session snapshot the output page may have left behind. The provider
+  // default is only set when no snapshot exists, so a Back-to-form
+  // round trip preserves the user's provider choice.
   useEffect(() => {
-    Promise.all([listPrompts({ page_size: 500 }), listCategories(), listEnabledProviders()])
+    let cancelled = false;
+    Promise.all([
+      listPrompts({ page_size: 500 }),
+      listCategories(),
+      listEnabledProviders(),
+    ])
       .then(([ps, cs, prv]) => {
+        if (cancelled) return;
         setPrompts(ps.items);
         setCategories(cs);
         setProviders(prv);
-        // Default to the first provider that actually has a key (so Generate is enabled).
-        const usable = prv.find((p) => p.has_api_key) ?? prv[0];
-        if (usable) {
-          setProviderCode(usable.code);
-          setModel(usable.default_model);
+
+        const snap = readSession();
+        if (snap && snap.form.selectedPromptId != null) {
+          // Restore from snapshot. selectedPromptId triggers the
+          // selectedPrompt fetch below; varValues / provider / model
+          // are restored eagerly so the form looks intact while the
+          // PromptDetail loads.
+          setSelectedPromptId(snap.form.selectedPromptId);
+          setVarValues(snap.form.varValues ?? {});
+          setProviderCode(snap.form.providerCode);
+          setModel(snap.form.model);
+        } else {
+          const usable = prv.find((p) => p.has_api_key) ?? prv[0];
+          if (usable) {
+            setProviderCode(usable.code);
+            setModel(usable.default_model);
+          }
         }
+        setHydrated(true);
       })
       .catch((err) => {
         console.error("[Create] failed to load initial data", err);
         setError(err);
+        setHydrated(true);
       });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Load prompt detail (with current version + variables) on selection.
-  // `ignored` flag drops late results from superseded fetches: if the user
-  // changes selectedPromptId twice quickly, the older request's resolution
-  // would otherwise overwrite the newer one's state.
   useEffect(() => {
     if (selectedPromptId == null) {
       setSelectedPrompt(null);
@@ -95,35 +125,21 @@ export function SingleGenerator() {
     };
   }, [selectedPromptId]);
 
-  // Reset variable values when prompt changes
+  // Reset / extend variable values when the selected prompt changes.
+  // The snapshot-restore path above sets varValues before the prompt
+  // detail arrives — when it does, we keep any values that match the
+  // new prompt's variables and drop the rest. Without the hydrated
+  // guard, the first effect run would wipe the just-restored values.
   useEffect(() => {
     if (!selectedPrompt) return;
-    const fresh: Record<string, string> = {};
-    for (const v of selectedPrompt.variables) fresh[v] = varValues[v] ?? "";
-    setVarValues(fresh);
-    setRenderedPreview(null);
-    setResult(null);
+    setVarValues((cur) => {
+      const fresh: Record<string, string> = {};
+      for (const v of selectedPrompt.variables) fresh[v] = cur[v] ?? "";
+      return fresh;
+    });
     setShowPreview(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPrompt?.id]);
-
-  // When preview is open, debounce-refresh as the user fills variables
-  useEffect(() => {
-    if (!showPreview || !selectedPrompt) return;
-    const t = setTimeout(async () => {
-      try {
-        const r = await renderPrompt({
-          prompt_id: selectedPrompt.id,
-          variables: varValues,
-        });
-        setRenderedPreview(r.rendered_prompt);
-        setPreviewMissing(r.missing_variables);
-      } catch {
-        setRenderedPreview(null);
-      }
-    }, 250);
-    return () => clearTimeout(t);
-  }, [showPreview, varValues, selectedPrompt]);
 
   const filteredPrompts = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -134,7 +150,9 @@ export function SingleGenerator() {
   const promptsByCat = useMemo(() => {
     const groups = new Map<string, PromptListItem[]>();
     const catName = (id: number | null) =>
-      id == null ? t("colCfg.noFolder") : categories.find((c) => c.id === id)?.name ?? t("colCfg.noFolder");
+      id == null
+        ? t("colCfg.noFolder")
+        : categories.find((c) => c.id === id)?.name ?? t("colCfg.noFolder");
     for (const p of filteredPrompts) {
       const k = catName(p.category_id);
       const arr = groups.get(k) ?? [];
@@ -142,7 +160,7 @@ export function SingleGenerator() {
       groups.set(k, arr);
     }
     return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [filteredPrompts, categories]);
+  }, [filteredPrompts, categories, t]);
 
   const currentProvider = providers.find((p) => p.code === providerCode);
   const noProviders = providers.length === 0;
@@ -152,10 +170,6 @@ export function SingleGenerator() {
     if (!selectedPrompt) return;
     setBusy(true);
     setError(null);
-    setResult(null);
-    setSavedId(null);
-    setSaveError(null);
-    setViewingSaved(null);
     try {
       const r = await generateSingle({
         prompt_id: selectedPrompt.id,
@@ -163,7 +177,25 @@ export function SingleGenerator() {
         provider_code: providerCode,
         model,
       });
-      setResult(r);
+      // Persist form + result, then jump to the dedicated output view.
+      // Writing the session first means a refresh of /create/output
+      // shows the result immediately without re-running the LLM.
+      updateSession({
+        form: {
+          selectedPromptId: selectedPrompt.id,
+          selectedPromptVersionNumber:
+            selectedPrompt.current_version?.version_number ?? null,
+          selectedPromptName: selectedPrompt.name,
+          varValues,
+          providerCode,
+          model,
+        },
+        result: r,
+        savedId: null,
+        viewingSaved: null,
+        localTranslations: {},
+      });
+      router.push("/create/output");
     } catch (err) {
       console.error("[Create] generation failed", err);
       setError(err);
@@ -172,45 +204,46 @@ export function SingleGenerator() {
     }
   }
 
-  async function onSave() {
-    if (!result || !selectedPrompt) return;
-    setSaving(true);
-    setSaveError(null);
-    try {
-      const saved = await saveGeneration({
-        prompt_id: selectedPrompt.id,
-        prompt_version_number: selectedPrompt.current_version?.version_number ?? null,
-        rendered_prompt: result.rendered_prompt,
-        output: result.text,
-        variables: varValues,
-        provider_code: result.provider_used,
-        model_used: result.model_used,
-        finish_reason: result.finish_reason ?? null,
-      });
-      setSavedId(saved.id);
-    } catch (err) {
-      console.error("[Create] save failed", err);
-      setSaveError(err);
-    } finally {
-      setSaving(false);
-    }
+  function loadSaved(s: SavedGeneration) {
+    // Loading a saved generation jumps straight to the output view —
+    // the form fields are preserved in the snapshot so the user can
+    // still go Back to form afterward.
+    updateSession({
+      form: {
+        selectedPromptId: s.prompt_id,
+        selectedPromptVersionNumber: s.prompt_version_number,
+        selectedPromptName: s.prompt_name_snapshot,
+        varValues: s.variables,
+        providerCode: s.provider_code,
+        model: s.model_used,
+      },
+      result: {
+        text: s.output,
+        rendered_prompt: s.rendered_prompt,
+        provider_used: s.provider_code,
+        model_used: s.model_used,
+        finish_reason: s.finish_reason,
+        missing_variables: [],
+      },
+      savedId: s.id,
+      viewingSaved: s,
+      localTranslations: {},
+    });
+    setShowSavedList(false);
+    router.push("/create/output");
   }
 
-  function loadSaved(s: SavedGeneration) {
-    // Render the saved generation in the viewer below the form.
-    setResult({
-      text: s.output,
-      rendered_prompt: s.rendered_prompt,
-      provider_used: s.provider_code,
-      model_used: s.model_used,
-      finish_reason: s.finish_reason,
-      missing_variables: [],
-    });
-    setSavedId(s.id);
-    setViewingSaved(s);
-    setError(null);
-    setSaveError(null);
+  function startFresh() {
+    // "Clear form" — drops both local state and the persisted snapshot
+    // so a subsequent Back from /create/output doesn't resurrect the
+    // old form. Not auto-wired anywhere yet but used by the Saved-list
+    // close path so the next session starts clean.
+    clearSession();
+    setSelectedPromptId(null);
+    setSelectedPrompt(null);
+    setVarValues({});
   }
+  void startFresh; // reserved for future "New session" button
 
   return (
     <div className="grid gap-8 lg:grid-cols-[320px_1fr]">
@@ -262,7 +295,7 @@ export function SingleGenerator() {
         </div>
       </aside>
 
-      {/* Right: form + result */}
+      {/* Right: form */}
       <section className="min-w-0">
         <div className="mb-4 flex justify-end">
           <button
@@ -274,14 +307,7 @@ export function SingleGenerator() {
           </button>
         </div>
 
-        {/* "Select a prompt to begin" placeholder only when there's
-            also nothing to view — opening a saved generation populates
-            `result` without selecting a prompt (the source prompt may
-            be deleted, or just not the one currently picked), and the
-            old guard `!selectedPrompt` hid the loaded output behind the
-            placeholder. Bug symptom: click a saved generation, nothing
-            visibly happens. */}
-        {!selectedPrompt && !result && (
+        {hydrated && !selectedPrompt && (
           <div className="rounded-lg border border-dashed border-neutral-300 bg-white p-10 text-center text-sm text-neutral-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-400">
             {t("single.selectToBegin")}
           </div>
@@ -294,7 +320,8 @@ export function SingleGenerator() {
                 {selectedPrompt.name}
               </h3>
               <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
-                {t("prompts.versionPrefix")}{selectedPrompt.current_version?.version_number ?? "?"} ·{" "}
+                {t("prompts.versionPrefix")}
+                {selectedPrompt.current_version?.version_number ?? "?"} ·{" "}
                 {t("single.variablesCount", { count: selectedPrompt.variables.length })}
               </p>
             </header>
@@ -378,7 +405,11 @@ export function SingleGenerator() {
                 )}
               </div>
 
-              {/* Prompt preview toggle */}
+              {/* Prompt-template preview toggle. Shows the raw template
+               *  content with {{var}} placeholders intact — what the
+               *  user wrote on the prompt-detail page, not the rendered
+               *  version with their current variable values substituted
+               *  in. */}
               <div>
                 <button
                   type="button"
@@ -390,21 +421,18 @@ export function SingleGenerator() {
                 {showPreview && (
                   <div className="mt-2 rounded-md border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-950">
                     <p className="text-[11px] uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
-                      {t("single.willBeSent")}
+                      {t("single.promptTemplateLabel")}
                     </p>
                     <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-neutral-800 dark:text-neutral-200">
-                      {renderedPreview ?? selectedPrompt.current_version?.content ?? ""}
+                      {selectedPrompt.current_version?.content ?? ""}
                     </pre>
-                    {previewMissing.length > 0 && (
-                      <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
-                        {t("single.unfilledVars", { vars: previewMissing.map((m) => `{{${m}}}`).join(", ") })}
-                      </p>
-                    )}
                   </div>
                 )}
               </div>
 
-              {error != null && <ErrorPanel title={t("single.generationFailed")} error={error} />}
+              {error != null && (
+                <ErrorPanel title={t("single.generationFailed")} error={error} />
+              )}
 
               <div className="flex justify-end">
                 <button
@@ -419,93 +447,10 @@ export function SingleGenerator() {
           </>
         )}
 
-        {/* Result panel — intentionally OUTSIDE the `selectedPrompt &&`
-            block above. Opening a saved generation populates `result`
-            without changing the prompt selection (and the source prompt
-            may have been deleted entirely — `viewingSaved.prompt_id`
-            can be null). Gating this on `selectedPrompt` used to hide
-            the loaded output behind the empty-state placeholder; the
-            click did fire and state did update, but nothing rendered. */}
-        {result && (
-          <div className="mt-6 space-y-3">
-            {viewingSaved && (
-              <>
-                <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800 dark:border-blue-900/60 dark:bg-blue-950/40 dark:text-blue-200">
-                  {t("single.viewingSaved")} <b>{viewingSaved.name}</b>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setResult(null);
-                      setSavedId(null);
-                      setViewingSaved(null);
-                    }}
-                    className="ml-3 underline"
-                  >
-                    {t("single.clear")}
-                  </button>
-                </div>
-                <PublishedToHistory generationId={viewingSaved.id} />
-              </>
-            )}
-
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                {t("single.generatedWith", { provider: result.provider_used, model: result.model_used })}
-                {result.finish_reason && ` · ${result.finish_reason}`}
-              </p>
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => setPublishOpen(true)}
-                  className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
-                >
-                  {t("single.publishTo")}
-                </button>
-                {!viewingSaved && (
-                  <button
-                    type="button"
-                    onClick={onSave}
-                    disabled={saving || savedId != null}
-                    className={
-                      "rounded-md px-3 py-1.5 text-xs font-medium " +
-                      (savedId != null
-                        ? "border border-green-300 text-green-700 dark:border-green-800 dark:text-green-300"
-                        : "bg-neutral-900 text-white hover:bg-neutral-800 disabled:opacity-60 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200")
-                    }
-                  >
-                    {saving ? t("common.saving") : savedId != null ? t("single.alreadySaved") : t("common.save")}
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {saveError != null && <ErrorPanel title={t("single.saveFailed")} error={saveError} />}
-
-            <HtmlViewer
-              content={result.text}
-              title={viewingSaved ? viewingSaved.name : t("single.generatedContent")}
-              height="h-[28rem]"
-            />
-          </div>
-        )}
-
         {showSavedList && (
           <SavedGenerationsModal
             onClose={() => setShowSavedList(false)}
             onLoad={loadSaved}
-          />
-        )}
-
-        {publishOpen && result && (
-          <PublishToDomainModal
-            initialTitle={selectedPrompt?.name}
-            initialContent={result.text}
-            sourceRef={
-              savedId != null
-                ? { generation_id: savedId, prompt_id: selectedPrompt?.id ?? null }
-                : { prompt_id: selectedPrompt?.id ?? null }
-            }
-            onClose={() => setPublishOpen(false)}
           />
         )}
       </section>

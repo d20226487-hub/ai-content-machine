@@ -5,7 +5,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { NewPromptModal } from "@/components/NewPromptModal";
-import { TestPromptModal } from "@/components/TestPromptModal";
 import { UserChip } from "@/components/UserChip";
 import { MoveToFolderModal } from "@/components/folders/MoveToFolderModal";
 import { ApiError } from "@/lib/api";
@@ -75,8 +74,6 @@ export default function PromptsPage() {
   const [searchDraft, setSearchDraft] = useState(q);
   const [debouncedSearch, setDebouncedSearch] = useState(q);
   const [refreshTick, setRefreshTick] = useState(0);
-  const [testingPrompt, setTestingPrompt] = useState<PromptDetail | null>(null);
-  const [testLoadingId, setTestLoadingId] = useState<number | null>(null);
   const [trashCount, setTrashCount] = useState(0);
   // Bulk-select state — persistent across pages, same model as /library
   // and /publish/domains. Only cleared by the "Clear" button or a
@@ -129,18 +126,6 @@ export default function PromptsPage() {
       alert(err instanceof ApiError ? err.message : t("common.saveFailed"));
     } finally {
       setMoving(false);
-    }
-  }
-
-  async function onOpenTest(promptId: number) {
-    setTestLoadingId(promptId);
-    try {
-      const detail = await getPrompt(promptId);
-      setTestingPrompt(detail);
-    } catch (err) {
-      alert(err instanceof ApiError ? err.message : t("prompts.failedLoadPrompts"));
-    } finally {
-      setTestLoadingId(null);
     }
   }
 
@@ -593,17 +578,13 @@ export default function PromptsPage() {
                   >
                     {t("common.open")}
                   </Link>
-                  <button
-                    type="button"
-                    onClick={() => onOpenTest(p.id)}
-                    disabled={testLoadingId === p.id}
+                  <Link
+                    href={`/prompts/${p.id}/test`}
                     title={t("promptDetail.testHint")}
-                    className="font-medium text-neutral-700 hover:underline disabled:opacity-60 dark:text-neutral-300"
+                    className="font-medium text-neutral-700 hover:underline dark:text-neutral-300"
                   >
-                    {testLoadingId === p.id
-                      ? t("test.generating")
-                      : t("promptDetail.test")}
-                  </button>
+                    {t("promptDetail.test")}
+                  </Link>
                   <PromptMoveControl
                     prompt={p}
                     categories={categories}
@@ -691,13 +672,6 @@ export default function PromptsPage() {
             setTotal((n) => n + 1);
             void refreshCategories();
           }}
-        />
-      )}
-
-      {testingPrompt && (
-        <TestPromptModal
-          prompt={testingPrompt}
-          onClose={() => setTestingPrompt(null)}
         />
       )}
 

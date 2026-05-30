@@ -8,6 +8,7 @@ import { BulkPublishModal } from "@/components/BulkPublishModal";
 import { GenerationProgressBanner } from "@/components/GenerationProgressBanner";
 import { GenerationQueueModal } from "@/components/GenerationQueueModal";
 import { Modal } from "@/components/Modal";
+import { getBrainPrompts } from "@/lib/brain";
 import { useT, type TranslationKey } from "@/lib/i18n-context";
 import {
   addColumn as apiAddColumn,
@@ -162,6 +163,28 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
   // Inline column rename (double-click the header name to start)
   const [renamingColumnId, setRenamingColumnId] = useState<number | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+
+  // Brain default target language for the Translate panel. Loaded once
+  // per mount; falls back to 'ru' so the modal stays usable when the
+  // admin hasn't visited Settings → Brain yet.
+  const [translateDefaultLang, setTranslateDefaultLang] = useState<string>("ru");
+  useEffect(() => {
+    let ignored = false;
+    getBrainPrompts()
+      .then((b) => {
+        if (!ignored) {
+          setTranslateDefaultLang(
+            (b.translate.default_target_language || "ru").toLowerCase(),
+          );
+        }
+      })
+      .catch(() => {
+        /* keep the 'ru' fallback — non-fatal */
+      });
+    return () => {
+      ignored = true;
+    };
+  }, []);
 
   async function commitColumnRename(col: BulkColumn) {
     const next = renameDraft.trim();
@@ -1041,6 +1064,40 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
           // on edit (their content is what the user types in, no
           // rendered preview makes sense).
           defaultMode={viewing.column.kind === "output" ? "preview" : "edit"}
+          // Translation panel only makes sense for output cells that
+          // already have a saved value to translate.
+          translation={
+            viewing.column.kind === "output" &&
+            viewing.cell &&
+            viewing.cell.value &&
+            viewing.cell.value.trim().length > 0
+              ? {
+                  tableId: table.id,
+                  rowId: viewing.row.id,
+                  columnId: viewing.column.id,
+                  initial: viewing.cell.translations ?? null,
+                  defaultTargetLanguage: translateDefaultLang,
+                  onTranslated: (lang, entry) => {
+                    const rowId = viewing.row.id;
+                    const colId = viewing.column.id;
+                    onTableChange({
+                      ...table,
+                      cells: table.cells.map((c) =>
+                        c.row_id === rowId && c.column_id === colId
+                          ? {
+                              ...c,
+                              translations: {
+                                ...(c.translations ?? {}),
+                                [lang]: entry,
+                              },
+                            }
+                          : c,
+                      ),
+                    });
+                  },
+                }
+              : undefined
+          }
           onClose={() => setViewing(null)}
           onSave={async (next) => {
             // Push directly through the same upsert path the inline
