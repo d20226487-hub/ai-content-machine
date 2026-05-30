@@ -12,6 +12,7 @@ from app.db.models.category import Category
 from app.db.models.domain import Domain
 from app.db.models.domain_folder import DomainFolder
 from app.db.models.error_log import AppSetting, ErrorLog
+from app.db.models.find_replace_run import FindReplaceRun
 from app.db.models.generation import Generation
 from app.db.models.language_sync import LanguageSyncResult, LanguageSyncRun
 from app.db.models.media_upload import MediaUpload
@@ -38,6 +39,7 @@ __all__ = [
     "Domain",
     "DomainFolder",
     "ErrorLog",
+    "FindReplaceRun",
     "Generation",
     "LanguageSyncResult",
     "LanguageSyncRun",

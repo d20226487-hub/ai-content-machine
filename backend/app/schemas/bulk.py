@@ -285,3 +285,111 @@ class BulkGenerationRunDetail(BulkGenerationRunRead):
     without breaking the summary endpoint."""
 
     created_by_name: str | None = None
+
+
+# ----- Find / replace (added in migration 0033) -----
+
+
+class FindReplaceConfig(BaseModel):
+    """Shared search configuration for both Find and Replace.
+
+    ``column_ids`` empty = search every column. ``replacement`` is ignored
+    by the Find endpoint.
+    """
+
+    pattern: str = Field(min_length=1)
+    replacement: str = ""
+    is_regex: bool = False
+    case_sensitive: bool = True
+    whole_cell: bool = False
+    column_ids: list[int] = Field(default_factory=list)
+
+
+class FindRequest(FindReplaceConfig):
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=25, ge=1, le=500)
+
+
+class ReplaceRequest(FindReplaceConfig):
+    pass
+
+
+class MatchedCell(BaseModel):
+    """One cell that matched, with enough context to render a results row
+    and open it in the editor."""
+
+    row_id: int
+    row_position: int
+    column_id: int
+    column_name: str
+    value: str
+    status: CellStatus
+    match_count: int
+
+
+class FindResponse(BaseModel):
+    total_matches: int  # total occurrences across all matched cells
+    total_cells: int  # distinct cells with at least one match
+    page: int
+    page_size: int
+    items: list[MatchedCell]
+
+
+class FindReplaceRunRead(BaseModel):
+    """Summary of a replace run — drives the history list."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    table_id: int
+    pattern: str
+    replacement: str
+    is_regex: bool
+    case_sensitive: bool
+    whole_cell: bool
+    column_ids: list[int]
+    match_count: int
+    cell_count: int
+    status: Literal["applied", "reverted"]
+    created_by_id: int | None
+    created_at: datetime
+    reverted_at: datetime | None = None
+
+
+class HighlightSegment(BaseModel):
+    """One run of text in a before/after diff. ``changed`` marks the matched
+    span (old side) or the inserted replacement (new side)."""
+
+    text: str
+    changed: bool
+
+
+class ReplacedCell(BaseModel):
+    """One affected cell on the run detail page. ``current_value`` is the
+    cell's value right now; ``drifted`` is True when it no longer equals the
+    value the replace wrote (someone edited or regenerated it since), so the
+    UI can warn that reverting would discard that later change.
+
+    ``old_segments`` / ``new_segments`` split the before/after text so the UI
+    can strike only the matched part and highlight only the inserted part."""
+
+    row_id: int
+    row_position: int
+    column_id: int
+    column_name: str
+    old_value: str | None
+    new_value: str | None
+    current_value: str | None
+    current_status: CellStatus
+    drifted: bool
+    old_segments: list[HighlightSegment]
+    new_segments: list[HighlightSegment]
+
+
+class FindReplaceRunDetail(FindReplaceRunRead):
+    created_by_name: str | None = None
+    page: int
+    page_size: int
+    total_cells: int  # == cell_count, echoed for pagination math
+    drifted_count: int
+    items: list[ReplacedCell]

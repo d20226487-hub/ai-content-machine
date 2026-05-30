@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { BulkTableGrid } from "@/components/BulkTableGrid";
+import { BulkTableTools } from "@/components/BulkTableTools";
 import { ErrorPanel } from "@/components/ErrorPanel";
 import { useT } from "@/lib/i18n-context";
 import {
@@ -196,6 +197,8 @@ export default function LibraryTablePage() {
           }}
         />
       </div>
+
+      <BulkTableTools tableId={table.id} />
     </main>
   );
 }

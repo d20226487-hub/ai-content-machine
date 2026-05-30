@@ -1451,4 +1451,63 @@ export const en = {
   "genRun.statusDone": "Done",
   "genRun.statusCancelled": "Cancelled",
   "genRun.statusFailed": "Failed",
+
+  // ---------- content tools (under the bulk table) ----------
+  "tools.heading": "Content tools",
+  "tools.findReplace.title": "Find & replace",
+  "tools.findReplace.desc":
+    "Search or bulk-replace text across cells. Supports regex; replaces are revertable.",
+
+  // ---------- pagination ----------
+  "pager.showing": "Showing {from}–{to} of {total}",
+  "pager.prev": "Prev",
+  "pager.next": "Next",
+  "pager.pageOf": "Page {page} of {total}",
+
+  // ---------- find & replace ----------
+  "findReplace.backToTable": "← Back to table",
+  "findReplace.title": "Find & replace",
+  "findReplace.onTable": "On table “{name}”",
+  "findReplace.modeFind": "Find",
+  "findReplace.modeReplace": "Replace",
+  "findReplace.patternLabel": "Find",
+  "findReplace.patternPlaceholder": "Text to search for…",
+  "findReplace.replacementLabel": "Replace with",
+  "findReplace.replacementPlaceholder": "Replacement text…",
+  "findReplace.optRegex": "Regex",
+  "findReplace.optCase": "Case-sensitive",
+  "findReplace.optWholeCell": "Whole cell",
+  "findReplace.columnsLabel": "Columns to search",
+  "findReplace.allColumns": "All columns",
+  "findReplace.findBtn": "Find",
+  "findReplace.previewBtn": "Preview matches",
+  "findReplace.replaceBtn": "Replace all →",
+  "findReplace.confirmReplace":
+    "Replace every match of “{pattern}” with “{replacement}”? This is revertable.",
+  "findReplace.summary": "{matches} matches in {cells} cells",
+  "findReplace.colRow": "Row",
+  "findReplace.colColumn": "Column",
+  "findReplace.colValue": "Value",
+  "findReplace.colMatches": "Matches",
+  "findReplace.historyHeading": "Replace history",
+  "findReplace.historyCells": "{n} cells",
+  "findReplace.reverted": "reverted",
+
+  // ---------- replace run detail ----------
+  "replaceRun.backToTool": "← Find & replace",
+  "replaceRun.backToTable": "Back to table",
+  "replaceRun.title": "Replace run #{id}",
+  "replaceRun.meta": "{cells} cells · {matches} matches · by {by} · {when}",
+  "replaceRun.caseInsensitive": "case-insensitive",
+  "replaceRun.revert": "Revert this replace",
+  "replaceRun.revertedAt": "Reverted · {when}",
+  "replaceRun.confirmRevert":
+    "Restore every cell this replace changed to its previous value?",
+  "replaceRun.confirmRevertDrift":
+    "{n} cell(s) were edited after this replace. Reverting will discard those later changes too. Continue?",
+  "replaceRun.driftWarning":
+    "{n} cell(s) have been edited since this replace ran — reverting would discard those changes.",
+  "replaceRun.colBefore": "Before",
+  "replaceRun.colAfter": "After",
+  "replaceRun.editedSince": "edited since",
 } as const;

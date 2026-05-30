@@ -1514,4 +1514,63 @@ export const ru: Record<keyof typeof en, string> = {
   "genRun.statusDone": "Готово",
   "genRun.statusCancelled": "Отменено",
   "genRun.statusFailed": "Сбой",
+
+  // ---------- контент-инструменты (под таблицей) ----------
+  "tools.heading": "Инструменты контента",
+  "tools.findReplace.title": "Найти и заменить",
+  "tools.findReplace.desc":
+    "Поиск и массовая замена текста в ячейках. Поддержка regex; замены можно откатить.",
+
+  // ---------- пагинация ----------
+  "pager.showing": "Показано {from}–{to} из {total}",
+  "pager.prev": "Назад",
+  "pager.next": "Вперёд",
+  "pager.pageOf": "Страница {page} из {total}",
+
+  // ---------- найти и заменить ----------
+  "findReplace.backToTable": "← Назад к таблице",
+  "findReplace.title": "Найти и заменить",
+  "findReplace.onTable": "В таблице «{name}»",
+  "findReplace.modeFind": "Найти",
+  "findReplace.modeReplace": "Заменить",
+  "findReplace.patternLabel": "Найти",
+  "findReplace.patternPlaceholder": "Что искать…",
+  "findReplace.replacementLabel": "Заменить на",
+  "findReplace.replacementPlaceholder": "Текст замены…",
+  "findReplace.optRegex": "Regex",
+  "findReplace.optCase": "Учитывать регистр",
+  "findReplace.optWholeCell": "Вся ячейка",
+  "findReplace.columnsLabel": "Колонки для поиска",
+  "findReplace.allColumns": "Все колонки",
+  "findReplace.findBtn": "Найти",
+  "findReplace.previewBtn": "Показать совпадения",
+  "findReplace.replaceBtn": "Заменить всё →",
+  "findReplace.confirmReplace":
+    "Заменить все совпадения «{pattern}» на «{replacement}»? Замену можно откатить.",
+  "findReplace.summary": "{matches} совпадений в {cells} ячейках",
+  "findReplace.colRow": "Строка",
+  "findReplace.colColumn": "Колонка",
+  "findReplace.colValue": "Значение",
+  "findReplace.colMatches": "Совпадений",
+  "findReplace.historyHeading": "История замен",
+  "findReplace.historyCells": "{n} ячеек",
+  "findReplace.reverted": "откатано",
+
+  // ---------- детали запуска замены ----------
+  "replaceRun.backToTool": "← Найти и заменить",
+  "replaceRun.backToTable": "Назад к таблице",
+  "replaceRun.title": "Замена #{id}",
+  "replaceRun.meta": "{cells} ячеек · {matches} совпадений · {by} · {when}",
+  "replaceRun.caseInsensitive": "без учёта регистра",
+  "replaceRun.revert": "Откатить замену",
+  "replaceRun.revertedAt": "Откатано · {when}",
+  "replaceRun.confirmRevert":
+    "Вернуть все изменённые этой заменой ячейки к прежним значениям?",
+  "replaceRun.confirmRevertDrift":
+    "{n} ячеек были отредактированы после этой замены. Откат отменит и эти изменения. Продолжить?",
+  "replaceRun.driftWarning":
+    "{n} ячеек были изменены после этой замены — откат отменит и эти изменения.",
+  "replaceRun.colBefore": "Было",
+  "replaceRun.colAfter": "Стало",
+  "replaceRun.editedSince": "изменено позже",
 };

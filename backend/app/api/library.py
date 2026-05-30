@@ -30,6 +30,7 @@ from app.db.models import (
     BulkTableColumn,
     BulkTableFolder,
     BulkTableRow,
+    FindReplaceRun,
     User,
 )
 from app.db.session import get_db
@@ -42,11 +43,18 @@ from app.schemas.bulk import (
     ColumnRead,
     ColumnUpdate,
     CsvImportRequest,
+    FindReplaceRunDetail,
+    FindReplaceRunRead,
+    FindRequest,
+    FindResponse,
     FolderCreate,
     FolderRead,
     FolderUpdate,
     GenerateRequest,
     GenerateResponse,
+    MatchedCell,
+    ReplacedCell,
+    ReplaceRequest,
     RowRead,
     TableBulkMove,
     TableCreate,
@@ -55,6 +63,14 @@ from app.schemas.bulk import (
     TableRead,
     TableUpdate,
     TrashBulkIds,
+)
+from app.services.find_replace import (
+    InvalidPattern,
+    apply_replace,
+    compile_pattern,
+    count_matches,
+    drift_segments,
+    segment_diff,
 )
 from app.tasks.bulk_generation import generate_bulk_cell
 
@@ -1713,6 +1729,430 @@ async def cancel_gen_run(
         and run.finished_at is None
     ):
         run.finished_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(run)
+    return run
+
+
+# ---------- Find / replace (content tool) ----------
+
+
+async def _load_cells_with_meta(
+    db: AsyncSession, table_id: int, column_ids: list[int]
+) -> list[tuple[BulkTableCell, int, str]]:
+    """All non-empty cells of a table (optionally scoped to ``column_ids``),
+    each paired with its row position and column name. Ordered by
+    (row position, column position) so results read top-to-bottom like the
+    grid. Empty cells don't exist in ``bulk_table_cells`` so they're skipped
+    for free."""
+    q = (
+        select(BulkTableCell, BulkTableRow.position, BulkTableColumn.name)
+        .join(BulkTableRow, BulkTableRow.id == BulkTableCell.row_id)
+        .join(BulkTableColumn, BulkTableColumn.id == BulkTableCell.column_id)
+        .where(BulkTableRow.table_id == table_id)
+    )
+    if column_ids:
+        q = q.where(BulkTableCell.column_id.in_(column_ids))
+    q = q.order_by(BulkTableRow.position, BulkTableColumn.position)
+    rows = (await db.execute(q)).all()
+    return [(cell, pos, name) for cell, pos, name in rows]
+
+
+async def _get_replace_run_or_404(
+    db: AsyncSession, run_id: int
+) -> FindReplaceRun:
+    run = await db.get(FindReplaceRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Replace run not found")
+    return run
+
+
+@router.post("/tables/{table_id}/find", response_model=FindResponse)
+async def find_in_table(
+    table_id: int,
+    payload: FindRequest,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FindResponse:
+    """Read-only search. Returns the matching cells (paginated) plus total
+    occurrence + cell counts. Persists nothing."""
+    await _get_table_or_404(db, table_id, actor, level="read")
+    try:
+        compiled = compile_pattern(
+            payload.pattern,
+            is_regex=payload.is_regex,
+            case_sensitive=payload.case_sensitive,
+        )
+    except InvalidPattern as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    matched: list[tuple[BulkTableCell, int, str, int]] = []
+    total_matches = 0
+    for cell, row_pos, col_name in await _load_cells_with_meta(
+        db, table_id, payload.column_ids
+    ):
+        if not cell.value:
+            continue
+        n = count_matches(compiled, cell.value, whole_cell=payload.whole_cell)
+        if n > 0:
+            total_matches += n
+            matched.append((cell, row_pos, col_name, n))
+
+    start = (payload.page - 1) * payload.page_size
+    page = matched[start : start + payload.page_size]
+    return FindResponse(
+        total_matches=total_matches,
+        total_cells=len(matched),
+        page=payload.page,
+        page_size=payload.page_size,
+        items=[
+            MatchedCell(
+                row_id=c.row_id,
+                row_position=rp,
+                column_id=c.column_id,
+                column_name=cn,
+                value=c.value or "",
+                status=c.status,  # type: ignore[arg-type]
+                match_count=n,
+            )
+            for c, rp, cn, n in page
+        ],
+    )
+
+
+@router.post(
+    "/tables/{table_id}/replace",
+    response_model=FindReplaceRunRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def replace_in_table(
+    table_id: int,
+    payload: ReplaceRequest,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FindReplaceRun:
+    """Apply the replacement across EVERY matching cell at once and record a
+    revertable run with a full before/after snapshot. 400 when nothing
+    matched (no empty run is created)."""
+    await _get_table_or_404(db, table_id, actor, level="write")
+    try:
+        compiled = compile_pattern(
+            payload.pattern,
+            is_regex=payload.is_regex,
+            case_sensitive=payload.case_sensitive,
+        )
+    except InvalidPattern as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    snapshot: list[dict] = []
+    total_matches = 0
+    for cell, _row_pos, _col_name in await _load_cells_with_meta(
+        db, table_id, payload.column_ids
+    ):
+        if not cell.value:
+            continue
+        new_value, n = apply_replace(
+            compiled,
+            cell.value,
+            payload.replacement,
+            is_regex=payload.is_regex,
+            whole_cell=payload.whole_cell,
+        )
+        if n > 0 and new_value != cell.value:
+            snapshot.append(
+                {
+                    "row_id": cell.row_id,
+                    "column_id": cell.column_id,
+                    "old_value": cell.value,
+                    "old_status": cell.status,
+                    "new_value": new_value,
+                }
+            )
+            total_matches += n
+            # Preserve the cell's status (a targeted text fix isn't a
+            # regeneration) but drop any cached translation — it no longer
+            # matches the source, same invariant the upsert path enforces.
+            cell.value = new_value
+            if cell.translations is not None:
+                cell.translations = None
+
+    if not snapshot:
+        raise HTTPException(
+            status_code=400, detail="No matches found — nothing to replace."
+        )
+
+    run = FindReplaceRun(
+        table_id=table_id,
+        pattern=payload.pattern,
+        replacement=payload.replacement,
+        is_regex=payload.is_regex,
+        case_sensitive=payload.case_sensitive,
+        whole_cell=payload.whole_cell,
+        column_ids=list(payload.column_ids),
+        match_count=total_matches,
+        cell_count=len(snapshot),
+        status="applied",
+        snapshot=snapshot,
+        created_by_id=actor.id,
+    )
+    db.add(run)
+    await _bump_table_updated(db, table_id)
+    await db.commit()
+    await db.refresh(run)
+    return run
+
+
+@router.get(
+    "/tables/{table_id}/replace-runs",
+    response_model=list[FindReplaceRunRead],
+)
+async def list_replace_runs(
+    table_id: int,
+    limit: int = Query(default=100, ge=1, le=500),
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[FindReplaceRun]:
+    """Replace history for a table, newest first."""
+    await _get_table_or_404(db, table_id, actor, level="read")
+    runs = (
+        (
+            await db.execute(
+                select(FindReplaceRun)
+                .where(FindReplaceRun.table_id == table_id)
+                .order_by(FindReplaceRun.created_at.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return list(runs)
+
+
+@router.get("/replace-runs/{run_id}", response_model=FindReplaceRunDetail)
+async def get_replace_run(
+    run_id: int,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=500),
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FindReplaceRunDetail:
+    """Run metadata + the affected cells (paginated) with before/after and a
+    per-cell ``drifted`` flag (current value no longer matches what the
+    replace wrote). ``drifted_count`` is computed across the whole run."""
+    run = await _get_replace_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="read")
+
+    snap: list[dict] = run.snapshot or []
+    row_ids = {e["row_id"] for e in snap}
+    col_ids = {e["column_id"] for e in snap}
+
+    cur: dict[tuple[int, int], BulkTableCell] = {}
+    row_pos: dict[int, int] = {}
+    col_name: dict[int, str] = {}
+    if row_ids and col_ids:
+        cur_cells = (
+            (
+                await db.execute(
+                    select(BulkTableCell).where(
+                        BulkTableCell.row_id.in_(row_ids),
+                        BulkTableCell.column_id.in_(col_ids),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        cur = {(c.row_id, c.column_id): c for c in cur_cells}
+        row_pos = {
+            rid: pos
+            for rid, pos in (
+                await db.execute(
+                    select(BulkTableRow.id, BulkTableRow.position).where(
+                        BulkTableRow.id.in_(row_ids)
+                    )
+                )
+            ).all()
+        }
+        col_name = {
+            cid: name
+            for cid, name in (
+                await db.execute(
+                    select(BulkTableColumn.id, BulkTableColumn.name).where(
+                        BulkTableColumn.id.in_(col_ids)
+                    )
+                )
+            ).all()
+        }
+
+    drifted_count = 0
+    for e in snap:
+        c = cur.get((e["row_id"], e["column_id"]))
+        cur_val = c.value if c is not None else None
+        if cur_val != e["new_value"]:
+            drifted_count += 1
+
+    # Recompile the run's pattern once to recover per-cell match spans for
+    # the before/after highlight. If it somehow no longer compiles, fall
+    # back to whole-value segments (no highlight) rather than failing.
+    compiled = None
+    try:
+        compiled = compile_pattern(
+            run.pattern,
+            is_regex=run.is_regex,
+            case_sensitive=run.case_sensitive,
+        )
+    except InvalidPattern:
+        compiled = None
+
+    start = (page - 1) * page_size
+    page_snap = snap[start : start + page_size]
+    items: list[ReplacedCell] = []
+    for e in page_snap:
+        c = cur.get((e["row_id"], e["column_id"]))
+        cur_val = c.value if c is not None else None
+        cur_status = c.status if c is not None else "empty"
+        old_v = e["old_value"]
+        new_v = e["new_value"]
+        drifted = cur_val != new_v
+        # old side (struck matches) + the green "what the replace inserted"
+        # new side both come from the regex match spans.
+        if compiled is not None and old_v is not None:
+            old_segs, replace_new_segs = segment_diff(
+                compiled,
+                old_v,
+                run.replacement,
+                is_regex=run.is_regex,
+                whole_cell=run.whole_cell,
+            )
+        else:
+            old_segs = [{"text": old_v or "", "changed": False}]
+            replace_new_segs = [{"text": new_v or "", "changed": False}]
+
+        # When the cell was edited after the replace, the "after" column
+        # shows the LIVE value with the later edit highlighted (amber),
+        # diffed against what the replace wrote. Otherwise it shows the
+        # replace result with the inserted text highlighted (green).
+        if drifted:
+            new_segs = (
+                drift_segments(new_v or "", cur_val)
+                if cur_val is not None
+                else []
+            )
+        else:
+            new_segs = replace_new_segs
+        items.append(
+            ReplacedCell(
+                row_id=e["row_id"],
+                row_position=row_pos.get(e["row_id"], 0),
+                column_id=e["column_id"],
+                column_name=col_name.get(e["column_id"], "—"),
+                old_value=old_v,
+                new_value=new_v,
+                current_value=cur_val,
+                current_status=cur_status,  # type: ignore[arg-type]
+                drifted=drifted,
+                old_segments=old_segs,  # type: ignore[arg-type]
+                new_segments=new_segs,  # type: ignore[arg-type]
+            )
+        )
+
+    return FindReplaceRunDetail(
+        id=run.id,
+        table_id=run.table_id,
+        pattern=run.pattern,
+        replacement=run.replacement,
+        is_regex=run.is_regex,
+        case_sensitive=run.case_sensitive,
+        whole_cell=run.whole_cell,
+        column_ids=run.column_ids,
+        match_count=run.match_count,
+        cell_count=run.cell_count,
+        status=run.status,  # type: ignore[arg-type]
+        created_by_id=run.created_by_id,
+        created_at=run.created_at,
+        reverted_at=run.reverted_at,
+        created_by_name=await _resolve_creator_name(db, run.created_by_id),
+        page=page,
+        page_size=page_size,
+        total_cells=len(snap),
+        drifted_count=drifted_count,
+        items=items,
+    )
+
+
+@router.post("/replace-runs/{run_id}/revert", response_model=FindReplaceRunRead)
+async def revert_replace_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FindReplaceRun:
+    """Restore every cell this run changed to its pre-replace value. Writes
+    through the normal cell path (clears stale translations). Idempotent:
+    a no-op on an already-reverted run. Note this discards any edits made
+    to those cells after the replace — the run page surfaces a drift count
+    so the operator knows before clicking."""
+    run = await _get_replace_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+
+    if run.status == "reverted":
+        return run
+
+    # Valid (row, column) pairs that still belong to this table — so a
+    # deleted row/column doesn't get a resurrected orphan cell.
+    valid_rows = {
+        rid
+        for (rid,) in (
+            await db.execute(
+                select(BulkTableRow.id).where(
+                    BulkTableRow.table_id == run.table_id
+                )
+            )
+        ).all()
+    }
+    valid_cols = {
+        cid
+        for (cid,) in (
+            await db.execute(
+                select(BulkTableColumn.id).where(
+                    BulkTableColumn.table_id == run.table_id
+                )
+            )
+        ).all()
+    }
+
+    for e in run.snapshot or []:
+        rid, cid = e["row_id"], e["column_id"]
+        if rid not in valid_rows or cid not in valid_cols:
+            continue
+        cell = (
+            await db.execute(
+                select(BulkTableCell).where(
+                    BulkTableCell.row_id == rid,
+                    BulkTableCell.column_id == cid,
+                )
+            )
+        ).scalar_one_or_none()
+        old_value = e["old_value"]
+        old_status = e.get("old_status") or _default_status_for(old_value)
+        if cell is None:
+            db.add(
+                BulkTableCell(
+                    row_id=rid,
+                    column_id=cid,
+                    value=old_value,
+                    status=old_status,
+                )
+            )
+        else:
+            if cell.value != old_value and cell.translations is not None:
+                cell.translations = None
+            cell.value = old_value
+            cell.status = old_status
+
+    run.status = "reverted"
+    run.reverted_at = datetime.now(timezone.utc)
+    await _bump_table_updated(db, run.table_id)
     await db.commit()
     await db.refresh(run)
     return run
