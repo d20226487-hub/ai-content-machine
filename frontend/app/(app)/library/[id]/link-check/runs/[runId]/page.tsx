@@ -259,6 +259,12 @@ export default function LinkCheckRunPage({
   const filterActive =
     filterProblem !== "" || filterStatus !== "" || q.trim().length > 0;
 
+  // (row:col) cells already corrected by an applied fix run — their
+  // violations render struck-through.
+  const fixedSet = new Set(
+    (run?.fixed_cells ?? []).map((f) => `${f.row_id}:${f.column_id}`),
+  );
+
   return (
     <main className="mx-auto max-w-5xl px-5 py-6">
       <div className="mb-4 flex items-center gap-4">
@@ -404,61 +410,6 @@ export default function LinkCheckRunPage({
             </p>
           )}
 
-          {/* Correction runs launched from this check run */}
-          {fixRuns.length > 0 && (
-            <section className="mt-5">
-              <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
-                {t("linkFix.correctionsHeading")}
-              </h2>
-              <ul className="mt-2 divide-y divide-neutral-100 rounded-lg border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
-                {fixRuns.map((fr) => (
-                  <li key={fr.id}>
-                    <Link
-                      href={`/library/${tableId}/link-fix/runs/${fr.id}`}
-                      className="flex items-center justify-between gap-3 px-3 py-2 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-900"
-                    >
-                      <span className="min-w-0 truncate text-neutral-700 dark:text-neutral-300">
-                        {fr.name || t("linkFix.runLabel", { id: fr.id })}
-                        <span className="ml-2 text-xs text-neutral-400">
-                          {new Date(fr.created_at).toLocaleString()}
-                        </span>
-                      </span>
-                      <span className="flex shrink-0 items-center gap-2 text-xs">
-                        {fr.reverted_at && (
-                          <span className="text-amber-600 dark:text-amber-400">
-                            {t("linkFixRun.revertedBadge")}
-                          </span>
-                        )}
-                        <span className="text-neutral-500 dark:text-neutral-400">
-                          {fr.done}/{fr.total}
-                        </span>
-                        <LinkCheckStatusChip status={fr.status} />
-                        <RunRowActions
-                          name={fr.name}
-                          canDelete={
-                            fr.status !== "queued" && fr.status !== "running"
-                          }
-                          onRename={async (n) => {
-                            await renameLinkFixRun(fr.id, n);
-                            setFixRuns(
-                              await listLinkFixRuns(tableId, { sourceRunId: rid }),
-                            );
-                          }}
-                          onDelete={async () => {
-                            await deleteLinkFixRun(fr.id);
-                            setFixRuns(
-                              await listLinkFixRuns(tableId, { sourceRunId: rid }),
-                            );
-                          }}
-                        />
-                      </span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-
           {/* filter bar — shown once the run produced any rows */}
           {!isActive && producedRows(run) && (
             <div className="mt-5 flex flex-wrap items-center gap-2">
@@ -536,14 +487,21 @@ export default function LinkCheckRunPage({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
-                    {run.items.map((v, i) => (
+                    {run.items.map((v, i) => {
+                      const solved = fixedSet.has(`${v.row_id}:${v.column_id}`);
+                      return (
                       <tr
                         key={`${v.row_id}:${v.column_id}:${v.problem}:${i}`}
-                        className="align-top hover:bg-neutral-50 dark:hover:bg-neutral-900"
+                        className={
+                          "align-top hover:bg-neutral-50 dark:hover:bg-neutral-900 " +
+                          (solved
+                            ? "opacity-50 [&_td]:line-through [&_td_button]:no-underline"
+                            : "")
+                        }
                       >
                         {canFix && (
-                          <td className="px-3 py-2">
-                            {v.problem !== "ok" && (
+                          <td className="px-3 py-2 [&]:no-underline">
+                            {v.problem !== "ok" && !solved && (
                               <input
                                 type="checkbox"
                                 checked={selectedRows.has(v.row_id)}
@@ -561,7 +519,17 @@ export default function LinkCheckRunPage({
                           {v.column_name}
                         </td>
                         <td className="px-3 py-2">
-                          <ProblemBadge problem={v.problem} />
+                          <span className="inline-flex items-center gap-1.5">
+                            <ProblemBadge problem={v.problem} />
+                            {solved && (
+                              <span
+                                className="text-green-600 no-underline dark:text-green-400"
+                                title={t("linkFix.fixedBadge")}
+                              >
+                                ✓
+                              </span>
+                            )}
+                          </span>
                         </td>
                         <td className="max-w-xs px-3 py-2">
                           <a
@@ -585,7 +553,8 @@ export default function LinkCheckRunPage({
                           </button>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -596,6 +565,62 @@ export default function LinkCheckRunPage({
                 onPage={setPage}
               />
             </>
+          )}
+
+          {/* Correction runs launched from this check run (kept at the
+              bottom, below the violations). */}
+          {fixRuns.length > 0 && (
+            <section className="mt-8">
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                {t("linkFix.correctionsHeading")}
+              </h2>
+              <ul className="mt-2 divide-y divide-neutral-100 rounded-lg border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
+                {fixRuns.map((fr) => (
+                  <li key={fr.id}>
+                    <Link
+                      href={`/library/${tableId}/link-fix/runs/${fr.id}`}
+                      className="flex items-center justify-between gap-3 px-3 py-2 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-900"
+                    >
+                      <span className="min-w-0 truncate text-neutral-700 dark:text-neutral-300">
+                        {fr.name || t("linkFix.runLabel", { id: fr.id })}
+                        <span className="ml-2 text-xs text-neutral-400">
+                          {new Date(fr.created_at).toLocaleString()}
+                        </span>
+                      </span>
+                      <span className="flex shrink-0 items-center gap-2 text-xs">
+                        {fr.reverted_at && (
+                          <span className="text-amber-600 dark:text-amber-400">
+                            {t("linkFixRun.revertedBadge")}
+                          </span>
+                        )}
+                        <span className="text-neutral-500 dark:text-neutral-400">
+                          {fr.done}/{fr.total}
+                        </span>
+                        <LinkCheckStatusChip status={fr.status} />
+                        <RunRowActions
+                          name={fr.name}
+                          canDelete={
+                            fr.status !== "queued" && fr.status !== "running"
+                          }
+                          onRename={async (n) => {
+                            await renameLinkFixRun(fr.id, n);
+                            setFixRuns(
+                              await listLinkFixRuns(tableId, { sourceRunId: rid }),
+                            );
+                          }}
+                          onDelete={async () => {
+                            await deleteLinkFixRun(fr.id);
+                            setFixRuns(
+                              await listLinkFixRuns(tableId, { sourceRunId: rid }),
+                            );
+                          }}
+                        />
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </section>
           )}
         </>
       )}

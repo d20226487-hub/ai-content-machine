@@ -1605,6 +1605,7 @@ export const en = {
     "This replaces the original content in place. Consider a new column to keep the original.",
   "linkFix.startFix": "Start fix",
   "linkFix.correctionsHeading": "AI corrections from this run",
+  "linkFix.fixedBadge": "Fixed by an AI correction",
   "linkFix.runLabel": "Fix #{id}",
   "linkFixRun.revertedBadge": "reverted",
   // Shared run rename/delete actions

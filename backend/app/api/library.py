@@ -2635,6 +2635,22 @@ async def get_link_check_run(
         .all()
     )
 
+    # Cells corrected by an applied (non-reverted) AI-fix run launched from
+    # this check — the UI strikes their violations through.
+    fixed_rows = (
+        await db.execute(
+            select(LinkFixCell.row_id, LinkFixCell.column_id)
+            .join(LinkFixRun, LinkFixRun.id == LinkFixCell.run_id)
+            .where(
+                LinkFixRun.source_run_id == run_id,
+                LinkFixRun.reverted_at.is_(None),
+                LinkFixCell.state == "done",
+            )
+            .distinct()
+        )
+    ).all()
+    fixed_cells = [{"row_id": r, "column_id": c} for r, c in fixed_rows]
+
     return LinkCheckRunDetail(
         id=run.id,
         table_id=run.table_id,
@@ -2661,6 +2677,7 @@ async def get_link_check_run(
         page_size=page_size,
         total_violations=total,
         status_codes_present=list(codes),
+        fixed_cells=fixed_cells,
         items=[LinkViolationRead.model_validate(v) for v in rows],
     )
 

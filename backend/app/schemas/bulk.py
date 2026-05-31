@@ -532,6 +532,14 @@ class LinkViolationRead(BaseModel):
     status_code: int | None = None
 
 
+class FixedCellRef(BaseModel):
+    """A (row, column) cell that an applied AI-fix run corrected. Used to
+    strike through the corresponding violations on the check-run page."""
+
+    row_id: int
+    column_id: int
+
+
 class LinkCheckRunDetail(LinkCheckRunRead):
     created_by_name: str | None = None
     page: int
@@ -540,6 +548,9 @@ class LinkCheckRunDetail(LinkCheckRunRead):
     # Distinct HTTP codes present across the run's violations (unfiltered) —
     # populates the status-code filter dropdown.
     status_codes_present: list[int]
+    # (row, column) cells fixed by an applied (non-reverted) correction run
+    # launched from this check — their violations render struck-through.
+    fixed_cells: list[FixedCellRef] = []
     items: list[LinkViolationRead]
 
 

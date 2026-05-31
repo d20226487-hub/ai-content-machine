@@ -1668,6 +1668,7 @@ export const ru: Record<keyof typeof en, string> = {
     "Это заменит исходный контент на месте. Лучше выберите новую колонку, чтобы сохранить оригинал.",
   "linkFix.startFix": "Запустить исправление",
   "linkFix.correctionsHeading": "ИИ-исправления из этого запуска",
+  "linkFix.fixedBadge": "Исправлено ИИ",
   "linkFix.runLabel": "Исправление #{id}",
   "linkFixRun.revertedBadge": "откачено",
   // Общие действия переименования/удаления запусков

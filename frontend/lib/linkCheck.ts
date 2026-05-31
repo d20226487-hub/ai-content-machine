@@ -55,12 +55,19 @@ export interface LinkViolation {
   status_code: number | null;
 }
 
+export interface FixedCellRef {
+  row_id: number;
+  column_id: number;
+}
+
 export interface LinkCheckRunDetail extends LinkCheckRun {
   created_by_name: string | null;
   page: number;
   page_size: number;
   total_violations: number;
   status_codes_present: number[];
+  /** (row, column) cells corrected by an applied fix run — struck through. */
+  fixed_cells: FixedCellRef[];
   items: LinkViolation[];
 }
 
