@@ -13,10 +13,10 @@ import { useT, type TranslationKey } from "@/lib/i18n-context";
 import {
   addColumn as apiAddColumn,
   addRow as apiAddRow,
+  clearValues,
   deleteColumn as apiDeleteColumn,
   deleteRow as apiDeleteRow,
   enqueueGeneration,
-  getTable,
   updateColumn as apiUpdateColumn,
   upsertCells,
 } from "@/lib/library";
@@ -29,17 +29,30 @@ import type {
 } from "@/lib/types";
 
 interface Props {
+  /** The CURRENT page's data (rows + their cells). Columns are always full. */
   table: BulkTable;
+  /** Total rows in the whole table (not just this page). */
+  totalRowCount: number;
+  /** 0-based current page index (owned by the page component). */
+  pageIndex: number;
+  pageSize: PageSize;
+  /** True while a page fetch is in flight (shows the overlay). */
+  loading: boolean;
   onTableChange: (next: BulkTable) => void;
+  /** Ask the parent to fetch a different page (always refetches). */
+  onPageChange: (index: number) => void;
+  onPageSizeChange: (size: PageSize) => void;
+  /** Refetch the current page. `silent` skips the loading overlay. */
+  reloadPage: (opts?: { silent?: boolean }) => Promise<void>;
   onSavingChange: (saving: boolean, lastSavedAt: number | null) => void;
 }
 
 const AUTOSAVE_DEBOUNCE_MS = 600;
 const POLL_INTERVAL_MS = 1500;
-const PAGE_SIZE_OPTIONS = [5, 10, 20, 50, 100, 200, 500, 1000] as const;
-type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
-const DEFAULT_PAGE_SIZE: PageSize = 5;
-const PAGE_SIZE_STORAGE_KEY = "acm_bulk_page_size";
+export const PAGE_SIZE_OPTIONS = [5, 10, 20, 50, 100, 200, 500, 1000] as const;
+export type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
+export const DEFAULT_PAGE_SIZE: PageSize = 5;
+export const PAGE_SIZE_STORAGE_KEY = "acm_bulk_page_size";
 
 const DEFAULT_COL_WIDTH = 200;
 const MIN_COL_WIDTH = 80;
@@ -47,7 +60,7 @@ const ROW_NUM_WIDTH = 40;
 const CHECKBOX_WIDTH = 32;
 const ADD_COL_WIDTH = 48;
 
-function readPageSize(): PageSize {
+export function readPageSize(): PageSize {
   if (typeof window === "undefined") return DEFAULT_PAGE_SIZE;
   const v = Number(window.localStorage.getItem(PAGE_SIZE_STORAGE_KEY));
   return (PAGE_SIZE_OPTIONS as readonly number[]).includes(v)
@@ -98,7 +111,18 @@ function writeColWidths(tableId: number, widths: Record<number, number>): void {
   window.localStorage.setItem(colWidthsKey(tableId), JSON.stringify(widths));
 }
 
-export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
+export function BulkTableGrid({
+  table,
+  totalRowCount,
+  pageIndex,
+  pageSize,
+  loading,
+  onTableChange,
+  onPageChange,
+  onPageSizeChange,
+  reloadPage,
+  onSavingChange,
+}: Props) {
   const { t } = useT();
   // Keep cells indexed by "rowId:columnId" for O(1) lookup
   const cellMap = useMemo(() => {
@@ -143,6 +167,8 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
   onTableChangeRef.current = onTableChange;
   const onSavingChangeRef = useRef(onSavingChange);
   onSavingChangeRef.current = onSavingChange;
+  const reloadPageRef = useRef(reloadPage);
+  reloadPageRef.current = reloadPage;
 
   // Modal: viewing a cell's content (HTML viewer)
   const [viewing, setViewing] = useState<{
@@ -201,14 +227,20 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
     }
   }
 
-  // ---- Pagination ----
-  const [pageSize, setPageSize] = useState<PageSize>(DEFAULT_PAGE_SIZE);
-  const [pageIndex, setPageIndex] = useState(0);
+  // Pagination is owned by the page component (server-side paging). When the
+  // user wants to switch pages we flush any pending edits first so nothing
+  // typed on the outgoing page is lost.
+  const [allRowsSelected, setAllRowsSelected] = useState(false);
 
-  // Hydrate page size from localStorage on mount
-  useEffect(() => {
-    setPageSize(readPageSize());
-  }, []);
+  async function goToPage(index: number): Promise<void> {
+    await flushPending();
+    onPageChange(index);
+  }
+
+  async function changePageSize(size: PageSize): Promise<void> {
+    await flushPending();
+    onPageSizeChange(size);
+  }
 
   // ---- Column widths (per-table, persisted in localStorage) ----
   const [colWidths, setColWidths] = useState<Record<number, number>>({});
@@ -274,25 +306,15 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
     resizeCleanupRef.current = cleanup;
   }
 
-  function changePageSize(size: PageSize) {
-    setPageSize(size);
-    setPageIndex(0);
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(size));
-    }
-  }
-
-  const totalRows = table.rows.length;
+  // Rows for the current page come straight from the server — no client
+  // slicing. `pageStart` is still derived so the row "#" numbers and the
+  // "Showing X–Y of Z" footer reflect absolute positions.
+  const totalRows = totalRowCount;
   const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
-  // Clamp pageIndex if rows were deleted out from under us
   const safePageIndex = Math.min(pageIndex, totalPages - 1);
   const pageStart = safePageIndex * pageSize;
   const pageEnd = pageStart + pageSize;
-  const visibleRows = table.rows.slice(pageStart, pageEnd);
-  const visibleRowIdSet = useMemo(
-    () => new Set(visibleRows.map((r) => r.id)),
-    [visibleRows],
-  );
+  const visibleRows = table.rows;
 
   // ---- Polling: while ANY cell is 'generating', re-fetch the whole table.
   const generatingCount = useMemo(
@@ -305,8 +327,9 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
     let cancelled = false;
     const tick = async () => {
       try {
-        const fresh = await getTable(tableRef.current.id);
-        if (!cancelled) onTableChangeRef.current(fresh);
+        // Silently refetch the current page so 'generating' cells flip to
+        // their final status without flashing the loading overlay.
+        if (!cancelled) await reloadPageRef.current({ silent: true });
       } catch (err) {
         console.error("[Bulk] poll failed", err);
       }
@@ -468,31 +491,29 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
   }
 
   // ---- Clear values for selected rows ----
+  // Server-side now: a selection can span pages (select-all-N), so the
+  // browser no longer holds every cell to build the write batch. The
+  // clear-values endpoint wipes them in one UPDATE.
   async function clearSelectedRowValues(): Promise<void> {
-    if (selectedRowIds.size === 0) return;
-    const rowIds = Array.from(selectedRowIds);
-    if (!window.confirm(t("bulkGrid.confirmClearValues", { count: rowIds.length })))
-      return;
-    // Cancel any pending typing on those rows so they don't immediately re-save.
+    const count = allRowsSelected ? totalRows : selectedRowIds.size;
+    if (count === 0) return;
+    if (!window.confirm(t("bulkGrid.confirmClearValues", { count }))) return;
+    // Cancel any pending typing on the affected rows so they don't re-save.
     for (const key of Array.from(pendingRef.current.keys())) {
       const [r] = key.split(":");
-      if (rowIds.includes(Number(r))) pendingRef.current.delete(key);
+      if (allRowsSelected || selectedRowIds.has(Number(r))) {
+        pendingRef.current.delete(key);
+      }
     }
-    // Build a write batch: every existing cell in those rows -> value=null, status=empty.
-    const writes = table.cells
-      .filter((c) => rowIds.includes(c.row_id))
-      .map((c) => ({
-        row_id: c.row_id,
-        column_id: c.column_id,
-        value: null,
-        status: "empty" as const,
-      }));
-    if (writes.length === 0) return;
     onSavingChangeRef.current(true, null);
     try {
-      await upsertCells(table.id, writes);
-      const fresh = await getTable(table.id);
-      onTableChangeRef.current(fresh);
+      await clearValues(
+        table.id,
+        allRowsSelected
+          ? { all: true }
+          : { row_ids: Array.from(selectedRowIds) },
+      );
+      await reloadPage();
       onSavingChangeRef.current(false, Date.now());
     } catch (err) {
       console.error("[Bulk] clear values failed", err);
@@ -502,16 +523,19 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
   }
 
   async function onQueueEnqueued(_message: string): Promise<void> {
-    // Re-fetch to flip cells to 'generating'; polling will take it from there.
+    // Re-fetch the current page to flip cells to 'generating'; polling will
+    // take it from there.
     try {
-      const fresh = await getTable(table.id);
-      onTableChangeRef.current(fresh);
+      await reloadPage({ silent: true });
     } catch (err) {
       console.error("[Bulk] post-enqueue refresh failed", err);
     }
   }
 
   function selectionToggle(rowId: number) {
+    // An explicit per-row toggle exits "all rows" mode — from here the
+    // selection is whatever IDs are actually enumerated.
+    setAllRowsSelected(false);
     setSelectedRowIds((cur) => {
       const next = new Set(cur);
       if (next.has(rowId)) next.delete(rowId);
@@ -529,6 +553,7 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
   }
 
   function selectionClearPage() {
+    setAllRowsSelected(false);
     setSelectedRowIds((cur) => {
       const next = new Set(cur);
       for (const r of visibleRows) next.delete(r.id);
@@ -536,16 +561,27 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
     });
   }
 
+  // "Select all N" can't enumerate row IDs across pages (we only hold the
+  // current page), so it sets a flag the cross-page operations honor as
+  // "every row". The current page's IDs are still tracked so the checkboxes
+  // render checked.
   function selectionAllInTable() {
-    setSelectedRowIds(new Set(table.rows.map((r) => r.id)));
+    setAllRowsSelected(true);
+    setSelectedRowIds(new Set(visibleRows.map((r) => r.id)));
   }
 
   function selectionClear() {
+    setAllRowsSelected(false);
     setSelectedRowIds(new Set());
   }
 
+  // Effective selected count: total when "all rows" is on, else the
+  // enumerated set. Drives the toolbar labels + footer.
+  const selectedCount = allRowsSelected ? totalRows : selectedRowIds.size;
+
   const allOnPageSelected =
-    visibleRows.length > 0 && visibleRows.every((r) => selectedRowIds.has(r.id));
+    visibleRows.length > 0 &&
+    (allRowsSelected || visibleRows.every((r) => selectedRowIds.has(r.id)));
 
   const outputColsWithPrompt = table.columns.filter(
     (c) => c.kind === "output" && c.prompt_id != null,
@@ -596,12 +632,13 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
 
   async function onAddRow() {
     try {
-      const row = await apiAddRow(table.id);
-      const nextRows = [...table.rows, row];
-      onTableChange({ ...table, rows: nextRows });
-      // Jump to whatever page the new row lands on so the user actually sees it.
-      const newPage = Math.floor((nextRows.length - 1) / pageSize);
-      setPageIndex(newPage);
+      await apiAddRow(table.id);
+      // The new row is appended at the end. Its ordinal index == old total,
+      // so its page is floor(total / pageSize). Navigating there refetches
+      // and shows it (and refreshes total_row_count).
+      const newPage = Math.floor(totalRows / pageSize);
+      await flushPending();
+      onPageChange(newPage);
     } catch (err) {
       console.error("[Bulk] add row failed", err);
     }
@@ -611,11 +648,8 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
     if (!window.confirm(t("bulkGrid.confirmDeleteRow"))) return;
     try {
       await apiDeleteRow(table.id, row.id);
-      onTableChange({
-        ...table,
-        rows: table.rows.filter((r) => r.id !== row.id),
-        cells: table.cells.filter((c) => c.row_id !== row.id),
-      });
+      // Refetch the page — total shrank and later rows shift up a slot.
+      await reloadPage();
     } catch (err) {
       console.error("[Bulk] delete row failed", err);
     }
@@ -626,15 +660,14 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
     setViewing({ row, column: col, cell });
   }
 
-  // Refresh the table when a generation run finishes so the cell
-  // statuses ('generated' / 'failed') paint in without a manual
-  // reload. Re-fetches via getTable rather than mutating state in
-  // place — the workers update cells server-side and the local
-  // pendingRef / autosave state has nothing to merge.
+  // Refresh the current page when a generation run finishes so the cell
+  // statuses ('generated' / 'failed') paint in without a manual reload.
+  // Re-fetches the page rather than mutating state in place — the workers
+  // update cells server-side and the local pendingRef / autosave state has
+  // nothing to merge.
   const refreshOnRunFinish = useCallback(async () => {
     try {
-      const fresh = await getTable(tableRef.current.id);
-      onTableChangeRef.current(fresh);
+      await reloadPageRef.current({ silent: true });
     } catch {
       // Best-effort; if the refresh fails the next manual interaction
       // will catch up.
@@ -653,12 +686,12 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
       {/* Generation toolbar */}
       <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-neutral-200 bg-white px-3 py-2 text-xs dark:border-neutral-800 dark:bg-neutral-900">
         <span className="text-neutral-500 dark:text-neutral-400">
-          {selectedRowIds.size > 0
-            ? t("bulkGrid.toolbarSelected", { count: selectedRowIds.size })
+          {selectedCount > 0
+            ? t("bulkGrid.toolbarSelected", { count: selectedCount })
             : t("bulkGrid.toolbarClickGenerate")}
         </span>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          {selectedRowIds.size > 0 && (
+          {selectedCount > 0 && (
             <>
               <button
                 type="button"
@@ -683,8 +716,8 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
             className="rounded-md border border-neutral-300 px-3 py-1 font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
             title={t("bulkGrid.publishHint")}
           >
-            {selectedRowIds.size > 0
-              ? t("bulkGrid.publishLabelSelected", { count: selectedRowIds.size })
+            {selectedCount > 0
+              ? t("bulkGrid.publishLabelSelected", { count: selectedCount })
               : t("bulkGrid.publishLabel")}
           </button>
           <button
@@ -698,14 +731,21 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
                 : t("bulkGrid.generateOpenHint")
             }
           >
-            {selectedRowIds.size > 0
-              ? t("bulkGrid.generateLabelSelected", { count: selectedRowIds.size })
+            {selectedCount > 0
+              ? t("bulkGrid.generateLabelSelected", { count: selectedCount })
               : t("bulkGrid.generateLabel")}
           </button>
         </div>
       </div>
 
-      <div className="overflow-auto rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
+      <div className="relative overflow-auto rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
+        {loading && (
+          <div className="pointer-events-none absolute inset-0 z-30 flex items-start justify-center bg-white/50 pt-10 dark:bg-neutral-900/50">
+            <span className="rounded-md bg-neutral-900/80 px-3 py-1 text-xs font-medium text-white dark:bg-neutral-100/80 dark:text-neutral-900">
+              {t("common.loading")}
+            </span>
+          </div>
+        )}
         <table
           className="border-separate border-spacing-0 text-sm"
           style={{ tableLayout: "fixed" }}
@@ -960,11 +1000,11 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
                   total: totalRows,
                 })}
           </span>
-          {selectedRowIds.size > 0 && (
+          {selectedCount > 0 && (
             <>
               <span aria-hidden>·</span>
-              <span>{t("bulkGrid.selectedSuffix", { count: selectedRowIds.size })}</span>
-              {selectedRowIds.size < totalRows && (
+              <span>{t("bulkGrid.selectedSuffix", { count: selectedCount })}</span>
+              {!allRowsSelected && selectedCount < totalRows && (
                 <button
                   type="button"
                   onClick={selectionAllInTable}
@@ -997,7 +1037,7 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
             <span className="text-neutral-500 dark:text-neutral-400">{t("bulkGrid.rowsPerPage")}</span>
             <select
               value={pageSize}
-              onChange={(e) => changePageSize(Number(e.target.value) as PageSize)}
+              onChange={(e) => void changePageSize(Number(e.target.value) as PageSize)}
               className="rounded-md border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900"
             >
               {PAGE_SIZE_OPTIONS.map((n) => (
@@ -1011,8 +1051,8 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
           <div className="flex items-center gap-1">
             <button
               type="button"
-              onClick={() => setPageIndex(0)}
-              disabled={safePageIndex === 0}
+              onClick={() => void goToPage(0)}
+              disabled={safePageIndex === 0 || loading}
               className="rounded border border-neutral-300 px-2 py-0.5 disabled:opacity-30 dark:border-neutral-700"
               title={t("bulkGrid.firstPage")}
             >
@@ -1020,8 +1060,8 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
             </button>
             <button
               type="button"
-              onClick={() => setPageIndex((i) => Math.max(0, i - 1))}
-              disabled={safePageIndex === 0}
+              onClick={() => void goToPage(Math.max(0, safePageIndex - 1))}
+              disabled={safePageIndex === 0 || loading}
               className="rounded border border-neutral-300 px-2 py-0.5 disabled:opacity-30 dark:border-neutral-700"
               title={t("bulkGrid.previousPage")}
             >
@@ -1032,8 +1072,8 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
             </span>
             <button
               type="button"
-              onClick={() => setPageIndex((i) => Math.min(totalPages - 1, i + 1))}
-              disabled={safePageIndex >= totalPages - 1}
+              onClick={() => void goToPage(Math.min(totalPages - 1, safePageIndex + 1))}
+              disabled={safePageIndex >= totalPages - 1 || loading}
               className="rounded border border-neutral-300 px-2 py-0.5 disabled:opacity-30 dark:border-neutral-700"
               title={t("bulkGrid.nextPage")}
             >
@@ -1041,8 +1081,8 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
             </button>
             <button
               type="button"
-              onClick={() => setPageIndex(totalPages - 1)}
-              disabled={safePageIndex >= totalPages - 1}
+              onClick={() => void goToPage(totalPages - 1)}
+              disabled={safePageIndex >= totalPages - 1 || loading}
               className="rounded border border-neutral-300 px-2 py-0.5 disabled:opacity-30 dark:border-neutral-700"
               title={t("bulkGrid.lastPage")}
             >
@@ -1055,7 +1095,8 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
       {viewing && (
         <CellEditorModal
           title={`${viewing.column.name} · ${t("colCfg.rowHash", {
-            n: table.rows.findIndex((r) => r.id === viewing.row.id) + 1,
+            // Absolute row number = page offset + position within this page.
+            n: pageStart + table.rows.findIndex((r) => r.id === viewing.row.id) + 1,
           })}`}
           initialValue={getCellValue(viewing.row.id, viewing.column.id)}
           // Output columns land in preview by default — the user
@@ -1140,6 +1181,8 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
       {publishOpen && (
         <BulkPublishModal
           table={table}
+          totalRowCount={totalRows}
+          allRowsSelected={allRowsSelected}
           selectedRowIds={Array.from(selectedRowIds)}
           onClose={() => setPublishOpen(false)}
         />
@@ -1148,6 +1191,8 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
       {queueOpen && (
         <GenerationQueueModal
           table={table}
+          totalRowCount={totalRows}
+          allRowsSelected={allRowsSelected}
           preselectedRowIds={Array.from(selectedRowIds)}
           onClose={() => setQueueOpen(false)}
           onEnqueued={(msg) => void onQueueEnqueued(msg)}
@@ -1174,8 +1219,7 @@ export function BulkTableGrid({ table, onTableChange, onSavingChange }: Props) {
                     column_ids: [cell.column_id],
                     mode: "all",
                   });
-                  const fresh = await getTable(table.id);
-                  onTableChangeRef.current(fresh);
+                  await reloadPage({ silent: true });
                 } catch (err) {
                   console.error("[Bulk] retry cell failed", err);
                   alert(t("bulkGrid.retryFailed"));

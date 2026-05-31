@@ -139,6 +139,11 @@ class TableRead(BaseModel):
     columns: list[ColumnRead] = []
     rows: list[RowRead] = []
     cells: list[CellRead] = []
+    # Total rows in the table regardless of pagination. When the fetch is
+    # paginated, `rows`/`cells` hold only the requested page while this
+    # reflects the whole table (footer + selection math). On a full
+    # (unpaginated) fetch it equals len(rows).
+    total_row_count: int = 0
 
 
 class TrashBulkIds(BaseModel):
@@ -211,6 +216,15 @@ class CsvImportRequest(BaseModel):
 
 # ----- Generation -----
 
+class RowRange(BaseModel):
+    """A 1-based, inclusive ordinal row range (the visible '#' numbers in the
+    grid, i.e. ordinal positions in the position-ordered row list — NOT the
+    raw `position` values, which may be sparse)."""
+
+    start: int = Field(ge=1)
+    end: int = Field(ge=1)
+
+
 class GenerateRequest(BaseModel):
     """Enqueue generation for a set of (row, column) cells.
 
@@ -226,6 +240,10 @@ class GenerateRequest(BaseModel):
     """
 
     row_ids: list[int] | None = None
+    # 1-based ordinal range (alternative to row_ids). When set, targets the
+    # rows at those ordinal positions in the position-ordered list. Ignored
+    # when row_ids is provided.
+    row_range: RowRange | None = None
     column_ids: list[int] | None = None
     mode: Literal["empty", "failed", "all"] = "empty"
     # Deprecated alias kept for back-compat. Prefer `mode`.
@@ -238,6 +256,43 @@ class GenerateRequest(BaseModel):
     # columns. Both must be set together; setting only one is a 400.
     override_provider_code: str | None = None
     override_model: str | None = None
+
+
+class GeneratePreviewResponse(BaseModel):
+    """Dry-run of a GenerateRequest: how many cells WOULD be enqueued vs
+    skipped, using the exact same resolver as the enqueue endpoint."""
+
+    will_generate: int
+    skipped: int
+
+
+class ClearValuesRequest(BaseModel):
+    """Server-side bulk clear of cell values. Either pass explicit
+    ``row_ids`` (clears those rows) or ``all=True`` (clears every row in the
+    table). ``all`` wins if both are set. Used by the grid's 'Clear values'
+    when the selection spans pages (select-all-N)."""
+
+    row_ids: list[int] | None = None
+    all: bool = False
+
+
+class ClearValuesResponse(BaseModel):
+    cleared: int
+
+
+class ColumnValueRow(BaseModel):
+    id: int
+    position: int
+
+
+class ColumnValuesResponse(BaseModel):
+    """Lightweight per-column values for the publish modal previews. Returns
+    the full ordered row list (ids + ordinal positions) plus the values of
+    ONLY the requested columns — never the heavy output cells."""
+
+    rows: list[ColumnValueRow]
+    # row_id -> { column_id -> value }
+    values: dict[int, dict[int, str]]
 
 
 class GenerateResponse(BaseModel):

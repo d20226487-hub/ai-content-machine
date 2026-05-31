@@ -44,8 +44,20 @@ export function listTables(opts: ListTablesOpts = {}): Promise<TableListResponse
   return api<TableListResponse>(`/library/tables${qs ? "?" + qs : ""}`);
 }
 
-export function getTable(id: number): Promise<BulkTable> {
-  return api<BulkTable>(`/library/tables/${id}`);
+export interface GetTableOpts {
+  /** 1-based page index. Omit (with page_size) for the full table. */
+  page?: number;
+  page_size?: number;
+}
+
+export function getTable(id: number, opts: GetTableOpts = {}): Promise<BulkTable> {
+  const sp = new URLSearchParams();
+  if (opts.page != null && opts.page_size != null) {
+    sp.set("page", String(opts.page));
+    sp.set("page_size", String(opts.page_size));
+  }
+  const qs = sp.toString();
+  return api<BulkTable>(`/library/tables/${id}${qs ? "?" + qs : ""}`);
 }
 
 export function createTable(p: CreateTablePayload): Promise<BulkTable> {
@@ -272,8 +284,16 @@ export function upsertCells(
 
 export type GenerateMode = "empty" | "failed" | "all";
 
+export interface RowRange {
+  /** 1-based inclusive ordinal positions (the grid's visible "#" numbers). */
+  start: number;
+  end: number;
+}
+
 export interface GenerateRequestPayload {
   row_ids?: number[];
+  /** Alternative to row_ids: target an ordinal range. Ignored if row_ids set. */
+  row_range?: RowRange;
   column_ids?: number[];
   mode?: GenerateMode;
   /** @deprecated use `mode: 'all'` */
@@ -301,6 +321,54 @@ export function enqueueGeneration(
     method: "POST",
     body: payload,
   });
+}
+
+export interface GeneratePreviewResponse {
+  will_generate: number;
+  skipped: number;
+}
+
+/** Dry-run a generation request: how many cells WOULD be enqueued vs skipped.
+ *  Uses the same server-side resolver as enqueueGeneration. */
+export function generatePreview(
+  tableId: number,
+  payload: GenerateRequestPayload = {},
+): Promise<GeneratePreviewResponse> {
+  return api<GeneratePreviewResponse>(
+    `/library/tables/${tableId}/generate-preview`,
+    { method: "POST", body: payload },
+  );
+}
+
+/** Server-side bulk clear of cell values. Pass {all:true} to clear every
+ *  row, or {row_ids} for specific rows. */
+export function clearValues(
+  tableId: number,
+  payload: { row_ids?: number[]; all?: boolean },
+): Promise<{ cleared: number }> {
+  return api<{ cleared: number }>(`/library/tables/${tableId}/clear-values`, {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export interface ColumnValuesResponse {
+  rows: { id: number; position: number }[];
+  /** row_id -> { column_id -> value }. Keys are strings over the wire. */
+  values: Record<number, Record<number, string>>;
+}
+
+/** Lightweight per-column values for the publish-modal previews. Returns the
+ *  ordered row list + values of ONLY the requested columns (never the heavy
+ *  output cells). */
+export function getColumnValues(
+  tableId: number,
+  columnIds: number[],
+): Promise<ColumnValuesResponse> {
+  const qs = columnIds.length ? `?column_ids=${columnIds.join(",")}` : "";
+  return api<ColumnValuesResponse>(
+    `/library/tables/${tableId}/column-values${qs}`,
+  );
 }
 
 // ----- Bulk generation runs -----

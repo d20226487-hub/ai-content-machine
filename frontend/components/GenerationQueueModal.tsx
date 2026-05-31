@@ -8,13 +8,18 @@ import { listEnabledProviders } from "@/lib/generate";
 import { useT } from "@/lib/i18n-context";
 import {
   enqueueGeneration,
+  generatePreview,
   type GenerateMode,
   type GenerateRequestPayload,
 } from "@/lib/library";
-import type { BulkCell, BulkTable, EnabledProvider } from "@/lib/types";
+import type { BulkTable, EnabledProvider } from "@/lib/types";
 
 interface Props {
   table: BulkTable;
+  /** Total rows in the whole table (the modal only holds the current page). */
+  totalRowCount: number;
+  /** True when the grid is in "select all N" mode. */
+  allRowsSelected: boolean;
   preselectedRowIds: number[];
   onClose: () => void;
   onEnqueued: (message: string) => void;
@@ -24,6 +29,8 @@ type RowMode = "all" | "range" | "selected";
 
 export function GenerationQueueModal({
   table,
+  totalRowCount,
+  allRowsSelected,
   preselectedRowIds,
   onClose,
   onEnqueued,
@@ -50,47 +57,79 @@ export function GenerationQueueModal({
     });
   }
 
+  // "selected" only makes sense when there's an explicit page selection and
+  // we're NOT in select-all-N mode (which is effectively "all").
   const [rowMode, setRowMode] = useState<RowMode>(
-    preselectedRowIds.length > 0 ? "selected" : "all",
+    !allRowsSelected && preselectedRowIds.length > 0 ? "selected" : "all",
   );
   const [rangeStart, setRangeStart] = useState(1);
-  const [rangeEnd, setRangeEnd] = useState(table.rows.length);
-
-  const targetRowIds = useMemo<number[]>(() => {
-    if (table.rows.length === 0) return [];
-    if (rowMode === "all") return table.rows.map((r) => r.id);
-    if (rowMode === "selected") return preselectedRowIds;
-    const a = Math.max(1, Math.min(rangeStart, table.rows.length));
-    const b = Math.max(a, Math.min(rangeEnd, table.rows.length));
-    return table.rows.slice(a - 1, b).map((r) => r.id);
-  }, [rowMode, rangeStart, rangeEnd, table.rows, preselectedRowIds]);
+  const [rangeEnd, setRangeEnd] = useState(totalRowCount);
 
   const [mode, setMode] = useState<GenerateMode>("empty");
 
-  const cellMap = useMemo(() => {
-    const m = new Map<string, BulkCell>();
-    for (const c of table.cells) m.set(`${c.row_id}:${c.column_id}`, c);
-    return m;
-  }, [table.cells]);
-
-  const eligibleCount = useMemo(() => {
-    if (pickedColumnIds.size === 0 || targetRowIds.length === 0) return 0;
-    let n = 0;
-    for (const rowId of targetRowIds) {
-      for (const colId of pickedColumnIds) {
-        const cell = cellMap.get(`${rowId}:${colId}`);
-        const status = cell?.status ?? "empty";
-        const include =
-          mode === "all"
-            ? true
-            : mode === "failed"
-              ? status === "failed"
-              : status !== "generated";
-        if (include) n++;
-      }
+  // Build the request payload from the row mode. Row targeting is resolved
+  // server-side now (the modal no longer holds every row): 'all' omits row
+  // refs, 'range' sends an ordinal row_range, 'selected' sends explicit ids.
+  const basePayload = useMemo<GenerateRequestPayload>(() => {
+    const p: GenerateRequestPayload = {
+      column_ids: Array.from(pickedColumnIds),
+      mode,
+    };
+    if (rowMode === "selected") {
+      p.row_ids = preselectedRowIds;
+    } else if (rowMode === "range") {
+      const start = Math.max(1, rangeStart);
+      const end = Math.max(start, Math.min(rangeEnd, totalRowCount));
+      p.row_range = { start, end };
     }
-    return n;
-  }, [pickedColumnIds, targetRowIds, cellMap, mode]);
+    return p;
+  }, [pickedColumnIds, mode, rowMode, rangeStart, rangeEnd, preselectedRowIds, totalRowCount]);
+
+  // "Will generate N" — fetched from the server so the count matches what the
+  // enqueue would actually do, without scanning every cell client-side.
+  const [preview, setPreview] = useState<{ will_generate: number; skipped: number } | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  useEffect(() => {
+    if (pickedColumnIds.size === 0) {
+      setPreview({ will_generate: 0, skipped: 0 });
+      return;
+    }
+    if (rowMode === "selected" && preselectedRowIds.length === 0) {
+      setPreview({ will_generate: 0, skipped: 0 });
+      return;
+    }
+    let ignored = false;
+    setPreviewLoading(true);
+    const h = setTimeout(() => {
+      generatePreview(table.id, basePayload)
+        .then((r) => {
+          if (!ignored) setPreview(r);
+        })
+        .catch(() => {
+          if (!ignored) setPreview(null);
+        })
+        .finally(() => {
+          if (!ignored) setPreviewLoading(false);
+        });
+    }, 300);
+    return () => {
+      ignored = true;
+      clearTimeout(h);
+    };
+  }, [table.id, basePayload, pickedColumnIds.size, rowMode, preselectedRowIds.length]);
+
+  const eligibleCount = preview?.will_generate ?? 0;
+
+  // Targeted row count for the summary line (independent of cell filtering).
+  const targetRowCount = useMemo(() => {
+    if (rowMode === "selected") return preselectedRowIds.length;
+    if (rowMode === "range") {
+      const start = Math.max(1, rangeStart);
+      const end = Math.max(start, Math.min(rangeEnd, totalRowCount));
+      return Math.max(0, end - start + 1);
+    }
+    return totalRowCount;
+  }, [rowMode, preselectedRowIds.length, rangeStart, rangeEnd, totalRowCount]);
 
   const providerSummary = useMemo(() => {
     const variants = new Set<string>();
@@ -161,11 +200,7 @@ export function GenerationQueueModal({
     setBusy(true);
     setError(null);
     try {
-      const payload: GenerateRequestPayload = {
-        column_ids: Array.from(pickedColumnIds),
-        row_ids: targetRowIds,
-        mode,
-      };
+      const payload: GenerateRequestPayload = { ...basePayload };
       if (overrideEnabled && overrideProvider && overrideModel) {
         payload.override_provider_code = overrideProvider;
         payload.override_model = overrideModel;
@@ -182,8 +217,8 @@ export function GenerationQueueModal({
   }
 
   useEffect(() => {
-    setRangeEnd((cur) => Math.min(Math.max(cur, 1), Math.max(1, table.rows.length)));
-  }, [table.rows.length]);
+    setRangeEnd((cur) => Math.min(Math.max(cur, 1), Math.max(1, totalRowCount)));
+  }, [totalRowCount]);
 
   const noPromptColumns = outputCols.filter((c) => c.prompt_id == null);
 
@@ -256,7 +291,7 @@ export function GenerationQueueModal({
             value="all"
             current={rowMode}
             onChange={setRowMode}
-            label={t("queue.rowsAll", { count: table.rows.length })}
+            label={t("queue.rowsAll", { count: totalRowCount })}
           />
           <RowOption
             value="selected"
@@ -280,7 +315,7 @@ export function GenerationQueueModal({
               <input
                 type="number"
                 min={1}
-                max={table.rows.length}
+                max={totalRowCount}
                 value={rangeStart}
                 onChange={(e) => setRangeStart(Number(e.target.value) || 1)}
                 disabled={rowMode !== "range"}
@@ -290,7 +325,7 @@ export function GenerationQueueModal({
               <input
                 type="number"
                 min={1}
-                max={table.rows.length}
+                max={totalRowCount}
                 value={rangeEnd}
                 onChange={(e) => setRangeEnd(Number(e.target.value) || 1)}
                 disabled={rowMode !== "range"}
@@ -393,9 +428,9 @@ export function GenerationQueueModal({
       <section className="mt-5 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs dark:border-neutral-800 dark:bg-neutral-950">
         <p className="text-neutral-700 dark:text-neutral-300">
           {t("queue.willGenerate", {
-            count: eligibleCount.toLocaleString(),
+            count: previewLoading ? "…" : eligibleCount.toLocaleString(),
             cols: pickedColumnIds.size,
-            rows: targetRowIds.length,
+            rows: targetRowCount,
           })}
         </p>
         {overrideEnabled && overrideProvider && overrideModel ? (

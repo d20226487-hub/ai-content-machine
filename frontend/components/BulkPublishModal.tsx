@@ -41,16 +41,27 @@ import {
   type PublishOperation,
   type RowFilter as RowFilterValue,
 } from "@/lib/publishBulk";
+import { getColumnValues, type ColumnValuesResponse } from "@/lib/library";
 import type { BulkTable } from "@/lib/types";
 import type { FieldSlot } from "@/components/bulkPublish/FieldMapping";
 
 interface Props {
   table: BulkTable;
+  /** Total rows in the whole table (the modal only holds the current page). */
+  totalRowCount: number;
+  /** True when the grid is in "select all N" mode. */
+  allRowsSelected: boolean;
   selectedRowIds: number[];
   onClose: () => void;
 }
 
-export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
+export function BulkPublishModal({
+  table,
+  totalRowCount,
+  allRowsSelected,
+  selectedRowIds,
+  onClose,
+}: Props) {
   const { t } = useT();
   const router = useRouter();
   // Outside-click guard: flips true on the first form interaction. We
@@ -97,10 +108,10 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
   const [language, setLanguage] = useState<string | null>(null);
 
   const [rowFilter, setRowFilter] = useState<RowFilterValue>(
-    selectedRowIds.length > 0 ? "selected" : "all",
+    !allRowsSelected && selectedRowIds.length > 0 ? "selected" : "all",
   );
   const [rangeStart, setRangeStart] = useState<string>("1");
-  const [rangeEnd, setRangeEnd] = useState<string>(String(table.rows.length));
+  const [rangeEnd, setRangeEnd] = useState<string>(String(totalRowCount));
   const [cellFilter, setCellFilter] = useState<CellFilterValue>("all");
 
   const [fieldToColumn, setFieldToColumn] = useState<Record<string, number>>({});
@@ -563,67 +574,94 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
     // Mapping / filters / back-fill stay (intentional — soft preserve).
   }
 
-  // "Will publish N rows" estimate (client-side).
-  const candidatePreview = useMemo(() => {
-    let candidates: number[];
-    if (rowFilter === "selected") {
-      candidates = selectedRowIds.slice();
-    } else if (rowFilter === "range") {
+  // ---- Lightweight per-column values for the previews ----
+  //
+  // The previews only ever reference up to three columns (post-id target,
+  // domain column, language column). Server-side pagination means the modal
+  // no longer holds every cell, so we fetch JUST those columns' values (plus
+  // the ordered row list, for ranges) from the column-values endpoint. The
+  // heavy output cells are never loaded here.
+  const neededColumnIds = useMemo(() => {
+    const ids = new Set<number>();
+    if (postIdTarget !== "") ids.add(Number(postIdTarget));
+    if (domainColumnId !== "") ids.add(Number(domainColumnId));
+    if (languageColumnId !== "") ids.add(Number(languageColumnId));
+    return Array.from(ids).sort((a, b) => a - b);
+  }, [postIdTarget, domainColumnId, languageColumnId]);
+
+  const [colValues, setColValues] = useState<ColumnValuesResponse | null>(null);
+  const neededKey = neededColumnIds.join(",");
+  useEffect(() => {
+    let ignored = false;
+    getColumnValues(table.id, neededColumnIds)
+      .then((r) => {
+        if (!ignored) setColValues(r);
+      })
+      .catch((e) => {
+        console.error("[BulkPublish] column-values load failed", e);
+        if (!ignored) setColValues({ rows: [], values: {} });
+      });
+    return () => {
+      ignored = true;
+    };
+    // neededKey captures the column set; table.id captures the table.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [table.id, neededKey]);
+
+  // Ordered row ids for range slicing, and a value getter. Both come from the
+  // lite column-values payload (position-ordered server-side).
+  const orderedRowIds = useMemo(
+    () => (colValues?.rows ?? []).map((r) => r.id),
+    [colValues],
+  );
+  const getVal = useCallback(
+    (rowId: number, colId: number): string =>
+      colValues?.values?.[rowId]?.[colId] ?? "",
+    [colValues],
+  );
+
+  // Resolve the candidate row ids for a given filter state from the lite
+  // ordered-row list (range/all) or the explicit selection.
+  const resolveCandidateIds = useCallback((): number[] => {
+    if (rowFilter === "selected") return selectedRowIds.slice();
+    if (rowFilter === "range") {
       const s = Math.max(1, Number(rangeStart) || 1) - 1;
       const e = Math.max(0, Number(rangeEnd) || 0);
-      candidates = table.rows.slice(s, e).map((r) => r.id);
-    } else {
-      candidates = table.rows.map((r) => r.id);
+      return orderedRowIds.slice(s, e);
     }
+    return orderedRowIds.slice();
+  }, [rowFilter, rangeStart, rangeEnd, selectedRowIds, orderedRowIds]);
 
+  // "Will publish N rows" estimate.
+  const candidatePreview = useMemo(() => {
+    let candidates = resolveCandidateIds();
     if (cellFilter !== "all" && postIdTarget !== "") {
       const colId = Number(postIdTarget);
-      const cellByRow: Record<number, string> = {};
-      for (const c of table.cells) {
-        if (c.column_id === colId) cellByRow[c.row_id] = c.value || "";
-      }
-      candidates = candidates.filter((rid) => !cellByRow[rid]);
+      candidates = candidates.filter((rid) => !getVal(rid, colId));
     }
     return candidates.length;
-  }, [rowFilter, rangeStart, rangeEnd, cellFilter, postIdTarget, selectedRowIds, table]);
+  }, [resolveCandidateIds, cellFilter, postIdTarget, getVal]);
 
   // Multi-mode: count distinct domain values across the candidate rows.
   const multiBreakdown = useMemo(() => {
     if (mode !== "multi" || domainColumnId === "") return null;
     const colId = Number(domainColumnId);
 
-    let candidateIds: Set<number>;
-    if (rowFilter === "selected") {
-      candidateIds = new Set(selectedRowIds);
-    } else if (rowFilter === "range") {
-      const s = Math.max(1, Number(rangeStart) || 1) - 1;
-      const e = Math.max(0, Number(rangeEnd) || 0);
-      candidateIds = new Set(table.rows.slice(s, e).map((r) => r.id));
-    } else {
-      candidateIds = new Set(table.rows.map((r) => r.id));
-    }
+    let candidateIds = resolveCandidateIds();
     if (cellFilter !== "all" && postIdTarget !== "") {
       const filterColId = Number(postIdTarget);
-      const filled: Record<number, string> = {};
-      for (const c of table.cells) {
-        if (c.column_id === filterColId) filled[c.row_id] = c.value || "";
-      }
-      for (const rid of Array.from(candidateIds)) {
-        if (filled[rid]) candidateIds.delete(rid);
-      }
+      candidateIds = candidateIds.filter((rid) => !getVal(rid, filterColId));
     }
 
     const counts = new Map<string, number>();
-    for (const cell of table.cells) {
-      if (cell.column_id !== colId) continue;
-      if (!candidateIds.has(cell.row_id)) continue;
-      const v = (cell.value || "").trim() || "(empty)";
+    for (const rid of candidateIds) {
+      const v = getVal(rid, colId).trim() || "(empty)";
       counts.set(v, (counts.get(v) ?? 0) + 1);
     }
     return Array.from(counts.entries())
       .sort((a, b) => b[1] - a[1])
       .map(([name, count]) => ({ name, count }));
-  }, [mode, domainColumnId, rowFilter, rangeStart, rangeEnd, cellFilter, postIdTarget, selectedRowIds, table]);
+  }, [mode, domainColumnId, resolveCandidateIds, cellFilter, postIdTarget, getVal]);
 
   // Language-sync targets — drives the LanguageSync pre-flight panel.
   //
@@ -660,13 +698,10 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
       if (languageColumnId !== "") {
         const langs = collectCandidateLanguages(
           Number(languageColumnId),
-          table,
-          rowFilter,
-          rangeStart,
-          rangeEnd,
+          resolveCandidateIds(),
+          getVal,
           cellFilter,
           postIdTarget,
-          selectedRowIds,
         );
         if (langs.length === 0) return [];
         return [{ domain_name: selected.name, languages: langs }];
@@ -682,50 +717,19 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
     const domainColId = Number(domainColumnId);
     const langColId = Number(languageColumnId);
 
-    // Same candidate-row computation as `multiBreakdown` above. Kept
-    // inline rather than factored out because the two memos depend on
-    // slightly different inputs and a shared helper would have to take
-    // 8 params.
-    let candidateIds: Set<number>;
-    if (rowFilter === "selected") {
-      candidateIds = new Set(selectedRowIds);
-    } else if (rowFilter === "range") {
-      const s = Math.max(1, Number(rangeStart) || 1) - 1;
-      const e = Math.max(0, Number(rangeEnd) || 0);
-      candidateIds = new Set(table.rows.slice(s, e).map((r) => r.id));
-    } else {
-      candidateIds = new Set(table.rows.map((r) => r.id));
-    }
+    let candidateIds = resolveCandidateIds();
     if (cellFilter !== "all" && postIdTarget !== "") {
       const filterColId = Number(postIdTarget);
-      const filled: Record<number, string> = {};
-      for (const c of table.cells) {
-        if (c.column_id === filterColId) filled[c.row_id] = c.value || "";
-      }
-      for (const rid of Array.from(candidateIds)) {
-        if (filled[rid]) candidateIds.delete(rid);
-      }
-    }
-
-    // Index domain + language by row in one pass each. Avoids O(rows²)
-    // for tables with thousands of cells.
-    const domainByRow = new Map<number, string>();
-    const langByRow = new Map<number, string>();
-    for (const cell of table.cells) {
-      if (!candidateIds.has(cell.row_id)) continue;
-      const v = (cell.value || "").trim();
-      if (!v) continue;
-      if (cell.column_id === domainColId) domainByRow.set(cell.row_id, v);
-      else if (cell.column_id === langColId) {
-        // Lowercase + trim — matches the backend's normalization, so
-        // "EN" + "en" in different rows collapse to one item.
-        langByRow.set(cell.row_id, v.toLowerCase());
-      }
+      candidateIds = candidateIds.filter((rid) => !getVal(rid, filterColId));
     }
 
     const byDomain = new Map<string, Set<string>>();
-    for (const [rowId, domainName] of domainByRow) {
-      const lang = langByRow.get(rowId);
+    for (const rid of candidateIds) {
+      const domainName = getVal(rid, domainColId).trim();
+      if (!domainName) continue;
+      // Lowercase + trim — matches the backend's normalization, so
+      // "EN" + "en" in different rows collapse to one item.
+      const lang = getVal(rid, langColId).trim().toLowerCase();
       if (!lang) continue;
       if (!byDomain.has(domainName)) byDomain.set(domainName, new Set());
       byDomain.get(domainName)!.add(lang);
@@ -744,13 +748,10 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
     language,
     domainColumnId,
     languageColumnId,
-    rowFilter,
-    rangeStart,
-    rangeEnd,
     cellFilter,
     postIdTarget,
-    selectedRowIds,
-    table,
+    resolveCandidateIds,
+    getVal,
   ]);
 
   function setSlot(key: string, colId: number | null) {
@@ -869,7 +870,7 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
     } else if (rowFilter === "range") {
       selection = {
         start: Number(rangeStart) || 1,
-        end: Number(rangeEnd) || table.rows.length,
+        end: Number(rangeEnd) || totalRowCount,
       };
     }
 
@@ -1055,8 +1056,8 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
           rangeEnd={rangeEnd}
           onRangeStartChange={setRangeStart}
           onRangeEndChange={setRangeEnd}
-          totalRows={table.rows.length}
-          selectedCount={selectedRowIds.length}
+          totalRows={totalRowCount}
+          selectedCount={allRowsSelected ? totalRowCount : selectedRowIds.length}
         />
 
         <CellFilter
@@ -1182,39 +1183,19 @@ export function BulkPublishModal({ table, selectedRowIds, onClose }: Props) {
  */
 function collectCandidateLanguages(
   langColId: number,
-  table: BulkTable,
-  rowFilter: RowFilterValue,
-  rangeStart: string,
-  rangeEnd: string,
+  candidateIds: number[],
+  getVal: (rowId: number, colId: number) => string,
   cellFilter: CellFilterValue,
   postIdTarget: number | "",
-  selectedRowIds: number[],
 ): string[] {
-  let candidateIds: Set<number>;
-  if (rowFilter === "selected") {
-    candidateIds = new Set(selectedRowIds);
-  } else if (rowFilter === "range") {
-    const s = Math.max(1, Number(rangeStart) || 1) - 1;
-    const e = Math.max(0, Number(rangeEnd) || 0);
-    candidateIds = new Set(table.rows.slice(s, e).map((r) => r.id));
-  } else {
-    candidateIds = new Set(table.rows.map((r) => r.id));
-  }
+  let ids = candidateIds;
   if (cellFilter !== "all" && postIdTarget !== "") {
     const filterColId = Number(postIdTarget);
-    const filled: Record<number, string> = {};
-    for (const c of table.cells) {
-      if (c.column_id === filterColId) filled[c.row_id] = c.value || "";
-    }
-    for (const rid of Array.from(candidateIds)) {
-      if (filled[rid]) candidateIds.delete(rid);
-    }
+    ids = ids.filter((rid) => !getVal(rid, filterColId));
   }
   const langs = new Set<string>();
-  for (const cell of table.cells) {
-    if (cell.column_id !== langColId) continue;
-    if (!candidateIds.has(cell.row_id)) continue;
-    const v = (cell.value || "").trim().toLowerCase();
+  for (const rid of ids) {
+    const v = getVal(rid, langColId).trim().toLowerCase();
     if (v) langs.add(v);
   }
   return Array.from(langs).sort();

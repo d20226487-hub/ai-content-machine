@@ -238,6 +238,10 @@ export interface BulkTable {
   columns: BulkColumn[];
   rows: BulkRow[];
   cells: BulkCell[];
+  /** Total rows in the table regardless of pagination. On a paginated
+   *  fetch, `rows`/`cells` hold only the current page while this reflects
+   *  the whole table. On a full fetch it equals rows.length. */
+  total_row_count: number;
 }
 
 export interface Provider {

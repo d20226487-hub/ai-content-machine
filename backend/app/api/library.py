@@ -41,9 +41,12 @@ from app.schemas.bulk import (
     BulkGenerationRunRead,
     CellsBatchUpsert,
     CellUpsert,
+    ClearValuesRequest,
+    ClearValuesResponse,
     ColumnCreate,
     ColumnRead,
     ColumnUpdate,
+    ColumnValuesResponse,
     CsvImportRequest,
     FindReplaceRunDetail,
     FindReplaceRunRead,
@@ -52,6 +55,7 @@ from app.schemas.bulk import (
     FolderCreate,
     FolderRead,
     FolderUpdate,
+    GeneratePreviewResponse,
     GenerateRequest,
     GenerateResponse,
     LinkCheckRequest,
@@ -264,6 +268,93 @@ async def _table_to_read(db: AsyncSession, table: BulkTable) -> TableRead:
                 }
                 for c in cells
             ],
+            "total_row_count": len(table.rows),
+        }
+    )
+
+
+async def _table_to_read_paginated(
+    db: AsyncSession, table: BulkTable, page: int, page_size: int
+) -> TableRead:
+    """Build a TableRead for one page of rows.
+
+    Loads all columns (always small) but only the requested page of rows
+    (ordered by position) and just the cells belonging to those rows.
+    ``total_row_count`` reflects the whole table so the client can render the
+    footer / selection math without holding every row. ``table`` only needs
+    its scalar attributes loaded — rows/columns are queried here directly so
+    we never materialize the full row set."""
+    columns = (
+        (
+            await db.execute(
+                select(BulkTableColumn)
+                .where(BulkTableColumn.table_id == table.id)
+                .order_by(BulkTableColumn.position, BulkTableColumn.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    total = (
+        await db.execute(
+            select(func.count())
+            .select_from(BulkTableRow)
+            .where(BulkTableRow.table_id == table.id)
+        )
+    ).scalar_one()
+    rows = (
+        (
+            await db.execute(
+                select(BulkTableRow)
+                .where(BulkTableRow.table_id == table.id)
+                .order_by(BulkTableRow.position, BulkTableRow.id)
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    row_ids = [r.id for r in rows]
+    cells = []
+    if row_ids:
+        cells = (
+            (
+                await db.execute(
+                    select(BulkTableCell).where(BulkTableCell.row_id.in_(row_ids))
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return TableRead.model_validate(
+        {
+            "id": table.id,
+            "name": table.name,
+            "description": table.description,
+            "folder_id": table.folder_id,
+            "created_by_id": table.created_by_id,
+            "created_by_name": await _resolve_creator_name(db, table.created_by_id),
+            "created_at": table.created_at,
+            "updated_at": table.updated_at,
+            "columns": [ColumnRead.model_validate(c) for c in columns],
+            "rows": [RowRead.model_validate(r) for r in rows],
+            "cells": [
+                {
+                    "id": c.id,
+                    "row_id": c.row_id,
+                    "column_id": c.column_id,
+                    "value": c.value,
+                    "status": c.status,
+                    "error": c.error,
+                    "model_used": c.model_used,
+                    "generated_at": c.generated_at,
+                    "updated_at": c.updated_at,
+                    "translations": c.translations,
+                }
+                for c in cells
+            ],
+            "total_row_count": int(total),
         }
     )
 
@@ -533,9 +624,21 @@ async def create_table(
 @router.get("/tables/{table_id}", response_model=TableRead)
 async def get_table(
     table_id: int,
+    page: int | None = Query(default=None, ge=1),
+    page_size: int | None = Query(default=None, ge=1, le=1000),
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TableRead:
+    """Fetch a bulk table.
+
+    Without `page`/`page_size`, returns the full table (all rows + cells) —
+    the legacy shape relied on by duplicate, CSV import and trash preview.
+    With both set, returns just that page of rows and their cells plus
+    `total_row_count`, so large tables don't ship every cell on open.
+    """
+    if page is not None and page_size is not None:
+        t = await _get_table_or_404(db, table_id, actor, level="read")
+        return await _table_to_read_paginated(db, t, page, page_size)
     t = await _get_table_or_404(db, table_id, actor, level="read", full=True)
     return await _table_to_read(db, t)
 
@@ -1273,6 +1376,123 @@ async def upsert_cells(
     return out
 
 
+@router.post("/tables/{table_id}/clear-values", response_model=ClearValuesResponse)
+async def clear_values(
+    table_id: int,
+    payload: ClearValuesRequest,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ClearValuesResponse:
+    """Wipe cell values in bulk, server-side.
+
+    Pass ``all=True`` to clear every row, or ``row_ids`` to clear specific
+    rows. Each affected cell is reset to an empty/manual-cleared state
+    (value NULL, status 'empty', error cleared, translations dropped). The
+    editor's 'Clear values' uses this so a selection that spans pages (the
+    select-all-N case) clears completely — the browser no longer holds every
+    cell to build the write batch itself.
+    """
+    await _get_owned_table_or_404(db, table_id, actor, level="write")
+
+    # Target the table's rows (optionally a subset). Scope cells via a row
+    # subquery so a stray row_id from another table can't be touched.
+    row_subq = select(BulkTableRow.id).where(BulkTableRow.table_id == table_id)
+    if not payload.all:
+        ids = payload.row_ids or []
+        if not ids:
+            return ClearValuesResponse(cleared=0)
+        row_subq = row_subq.where(BulkTableRow.id.in_(ids))
+
+    stmt = (
+        update(BulkTableCell)
+        .where(BulkTableCell.row_id.in_(row_subq))
+        .values(value=None, status="empty", error=None, translations=None)
+    )
+    result = await db.execute(stmt)
+    await _bump_table_updated(db, table_id)
+    await db.commit()
+    return ClearValuesResponse(cleared=int(result.rowcount or 0))
+
+
+@router.get("/tables/{table_id}/column-values", response_model=ColumnValuesResponse)
+async def column_values(
+    table_id: int,
+    column_ids: str = Query(default=""),
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ColumnValuesResponse:
+    """Lightweight per-column values for the bulk-publish previews.
+
+    Returns the full ordered row list (id + ordinal position) plus the values
+    of ONLY the requested columns (``column_ids`` = comma-separated ids).
+    Lets the publish modal compute its 'Will publish N' / per-domain /
+    language-sync previews and resolve ordinal ranges without loading the
+    heavy output cells of every row.
+    """
+    await _get_table_or_404(db, table_id, actor, level="read")
+
+    wanted: list[int] = []
+    for part in column_ids.split(","):
+        part = part.strip()
+        if part:
+            try:
+                wanted.append(int(part))
+            except ValueError:
+                continue
+    # Keep only columns that actually belong to this table.
+    valid_ids: set[int] = set()
+    if wanted:
+        valid_ids = set(
+            (
+                await db.execute(
+                    select(BulkTableColumn.id).where(
+                        BulkTableColumn.table_id == table_id,
+                        BulkTableColumn.id.in_(wanted),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    rows = (
+        (
+            await db.execute(
+                select(BulkTableRow.id, BulkTableRow.position)
+                .where(BulkTableRow.table_id == table_id)
+                .order_by(BulkTableRow.position, BulkTableRow.id)
+            )
+        )
+        .all()
+    )
+
+    values: dict[int, dict[int, str]] = {}
+    if valid_ids:
+        cell_rows = (
+            await db.execute(
+                select(
+                    BulkTableCell.row_id,
+                    BulkTableCell.column_id,
+                    BulkTableCell.value,
+                )
+                .join(BulkTableRow, BulkTableRow.id == BulkTableCell.row_id)
+                .where(
+                    BulkTableRow.table_id == table_id,
+                    BulkTableCell.column_id.in_(valid_ids),
+                )
+            )
+        ).all()
+        for rid, cid, val in cell_rows:
+            if val is None:
+                continue
+            values.setdefault(int(rid), {})[int(cid)] = val
+
+    return ColumnValuesResponse(
+        rows=[{"id": int(rid), "position": int(pos)} for rid, pos in rows],
+        values=values,
+    )
+
+
 # ---------- Cell translation ----------
 
 @router.post(
@@ -1464,6 +1684,115 @@ async def import_csv(
 
 # ---------- AI generation ----------
 
+
+async def _resolve_generation_columns(
+    db: AsyncSession, table_id: int, column_ids: list[int] | None
+) -> list[BulkTableColumn]:
+    """Output columns with a prompt assigned, optionally scoped to ``column_ids``."""
+    col_q = select(BulkTableColumn).where(
+        BulkTableColumn.table_id == table_id,
+        BulkTableColumn.kind == "output",
+        BulkTableColumn.prompt_id.is_not(None),
+    )
+    if column_ids:
+        col_q = col_q.where(BulkTableColumn.id.in_(column_ids))
+    return list((await db.execute(col_q)).scalars().all())
+
+
+async def _resolve_generation_rows(
+    db: AsyncSession, table_id: int, payload: GenerateRequest
+) -> list[BulkTableRow]:
+    """Target rows for a generation request.
+
+    Precedence: explicit ``row_ids`` → ordinal ``row_range`` → all rows. The
+    range is 1-based and inclusive over the position-ordered list, matching
+    the grid's visible '#' numbers.
+    """
+    row_q = (
+        select(BulkTableRow)
+        .where(BulkTableRow.table_id == table_id)
+        .order_by(BulkTableRow.position, BulkTableRow.id)
+    )
+    if payload.row_ids:
+        row_q = row_q.where(BulkTableRow.id.in_(payload.row_ids))
+    elif payload.row_range is not None:
+        start = payload.row_range.start
+        end = payload.row_range.end
+        limit = max(0, end - start + 1)
+        row_q = row_q.offset(start - 1).limit(limit)
+    return list((await db.execute(row_q)).scalars().all())
+
+
+async def _resolve_generation_candidates(
+    db: AsyncSession,
+    table_id: int,
+    cols: list[BulkTableColumn],
+    rows: list[BulkTableRow],
+    payload: GenerateRequest,
+) -> tuple[list[tuple[int, int]], int]:
+    """Compute the (row_id, column_id) cells to enqueue and how many are
+    skipped by the mode filter. Shared by the enqueue and preview endpoints so
+    the dry-run count always matches what enqueue actually does."""
+    existing_cells = (
+        (
+            await db.execute(
+                select(BulkTableCell).where(
+                    BulkTableCell.row_id.in_([r.id for r in rows]),
+                    BulkTableCell.column_id.in_([c.id for c in cols]),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    existing_lookup = {(c.row_id, c.column_id): c for c in existing_cells}
+
+    effective_mode = "all" if payload.overwrite else payload.mode
+    to_enqueue: list[tuple[int, int]] = []
+    skipped = 0
+    for row in rows:
+        for col in cols:
+            existing = existing_lookup.get((row.id, col.id))
+            existing_status = existing.status if existing is not None else "empty"
+            include = (
+                effective_mode == "all"
+                or (effective_mode == "failed" and existing_status == "failed")
+                or (effective_mode == "empty" and existing_status != "generated")
+            )
+            if not include:
+                skipped += 1
+                continue
+            to_enqueue.append((row.id, col.id))
+    return to_enqueue, skipped
+
+
+@router.post(
+    "/tables/{table_id}/generate-preview", response_model=GeneratePreviewResponse
+)
+async def generate_preview(
+    table_id: int,
+    payload: GenerateRequest,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> GeneratePreviewResponse:
+    """Dry-run: how many cells WOULD be enqueued vs skipped for this request.
+
+    Replaces the editor's old client-side scan of every cell — the queue
+    modal calls this on open / filter change so the 'Will generate N' count
+    is correct without the browser holding the whole table."""
+    await _get_table_or_404(db, table_id, actor, level="read")
+    cols = await _resolve_generation_columns(db, table_id, payload.column_ids)
+    if not cols:
+        return GeneratePreviewResponse(will_generate=0, skipped=0)
+    rows = await _resolve_generation_rows(db, table_id, payload)
+    if not rows:
+        return GeneratePreviewResponse(will_generate=0, skipped=0)
+    to_enqueue, skipped = await _resolve_generation_candidates(
+        db, table_id, cols, rows, payload
+    )
+    return GeneratePreviewResponse(will_generate=len(to_enqueue), skipped=skipped)
+
+
 @router.post("/tables/{table_id}/generate", response_model=GenerateResponse)
 async def enqueue_generation(
     table_id: int,
@@ -1482,14 +1811,7 @@ async def enqueue_generation(
         )
 
     # Resolve target columns (output columns with a prompt assigned).
-    col_q = select(BulkTableColumn).where(
-        BulkTableColumn.table_id == table_id,
-        BulkTableColumn.kind == "output",
-        BulkTableColumn.prompt_id.is_not(None),
-    )
-    if payload.column_ids:
-        col_q = col_q.where(BulkTableColumn.id.in_(payload.column_ids))
-    cols = (await db.execute(col_q)).scalars().all()
+    cols = await _resolve_generation_columns(db, table_id, payload.column_ids)
 
     if not cols:
         return GenerateResponse(
@@ -1500,59 +1822,26 @@ async def enqueue_generation(
             ),
         )
 
-    # Resolve target rows.
-    row_q = select(BulkTableRow).where(BulkTableRow.table_id == table_id).order_by(
-        BulkTableRow.position
-    )
-    if payload.row_ids:
-        row_q = row_q.where(BulkTableRow.id.in_(payload.row_ids))
-    rows = (await db.execute(row_q)).scalars().all()
+    # Resolve target rows (row_ids → ordinal row_range → all).
+    rows = await _resolve_generation_rows(db, table_id, payload)
 
     if not rows:
         return GenerateResponse(
             enqueued_cell_ids=[], skipped=0, message="No rows to generate."
         )
 
-    # Existing cells lookup, to detect what to skip.
-    existing_cells = (
-        (
-            await db.execute(
-                select(BulkTableCell).where(
-                    BulkTableCell.row_id.in_([r.id for r in rows]),
-                    BulkTableCell.column_id.in_([c.id for c in cols]),
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    existing_lookup = {(c.row_id, c.column_id): c for c in existing_cells}
-
-    # Resolve effective mode: legacy `overwrite=True` maps to mode='all'.
-    effective_mode = "all" if payload.overwrite else payload.mode
-
     # Compute the include set first; THEN do one bulk DB write; THEN enqueue.
     # The previous version was per-cell `_ensure_cell + UPDATE + COMMIT`, which
     # is roughly 3 round trips × N cells. For a 10k×5 table with all cells
     # included that was 150k round trips inside one HTTP request — minutes of
     # latency just for the bookkeeping. Bulk INSERT … ON CONFLICT … RETURNING
-    # collapses it to a single statement.
-    to_enqueue: list[tuple[int, int]] = []  # (row_id, column_id)
-    skipped = 0
-    for row in rows:
-        for col in cols:
-            existing = existing_lookup.get((row.id, col.id))
-            existing_status = existing.status if existing is not None else "empty"
+    # collapses it to a single statement. The candidate computation is shared
+    # with /generate-preview so the dry-run count can't drift from reality.
+    to_enqueue, skipped = await _resolve_generation_candidates(
+        db, table_id, cols, rows, payload
+    )
 
-            include = (
-                effective_mode == "all"
-                or (effective_mode == "failed" and existing_status == "failed")
-                or (effective_mode == "empty" and existing_status != "generated")
-            )
-            if not include:
-                skipped += 1
-                continue
-            to_enqueue.append((row.id, col.id))
+    effective_mode = "all" if payload.overwrite else payload.mode
 
     enqueued: list[int] = []
     run_id: int | None = None
