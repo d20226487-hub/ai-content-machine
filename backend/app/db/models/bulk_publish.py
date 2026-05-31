@@ -73,6 +73,8 @@ class BulkPublishRun(Base):
 
     # 'queued'|'running'|'paused'|'cancelled'|'done'|'failed'
     status: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Optional user-given label (NULL → UI shows a "<tool> #<id>" fallback).
+    name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     done: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

@@ -26,6 +26,7 @@ from app.services.brain import (
     load_brain,
     now_iso,
     resolve_target_language,
+    save_fix_links_config,
     save_translate_config,
     translate_text,
 )
@@ -44,8 +45,15 @@ class TranslatePromptRead(BaseModel):
     default_target_language: str = "ru"
 
 
+class FixLinksPromptRead(BaseModel):
+    prompt: str
+    provider_code: str | None = None
+    model: str | None = None
+
+
 class BrainPromptsRead(BaseModel):
     translate: TranslatePromptRead
+    fix_links: FixLinksPromptRead
 
 
 class TranslatePromptUpdate(BaseModel):
@@ -55,6 +63,12 @@ class TranslatePromptUpdate(BaseModel):
     default_target_language: str = Field(
         default="ru", min_length=2, max_length=16
     )
+
+
+class FixLinksPromptUpdate(BaseModel):
+    prompt: str = Field(min_length=1, max_length=10_000)
+    provider_code: str | None = None
+    model: str | None = None
 
 
 @router.get("/prompts", response_model=BrainPromptsRead)
@@ -78,6 +92,22 @@ async def update_translate(
         actor_id=actor.id,
     )
     return TranslatePromptRead.model_validate(out)
+
+
+@router.put("/prompts/fix-links", response_model=FixLinksPromptRead)
+async def update_fix_links(
+    payload: FixLinksPromptUpdate,
+    actor: User = Depends(require_role("admin")),
+    db: AsyncSession = Depends(get_db),
+) -> FixLinksPromptRead:
+    out = await save_fix_links_config(
+        db,
+        prompt=payload.prompt,
+        provider_code=payload.provider_code,
+        model=payload.model,
+        actor_id=actor.id,
+    )
+    return FixLinksPromptRead.model_validate(out)
 
 
 class TranslateTextRequest(BaseModel):

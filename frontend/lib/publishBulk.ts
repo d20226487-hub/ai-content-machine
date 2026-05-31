@@ -18,6 +18,7 @@ export type OnSlugConflict = "create" | "skip" | "update";
 
 export interface BulkRunSummary {
   id: number;
+  name: string | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -166,6 +167,13 @@ export function rerunFailedRows(id: number) {
 
 export function deleteBulkRun(id: number) {
   return api<void>(`/publish/runs/${id}`, { method: "DELETE" });
+}
+
+export function renameBulkRun(id: number, name: string | null) {
+  return api<BulkRunDetail>(`/publish/runs/${id}`, {
+    method: "PATCH",
+    body: { name },
+  });
 }
 
 export function clearCompletedBulkRuns() {

@@ -137,6 +137,10 @@ async def _seed(db: AsyncSession, run_id: int) -> None:
     ]
 
     target_ids = set(selected) | set(expected_cols)
+    # Optional row scope (NULL = all rows). The AI fix's auto re-check sets
+    # this so only the touched rows are re-scanned.
+    scope_ids = run.row_ids if isinstance(run.row_ids, list) else None
+    scope_set = {int(x) for x in scope_ids} if scope_ids else None
     row_pos = {
         rid: pos
         for rid, pos in (
@@ -146,6 +150,7 @@ async def _seed(db: AsyncSession, run_id: int) -> None:
                 )
             )
         ).all()
+        if scope_set is None or rid in scope_set
     }
     by_row: dict[int, dict[int, str | None]] = defaultdict(dict)
     if target_ids:

@@ -7,14 +7,17 @@ import { CellEditorModal } from "@/components/CellEditorModal";
 import { Pagination } from "@/components/Pagination";
 import { ApiError } from "@/lib/api";
 import {
+  deleteReplaceRun,
   findInTable,
   listReplaceRuns,
+  renameReplaceRun,
   replaceInTable,
   type FindReplaceConfig,
   type FindResponse,
   type FindReplaceRunRead,
   type MatchedCell,
 } from "@/lib/findReplace";
+import { RunRowActions } from "@/components/RunRowActions";
 import { useT } from "@/lib/i18n-context";
 import { getTable, upsertCells } from "@/lib/library";
 import type { BulkColumn, BulkTable } from "@/lib/types";
@@ -376,6 +379,11 @@ export default function FindReplacePage({
                   className="flex items-center justify-between gap-3 px-3 py-2 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-900"
                 >
                   <span className="min-w-0 truncate">
+                    {r.name && (
+                      <span className="mr-2 font-medium text-neutral-800 dark:text-neutral-200">
+                        {r.name}
+                      </span>
+                    )}
                     <code className="text-neutral-800 dark:text-neutral-200">
                       {r.pattern}
                     </code>
@@ -391,6 +399,17 @@ export default function FindReplacePage({
                         {t("findReplace.reverted")}
                       </span>
                     )}
+                    <RunRowActions
+                      name={r.name}
+                      onRename={async (n) => {
+                        await renameReplaceRun(r.id, n);
+                        loadRuns();
+                      }}
+                      onDelete={async () => {
+                        await deleteReplaceRun(r.id);
+                        loadRuns();
+                      }}
+                    />
                   </span>
                 </Link>
               </li>

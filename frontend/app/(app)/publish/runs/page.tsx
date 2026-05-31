@@ -9,9 +9,11 @@ import {
   clearCompletedBulkRuns,
   deleteBulkRun,
   listBulkRuns,
+  renameBulkRun,
   type BulkRunStatus,
   type BulkRunSummary,
 } from "@/lib/publishBulk";
+import { RunRowActions } from "@/components/RunRowActions";
 
 const STATUS_BADGE: Record<BulkRunStatus, string> = {
   done: "bg-green-50 text-green-700 ring-green-600/10 dark:bg-green-950/40 dark:text-green-400 dark:ring-green-400/30",
@@ -55,8 +57,8 @@ export default function RunsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runs?.map((r) => `${r.id}:${r.status}:${r.done}:${r.failed}`).join(","), reloadTick]);
 
-  async function onDeleteRun(id: number) {
-    if (!confirm(t("bulkRuns.deleteConfirm", { id }))) return;
+  async function doDeleteRun(id: number) {
+    // No confirm here — callers (RunRowActions) own the confirmation.
     setBusy(true);
     try {
       await deleteBulkRun(id);
@@ -163,7 +165,9 @@ export default function RunsPage() {
                       onClick={(e) => e.stopPropagation()}
                       className="font-medium text-neutral-900 hover:underline dark:text-neutral-100"
                     >
-                      {r.table_name ?? t("bulkRuns.tableFallback", { id: r.table_id })}
+                      {r.name ||
+                        (r.table_name ??
+                          t("bulkRuns.tableFallback", { id: r.table_id }))}
                     </Link>
                   </td>
                   <td className="px-3 py-2 text-neutral-700 dark:text-neutral-300">
@@ -210,20 +214,22 @@ export default function RunsPage() {
                     </div>
                   </td>
                   <td className="px-2 py-2 text-right">
-                    {["done", "failed", "cancelled"].includes(r.status) && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onDeleteRun(r.id);
+                    <span
+                      className="inline-flex"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <RunRowActions
+                        name={r.name}
+                        canDelete={["done", "failed", "cancelled"].includes(
+                          r.status,
+                        )}
+                        onRename={async (n) => {
+                          await renameBulkRun(r.id, n);
+                          setReloadTick((x) => x + 1);
                         }}
-                        disabled={busy}
-                        title={t("bulkRuns.deleteRow")}
-                        className="rounded p-1 text-neutral-400 hover:bg-red-50 hover:text-red-700 disabled:opacity-50 dark:text-neutral-500 dark:hover:bg-red-950/40 dark:hover:text-red-400"
-                      >
-                        ×
-                      </button>
-                    )}
+                        onDelete={() => doDeleteRun(r.id)}
+                      />
+                    </span>
                   </td>
                 </tr>
               );

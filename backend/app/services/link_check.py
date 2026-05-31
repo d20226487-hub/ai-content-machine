@@ -10,9 +10,10 @@ Extraction is intentionally split:
   * ``extract_output_links`` pulls STRUCTURED links — ``href``/``src``
     attributes and markdown ``[text](url)`` — the way a model emits them in
     generated HTML.
-  * ``extract_expected_links`` is permissive — the expected column is hand-
-    authored, so links may be bare and scheme-less ("site.com/a"), comma or
-    newline separated.
+  * ``extract_expected_links`` pulls only tokens with an explicit
+    ``http(s)://`` scheme — the expected column is hand-authored and often
+    mixes anchor text / labels with the URL (e.g. ``FIFA.com - https://…``),
+    so a bare word like "FIFA.com" is a label, NOT a link.
 
 Comparison is scheme/www/trailing-slash/fragment-insensitive
 (``normalize_link``) so "site.com/a" and "https://www.site.com/a/" are
@@ -31,11 +32,15 @@ from app.core.ssrf import SafeAsyncTransport, UnsafeUrlError, validate_public_ur
 _ATTR_RE = re.compile(r"""(?:href|src)\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
 # [label](url ...) — stop at whitespace or ) so titles don't leak in
 _MD_RE = re.compile(r"\[[^\]]*\]\(\s*([^)\s]+)")
-# Permissive URL-ish token: optional scheme, a dotted host, optional path.
-_BARE_RE = re.compile(
-    r"""(?:https?://)?(?:[\w-]+\.)+[a-z]{2,}(?:/[^\s,;"'<>)\]]*)?""",
-    re.IGNORECASE,
-)
+# Expected-column links must carry an explicit http(s):// scheme. The column
+# is hand-authored and often mixes anchor text with the URL — e.g.
+# ``FIFA.com - https://www.fifa.com/en/...`` — where "FIFA.com" is a LABEL,
+# not a link. Requiring a scheme keeps such labels from being parsed as a
+# second (domain-only) expected link that a deep link on that host can't
+# satisfy (it was being reported as a phantom "omitted").
+_EXPECTED_URL_RE = re.compile(r"""https?://[^\s,;"'<>)\]]+""", re.IGNORECASE)
+# Trailing sentence punctuation to peel off a URL that ends a clause.
+_URL_TRAILING = ".,;:!?)’”\"'"
 
 # Sanity bound on UNIQUE links per run. The crawl is distributed across
 # workers now, so this is far higher than the old single-task cap.
@@ -65,10 +70,17 @@ def extract_output_links(text: str | None) -> list[str]:
 
 
 def extract_expected_links(text: str | None) -> list[str]:
-    """Permissive extraction for the hand-authored expected column."""
+    """Extract expected links from the hand-authored expected column.
+
+    Only tokens with an explicit ``http(s)://`` scheme count as links — bare
+    words like "FIFA.com" are anchor text / labels, not links. Trailing
+    sentence punctuation is peeled off."""
     if not text:
         return []
-    found = [m.group(0).strip() for m in _BARE_RE.finditer(text)]
+    found = [
+        m.group(0).strip().rstrip(_URL_TRAILING)
+        for m in _EXPECTED_URL_RE.finditer(text)
+    ]
     return _dedupe([u for u in found if _looks_like_link(u)])
 
 

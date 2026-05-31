@@ -4,11 +4,14 @@ import Link from "next/link";
 import { use, useCallback, useEffect, useState } from "react";
 
 import { LinkCheckStatusChip } from "@/components/LinkCheckStatusChip";
+import { RunRowActions } from "@/components/RunRowActions";
 import { ApiError } from "@/lib/api";
 import { useT } from "@/lib/i18n-context";
 import { getTable } from "@/lib/library";
 import {
+  deleteLinkCheckRun,
   listLinkCheckRuns,
+  renameLinkCheckRun,
   startLinkCheck,
   type LinkCheckRun,
 } from "@/lib/linkCheck";
@@ -103,21 +106,8 @@ export default function LinkCheckPage({
       )}
 
       <section className="mt-5 rounded-lg border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
-        {/* mode toggle — Correct is V2, shown disabled */}
-        <div className="inline-flex rounded-md border border-neutral-300 p-0.5 text-xs dark:border-neutral-700">
-          <span className="rounded bg-neutral-900 px-3 py-1 font-medium text-white dark:bg-neutral-100 dark:text-neutral-900">
-            {t("linkCheck.modeCheck")}
-          </span>
-          <span
-            className="cursor-not-allowed rounded px-3 py-1 font-medium text-neutral-400 dark:text-neutral-600"
-            title={t("linkCheck.correctSoonHint")}
-          >
-            {t("linkCheck.modeCorrect")}
-          </span>
-        </div>
-
         {/* columns to scan */}
-        <div className="mt-4">
+        <div>
           <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
             {t("linkCheck.columnsLabel")}
           </span>
@@ -230,7 +220,7 @@ export default function LinkCheckPage({
                   className="flex items-center justify-between gap-3 px-3 py-2 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-900"
                 >
                   <span className="min-w-0 truncate text-neutral-700 dark:text-neutral-300">
-                    {t("linkCheck.runLabel", { id: r.id })}
+                    {r.name || t("linkCheck.runLabel", { id: r.id })}
                     <span className="ml-2 text-xs text-neutral-400">
                       {new Date(r.created_at).toLocaleString()}
                     </span>
@@ -248,6 +238,18 @@ export default function LinkCheckPage({
                         })}
                       </span>
                     )}
+                    <RunRowActions
+                      name={r.name}
+                      canDelete={r.status !== "queued" && r.status !== "running"}
+                      onRename={async (n) => {
+                        await renameLinkCheckRun(r.id, n);
+                        loadRuns();
+                      }}
+                      onDelete={async () => {
+                        await deleteLinkCheckRun(r.id);
+                        loadRuns();
+                      }}
+                    />
                   </span>
                 </Link>
               </li>

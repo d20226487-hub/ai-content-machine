@@ -55,12 +55,47 @@ DEFAULT_TRANSLATE_PROMPT = (
     "explanation, no quotes, no markdown fences."
 )
 
+# The fix-links prompt powers the Link Checker's AI fix pass. It is given a
+# piece of content plus that row's EXPECTED links and the specific problems
+# the checker flagged, and must edit ONLY the links — three rules, nothing
+# else. The user message (built by ``build_fix_user_message``) carries the
+# content + expected list + flagged issues; this system prompt sets the
+# behavior.
+DEFAULT_FIX_LINKS_PROMPT = (
+    "You are a precise link-correction assistant for HTML / WordPress block "
+    "content. You are given a piece of content, the list of EXPECTED links "
+    "for this item, and the specific link problems detected. Fix ONLY the "
+    "hyperlinks. Apply exactly these three rules and nothing else:\n"
+    "1. MISSING expected link: if an expected link is absent from the "
+    "content, naturally integrate it into the most relevant existing "
+    "sentence using concise, contextually appropriate anchor text. Do not "
+    "add new sentences, paragraphs, or sections beyond the minimal anchor "
+    "needed.\n"
+    "2. TYPO / malformed link: if a link in the content is clearly a "
+    "misspelled or malformed version of one of the expected links, correct "
+    "it to match the expected link exactly.\n"
+    "3. HALLUCINATED link: if a link in the content does not correspond to "
+    "any expected link and is not a plausible typo of one (nothing in the "
+    "expected list resembles it), remove the link by unwrapping the anchor "
+    "and keeping its visible text.\n"
+    "Do not add, remove, retarget, or reword any link beyond these rules. "
+    "Do not change any non-link text, headings, attributes, formatting, or "
+    "block structure. Preserve all existing HTML / markup exactly except "
+    "for the specific link edits above. Return ONLY the corrected content — "
+    "no preamble, no explanation, no quotes, no markdown fences."
+)
+
 DEFAULT_BRAIN_PROMPTS: dict[str, dict[str, Any]] = {
     "translate": {
         "prompt": DEFAULT_TRANSLATE_PROMPT,
         "provider_code": None,  # falls back to first-enabled provider
         "model": None,  # falls back to provider's default_model
         "default_target_language": "ru",
+    },
+    "fix_links": {
+        "prompt": DEFAULT_FIX_LINKS_PROMPT,
+        "provider_code": None,  # falls back to first-enabled provider
+        "model": None,  # falls back to provider's default_model
     },
 }
 
@@ -249,6 +284,125 @@ async def translate_text(
 
     text = result.text.strip()
     # Strip stray markdown fences just in case the model added them.
+    if text.startswith("```") and text.endswith("```"):
+        lines = text.split("\n")
+        text = "\n".join(lines[1:-1]).strip()
+
+    return text, code, result.model
+
+
+async def save_fix_links_config(
+    db: AsyncSession,
+    *,
+    prompt: str,
+    provider_code: str | None,
+    model: str | None,
+    actor_id: int | None,
+) -> dict[str, Any]:
+    """Idempotent update of just the `fix_links` slice. Other brain keys are
+    preserved."""
+    raw = await get_setting(db, BRAIN_KEY)
+    current = raw if isinstance(raw, dict) else {}
+    current = dict(current)  # copy — `get_setting` may return cached ref
+    current["fix_links"] = {
+        "prompt": prompt.strip(),
+        "provider_code": (provider_code or None),
+        "model": (model or None),
+    }
+
+    stmt = (
+        pg_insert(AppSetting)
+        .values(key=BRAIN_KEY, value=current, updated_by_id=actor_id)
+        .on_conflict_do_update(
+            index_elements=["key"],
+            set_={"value": current, "updated_by_id": actor_id},
+        )
+    )
+    await db.execute(stmt)
+    await db.commit()
+    invalidate_setting(BRAIN_KEY)
+    return _merge_defaults(current)["fix_links"]
+
+
+def build_fix_user_message(
+    *, content: str, expected_links: list[str], violations: list[dict]
+) -> str:
+    """Assemble the user message for the fix-links prompt.
+
+    Embeds the EXPECTED links and the flagged problems so the model has the
+    full context the three rules need, then the content to rewrite. The
+    expected list is the single source of truth for the typo-vs-hallucination
+    decision (rule 2 vs rule 3)."""
+    exp = "\n".join(f"- {u}" for u in expected_links) or "(none)"
+    issue_lines: list[str] = []
+    for v in violations:
+        problem = v.get("problem")
+        link = v.get("link", "")
+        if problem == "omitted":
+            issue_lines.append(f"- MISSING expected link (should appear): {link}")
+        elif problem == "broken":
+            code = v.get("status_code")
+            tail = f" (HTTP {code})" if code else ""
+            issue_lines.append(
+                f"- BROKEN link in the content{tail} — fix if it's a typo of "
+                f"an expected link, otherwise leave it: {link}"
+            )
+        elif problem == "hallucinated":
+            issue_lines.append(
+                f"- UNEXPECTED link in the content — fix if it's a typo of an "
+                f"expected link, otherwise remove it: {link}"
+            )
+    issues = "\n".join(issue_lines) or "(none flagged)"
+    return (
+        "EXPECTED LINKS for this item:\n"
+        f"{exp}\n\n"
+        "PROBLEMS DETECTED:\n"
+        f"{issues}\n\n"
+        "CONTENT TO CORRECT (return the full corrected content):\n"
+        f"{content}"
+    )
+
+
+async def fix_links_text(
+    db: AsyncSession,
+    *,
+    content: str,
+    expected_links: list[str],
+    violations: list[dict],
+) -> tuple[str, str, str]:
+    """Run the configured fix-links prompt against ``content``.
+
+    Returns ``(fixed_text, provider_used_code, model_used)``. Raises
+    ``ProviderNotConfigured`` when no provider is enabled, or
+    ``ProviderError`` for any LLM-side failure (the caller surfaces it)."""
+    cfg = (await load_brain(db))["fix_links"]
+    code = cfg.get("provider_code") or await first_enabled_provider_code(db)
+    if not code:
+        raise ProviderNotConfigured(
+            "No AI provider is enabled. Configure one in Settings first."
+        )
+
+    provider = await get_provider(db, code)
+    model = cfg.get("model") or provider.default_model
+    if not model:
+        raise ProviderError(f"No model configured for provider '{code}'")
+
+    system = cfg.get("prompt") or DEFAULT_FIX_LINKS_PROMPT
+    user_msg = build_fix_user_message(
+        content=content, expected_links=expected_links, violations=violations
+    )
+
+    result = await provider.generate(
+        prompt=user_msg,
+        model=model,
+        params=GenerationParams(
+            temperature=0.1,
+            max_output_tokens=8192,
+            system=system,
+        ),
+    )
+
+    text = result.text.strip()
     if text.startswith("```") and text.endswith("```"):
         lines = text.split("\n")
         text = "\n".join(lines[1:-1]).strip()

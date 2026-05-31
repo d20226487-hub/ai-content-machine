@@ -20,6 +20,7 @@ from app.db.models.link_check_run import (
     LinkCheckRun,
     LinkCheckViolation,
 )
+from app.db.models.link_fix_run import LinkFixCell, LinkFixRun
 from app.db.models.media_upload import MediaUpload
 from app.db.models.prompt import Prompt, PromptVersion
 from app.db.models.provider import Provider
@@ -51,6 +52,8 @@ __all__ = [
     "LinkCheckCrawlTarget",
     "LinkCheckRun",
     "LinkCheckViolation",
+    "LinkFixCell",
+    "LinkFixRun",
     "MediaUpload",
     "Prompt",
     "PromptVersion",

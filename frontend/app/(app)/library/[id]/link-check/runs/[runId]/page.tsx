@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { use, useCallback, useEffect, useRef, useState } from "react";
 
 import { CellEditorModal } from "@/components/CellEditorModal";
 import { LinkCheckStatusChip } from "@/components/LinkCheckStatusChip";
+import { LinkFixModal, type FixTargetChoice } from "@/components/LinkFixModal";
 import { Pagination } from "@/components/Pagination";
 import { ApiError } from "@/lib/api";
 import { useT } from "@/lib/i18n-context";
@@ -17,6 +19,14 @@ import {
   type LinkProblem,
   type LinkViolation,
 } from "@/lib/linkCheck";
+import {
+  deleteLinkFixRun,
+  listLinkFixRuns,
+  renameLinkFixRun,
+  startLinkFix,
+  type LinkFixRun,
+} from "@/lib/linkFix";
+import { RunRowActions } from "@/components/RunRowActions";
 import type { BulkColumn } from "@/lib/types";
 
 const PAGE_SIZE = 25;
@@ -30,6 +40,16 @@ export default function LinkCheckRunPage({
   const tableId = Number(id);
   const rid = Number(runId);
   const { t } = useT();
+  const router = useRouter();
+
+  // Rows the user picked to fix with AI (persists across pages).
+  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
+  const [startingFix, setStartingFix] = useState(false);
+  const [fixError, setFixError] = useState<string | null>(null);
+  // Which fix was requested (rows scope). null = modal closed.
+  const [fixScope, setFixScope] = useState<{ rowIds: number[] | null } | null>(null);
+  // Correction runs launched from THIS check run (nested below).
+  const [fixRuns, setFixRuns] = useState<LinkFixRun[]>([]);
 
   const [run, setRun] = useState<LinkCheckRunDetail | null>(null);
   const [page, setPage] = useState(1);
@@ -43,6 +63,7 @@ export default function LinkCheckRunPage({
   const [filterStatus, setFilterStatus] = useState<number | "">("");
   const [qInput, setQInput] = useState("");
   const [q, setQ] = useState("");
+  const [qNegate, setQNegate] = useState(false);
   const stoppedRef = useRef(false);
 
   // Debounce the link search so each keystroke doesn't refetch.
@@ -54,7 +75,7 @@ export default function LinkCheckRunPage({
   // Any filter change resets to page 1.
   useEffect(() => {
     setPage(1);
-  }, [filterProblem, filterStatus, q]);
+  }, [filterProblem, filterStatus, q, qNegate]);
 
   const tick = useCallback(
     async (p: number) => {
@@ -63,6 +84,7 @@ export default function LinkCheckRunPage({
           problem: filterProblem || undefined,
           status_code: filterStatus === "" ? undefined : filterStatus,
           q: q || undefined,
+          q_negate: qNegate,
         });
         setRun(r);
         setError(null);
@@ -74,7 +96,7 @@ export default function LinkCheckRunPage({
         stoppedRef.current = true;
       }
     },
-    [rid, filterProblem, filterStatus, q],
+    [rid, filterProblem, filterStatus, q, qNegate],
   );
 
   // Poll while active; refetch immediately on page or filter change.
@@ -110,6 +132,32 @@ export default function LinkCheckRunPage({
       .catch(() => {});
   }, [tableId]);
   useEffect(() => loadCells(), [loadCells]);
+
+  // Load + poll the correction runs launched from this check run. Polling
+  // stops once none are active (queued/running).
+  useEffect(() => {
+    if (!Number.isFinite(rid) || !Number.isFinite(tableId)) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    async function loop() {
+      if (cancelled) return;
+      try {
+        const runs = await listLinkFixRuns(tableId, { sourceRunId: rid });
+        if (!cancelled) setFixRuns(runs);
+        const active = runs.some(
+          (r) => r.status === "queued" || r.status === "running",
+        );
+        if (!cancelled && active) timer = setTimeout(loop, 3000);
+      } catch {
+        /* non-fatal */
+      }
+    }
+    void loop();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [rid, tableId]);
 
   async function onCancel() {
     if (!run || cancelling) return;
@@ -157,6 +205,59 @@ export default function LinkCheckRunPage({
     columns.find((c) => c.id === colId)?.kind ?? "input";
 
   const isActive = run?.status === "queued" || run?.status === "running";
+
+  function toggleRow(rowId: number) {
+    setSelectedRows((cur) => {
+      const next = new Set(cur);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  }
+
+  async function startFix(rowIds: number[] | null, target: FixTargetChoice) {
+    if (!run || startingFix) return;
+    setStartingFix(true);
+    setFixError(null);
+    try {
+      const fix = await startLinkFix(tableId, {
+        source_run_id: run.id,
+        row_ids: rowIds,
+        // Only fix what the run page is currently showing.
+        problem: filterProblem || null,
+        status_code: filterStatus === "" ? null : filterStatus,
+        q: q || null,
+        q_negate: qNegate,
+        // Where corrected output goes.
+        target_column_id: target.kind === "existing" ? target.columnId : null,
+        new_column_name: target.kind === "new" ? target.name : null,
+      });
+      router.push(`/library/${tableId}/link-fix/runs/${fix.id}`);
+    } catch (e) {
+      setFixError(e instanceof ApiError ? e.message : String(e));
+      setStartingFix(false);
+      setFixScope(null);
+    }
+  }
+
+  // Fixing needs the expected-links context (typo vs hallucination) and a
+  // finished run with at least one fixable problem.
+  const fixableCount =
+    (run?.broken_count ?? 0) +
+    (run?.omitted_count ?? 0) +
+    (run?.hallucinated_count ?? 0);
+  const canFix =
+    !!run &&
+    !isActive &&
+    run.expected_column_ids.length > 0 &&
+    fixableCount > 0;
+  // Without expected columns there's nothing to fix typos against — surface
+  // why the fix buttons aren't offered.
+  const fixBlockedNoExpected =
+    !!run && !isActive && run.expected_column_ids.length === 0 && fixableCount > 0;
+  // A filter is narrowing the shown violations — the fix only touches those.
+  const filterActive =
+    filterProblem !== "" || filterStatus !== "" || q.trim().length > 0;
 
   return (
     <main className="mx-auto max-w-5xl px-5 py-6">
@@ -257,6 +358,107 @@ export default function LinkCheckRunPage({
             </p>
           )}
 
+          {fixError && (
+            <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
+              {fixError}
+            </p>
+          )}
+
+          {/* AI fix actions — only when the run finished with fixable problems
+              and an expected-links column gave us the context to fix against. */}
+          {canFix && (
+            <div className="mt-4 flex flex-wrap items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-sm dark:border-violet-900/40 dark:bg-violet-950/20">
+              <span className="text-violet-800 dark:text-violet-200">
+                {selectedRows.size > 0
+                  ? t("linkFix.selectedRows", { n: selectedRows.size })
+                  : filterActive
+                    ? t("linkFix.fixHintFiltered")
+                    : t("linkFix.fixHint")}
+              </span>
+              <div className="ml-auto flex items-center gap-2">
+                {selectedRows.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setFixScope({ rowIds: Array.from(selectedRows) })}
+                    disabled={startingFix}
+                    className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-60"
+                  >
+                    {t("linkFix.fixSelected", { n: selectedRows.size })}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setFixScope({ rowIds: null })}
+                  disabled={startingFix}
+                  className="rounded-md border border-violet-300 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-60 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-900/30"
+                >
+                  {filterActive ? t("linkFix.fixAllShown") : t("linkFix.fixAll")}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {fixBlockedNoExpected && (
+            <p className="mt-4 rounded-md bg-neutral-50 px-3 py-2 text-xs text-neutral-600 dark:bg-neutral-900 dark:text-neutral-400">
+              {t("linkFix.needExpected")}
+            </p>
+          )}
+
+          {/* Correction runs launched from this check run */}
+          {fixRuns.length > 0 && (
+            <section className="mt-5">
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                {t("linkFix.correctionsHeading")}
+              </h2>
+              <ul className="mt-2 divide-y divide-neutral-100 rounded-lg border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
+                {fixRuns.map((fr) => (
+                  <li key={fr.id}>
+                    <Link
+                      href={`/library/${tableId}/link-fix/runs/${fr.id}`}
+                      className="flex items-center justify-between gap-3 px-3 py-2 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-900"
+                    >
+                      <span className="min-w-0 truncate text-neutral-700 dark:text-neutral-300">
+                        {fr.name || t("linkFix.runLabel", { id: fr.id })}
+                        <span className="ml-2 text-xs text-neutral-400">
+                          {new Date(fr.created_at).toLocaleString()}
+                        </span>
+                      </span>
+                      <span className="flex shrink-0 items-center gap-2 text-xs">
+                        {fr.reverted_at && (
+                          <span className="text-amber-600 dark:text-amber-400">
+                            {t("linkFixRun.revertedBadge")}
+                          </span>
+                        )}
+                        <span className="text-neutral-500 dark:text-neutral-400">
+                          {fr.done}/{fr.total}
+                        </span>
+                        <LinkCheckStatusChip status={fr.status} />
+                        <RunRowActions
+                          name={fr.name}
+                          canDelete={
+                            fr.status !== "queued" && fr.status !== "running"
+                          }
+                          onRename={async (n) => {
+                            await renameLinkFixRun(fr.id, n);
+                            setFixRuns(
+                              await listLinkFixRuns(tableId, { sourceRunId: rid }),
+                            );
+                          }}
+                          onDelete={async () => {
+                            await deleteLinkFixRun(fr.id);
+                            setFixRuns(
+                              await listLinkFixRuns(tableId, { sourceRunId: rid }),
+                            );
+                          }}
+                        />
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
           {/* filter bar — shown once the run produced any rows */}
           {!isActive && producedRows(run) && (
             <div className="mt-5 flex flex-wrap items-center gap-2">
@@ -289,12 +491,20 @@ export default function LinkCheckRunPage({
                   ))}
                 </select>
               )}
+              <select
+                value={qNegate ? "not" : "has"}
+                onChange={(e) => setQNegate(e.target.value === "not")}
+                className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs dark:border-neutral-700 dark:bg-neutral-900"
+              >
+                <option value="has">{t("linkCheckRun.searchContains")}</option>
+                <option value="not">{t("linkCheckRun.searchNotContains")}</option>
+              </select>
               <input
                 type="text"
                 value={qInput}
                 onChange={(e) => setQInput(e.target.value)}
                 placeholder={t("linkCheckRun.searchPlaceholder")}
-                className="min-w-[12rem] flex-1 rounded-md border border-neutral-300 px-2 py-1.5 text-xs dark:border-neutral-700 dark:bg-neutral-900"
+                className="min-w-[10rem] flex-1 rounded-md border border-neutral-300 px-2 py-1.5 text-xs dark:border-neutral-700 dark:bg-neutral-900"
               />
             </div>
           )}
@@ -317,6 +527,7 @@ export default function LinkCheckRunPage({
                 <table className="w-full text-left text-sm">
                   <thead className="bg-neutral-50 text-xs uppercase tracking-wide text-neutral-500 dark:bg-neutral-900 dark:text-neutral-400">
                     <tr>
+                      {canFix && <th className="w-8 px-3 py-2" />}
                       <th className="px-3 py-2 font-medium">{t("linkCheckRun.colRow")}</th>
                       <th className="px-3 py-2 font-medium">{t("linkCheckRun.colColumn")}</th>
                       <th className="px-3 py-2 font-medium">{t("linkCheckRun.colProblem")}</th>
@@ -330,6 +541,19 @@ export default function LinkCheckRunPage({
                         key={`${v.row_id}:${v.column_id}:${v.problem}:${i}`}
                         className="align-top hover:bg-neutral-50 dark:hover:bg-neutral-900"
                       >
+                        {canFix && (
+                          <td className="px-3 py-2">
+                            {v.problem !== "ok" && (
+                              <input
+                                type="checkbox"
+                                checked={selectedRows.has(v.row_id)}
+                                onChange={() => toggleRow(v.row_id)}
+                                title={t("linkFix.selectRowHint")}
+                                className="h-3.5 w-3.5 rounded border-neutral-300 dark:border-neutral-600"
+                              />
+                            )}
+                          </td>
+                        )}
                         <td className="px-3 py-2 tabular-nums text-neutral-500">
                           #{v.row_position + 1}
                         </td>
@@ -374,6 +598,18 @@ export default function LinkCheckRunPage({
             </>
           )}
         </>
+      )}
+
+      {fixScope && (
+        <LinkFixModal
+          columns={columns}
+          count={
+            fixScope.rowIds ? fixScope.rowIds.length : (run?.total_violations ?? 0)
+          }
+          busy={startingFix}
+          onClose={() => setFixScope(null)}
+          onConfirm={(target) => void startFix(fixScope.rowIds, target)}
+        />
       )}
 
       {editing && (

@@ -33,6 +33,8 @@ from app.db.models import (
     FindReplaceRun,
     LinkCheckRun,
     LinkCheckViolation,
+    LinkFixCell,
+    LinkFixRun,
     User,
 )
 from app.db.session import get_db
@@ -61,11 +63,16 @@ from app.schemas.bulk import (
     LinkCheckRequest,
     LinkCheckRunDetail,
     LinkCheckRunRead,
+    LinkFixCellRead,
+    LinkFixRequest,
+    LinkFixRunDetail,
+    LinkFixRunRead,
     LinkViolationRead,
     MatchedCell,
     ReplacedCell,
     ReplaceRequest,
     RowRead,
+    RunRename,
     TableBulkMove,
     TableCreate,
     TableListItem,
@@ -84,6 +91,7 @@ from app.services.find_replace import (
 )
 from app.tasks.bulk_generation import generate_bulk_cell
 from app.tasks.link_check import resume_link_check, seed_link_check
+from app.tasks.link_fix import fix_cell as fix_cell_task, resume_link_fix
 
 router = APIRouter(
     prefix="/library", tags=["library"], dependencies=[Depends(get_current_user)]
@@ -1977,6 +1985,7 @@ async def get_gen_run(
     return BulkGenerationRunDetail(
         id=run.id,
         table_id=run.table_id,
+        name=run.name,
         status=run.status,  # type: ignore[arg-type]
         total=run.total,
         done=run.done,
@@ -2356,6 +2365,7 @@ async def get_replace_run(
     return FindReplaceRunDetail(
         id=run.id,
         table_id=run.table_id,
+        name=run.name,
         pattern=run.pattern,
         replacement=run.replacement,
         is_regex=run.is_regex,
@@ -2560,6 +2570,7 @@ async def get_link_check_run(
     problem: str | None = Query(default=None),
     status_code: int | None = Query(default=None),
     q: str | None = Query(default=None),
+    q_negate: bool = Query(default=False),
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LinkCheckRunDetail:
@@ -2568,7 +2579,7 @@ async def get_link_check_run(
 
     Optional filters (server-side so they hold across pages): ``problem``
     (omitted|hallucinated|broken|ok), ``status_code``, and ``q`` (link
-    substring)."""
+    substring; ``q_negate`` flips it to "does not contain")."""
     run = await _get_link_check_run_or_404(db, run_id)
     await _get_table_or_404(db, run.table_id, actor, level="read")
 
@@ -2578,7 +2589,12 @@ async def get_link_check_run(
     if status_code is not None:
         base = base.where(LinkCheckViolation.status_code == status_code)
     if q and q.strip():
-        base = base.where(LinkCheckViolation.link.ilike(f"%{q.strip()}%"))
+        pat = f"%{q.strip()}%"
+        base = base.where(
+            LinkCheckViolation.link.notilike(pat)
+            if q_negate
+            else LinkCheckViolation.link.ilike(pat)
+        )
 
     total = (
         await db.execute(
@@ -2622,6 +2638,7 @@ async def get_link_check_run(
     return LinkCheckRunDetail(
         id=run.id,
         table_id=run.table_id,
+        name=run.name,
         status=run.status,  # type: ignore[arg-type]
         column_ids=run.column_ids,
         expected_column_ids=run.expected_column_ids,
@@ -2687,6 +2704,500 @@ async def resume_link_check_run(
         return run
     resume_link_check.delay(run.id)
     return run
+
+
+# ---------- AI link fix (content tool) ----------
+
+_FIXABLE_PROBLEMS = ("omitted", "broken", "hallucinated")
+
+
+async def _get_link_fix_run_or_404(db: AsyncSession, run_id: int) -> LinkFixRun:
+    run = await db.get(LinkFixRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Link-fix run not found")
+    return run
+
+
+@router.post(
+    "/tables/{table_id}/link-fix",
+    response_model=LinkFixRunRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def start_link_fix(
+    table_id: int,
+    payload: LinkFixRequest,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LinkFixRun:
+    """Start an AI link-fix run off a completed check run.
+
+    Each flagged output cell (in the chosen rows, or all flagged rows) is
+    rewritten by the Brain ``fix_links`` prompt: integrate a missing expected
+    link, correct a typo'd one, remove a hallucinated one. The run is
+    revertable (before/after snapshots) and auto-re-checks the touched rows
+    when done.
+    """
+    await _get_table_or_404(db, table_id, actor, level="write")
+    source = await _get_link_check_run_or_404(db, payload.source_run_id)
+    if source.table_id != table_id:
+        raise HTTPException(status_code=404, detail="Link-check run not found")
+    if source.status != "done":
+        raise HTTPException(
+            status_code=400, detail="The check run must finish before fixing."
+        )
+    if not source.expected_column_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Fixing needs an expected-links column. Re-run the check with "
+                "‘Compare to expected links’ enabled."
+            ),
+        )
+
+    # Gather fixable violations from the source run, optionally row-scoped
+    # AND filtered to match whatever the run page is currently showing — so
+    # "Fix all" after filtering to e.g. hallucinated only touches those.
+    vq = select(LinkCheckViolation).where(
+        LinkCheckViolation.run_id == source.id,
+        LinkCheckViolation.problem.in_(_FIXABLE_PROBLEMS),
+    )
+    scope = {int(x) for x in payload.row_ids} if payload.row_ids else None
+    if scope is not None:
+        vq = vq.where(LinkCheckViolation.row_id.in_(scope))
+    if payload.problem in _FIXABLE_PROBLEMS:
+        vq = vq.where(LinkCheckViolation.problem == payload.problem)
+    if payload.status_code is not None:
+        vq = vq.where(LinkCheckViolation.status_code == payload.status_code)
+    if payload.q and payload.q.strip():
+        pat = f"%{payload.q.strip()}%"
+        vq = vq.where(
+            LinkCheckViolation.link.notilike(pat)
+            if payload.q_negate
+            else LinkCheckViolation.link.ilike(pat)
+        )
+    violations = (await db.execute(vq)).scalars().all()
+
+    # Group by (row, column) → the cell to fix.
+    grouped: dict[tuple[int, int], dict] = {}
+    for v in violations:
+        key = (v.row_id, v.column_id)
+        g = grouped.get(key)
+        if g is None:
+            g = {
+                "row_position": v.row_position,
+                "column_name": v.column_name,
+                "violations": [],
+            }
+            grouped[key] = g
+        g["violations"].append(
+            {
+                "problem": v.problem,
+                "link": v.link,
+                "detail_code": v.detail_code,
+                "status_code": v.status_code,
+            }
+        )
+
+    if not grouped:
+        raise HTTPException(
+            status_code=400, detail="Nothing to fix in the selected rows."
+        )
+
+    # Resolve where corrected content goes. new_column_name creates a fresh
+    # output column (original preserved); target_column_id reuses one; neither
+    # = overwrite the scanned source column (target_column_id stays NULL).
+    target_column_id: int | None = None
+    if payload.new_column_name and payload.new_column_name.strip():
+        next_pos = (
+            await db.execute(
+                select(func.coalesce(func.max(BulkTableColumn.position), -1) + 1)
+                .where(BulkTableColumn.table_id == table_id)
+            )
+        ).scalar_one()
+        new_col = BulkTableColumn(
+            table_id=table_id,
+            position=int(next_pos),
+            name=payload.new_column_name.strip()[:120],
+            kind="output",
+        )
+        db.add(new_col)
+        await db.flush()
+        target_column_id = new_col.id
+    elif payload.target_column_id is not None:
+        await _verify_columns_in_table(db, table_id, [payload.target_column_id])
+        target_column_id = payload.target_column_id
+
+    # Snapshot the original SOURCE content for each affected cell (the
+    # before/after display reads this; revert uses the worker's target
+    # snapshot).
+    row_ids = {r for (r, _c) in grouped}
+    col_ids = {c for (_r, c) in grouped}
+    value_map: dict[tuple[int, int], str | None] = {}
+    existing = (
+        (
+            await db.execute(
+                select(BulkTableCell).where(
+                    BulkTableCell.row_id.in_(row_ids),
+                    BulkTableCell.column_id.in_(col_ids),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for c in existing:
+        value_map[(c.row_id, c.column_id)] = c.value
+
+    run = LinkFixRun(
+        table_id=table_id,
+        source_run_id=source.id,
+        created_by_id=actor.id,
+        status="running",
+        target_column_id=target_column_id,
+        column_ids=list(source.column_ids or []),
+        expected_column_ids=list(source.expected_column_ids or []),
+        total=len(grouped),
+        started_at=datetime.now(timezone.utc),
+        last_progress_at=datetime.now(timezone.utc),
+    )
+    db.add(run)
+    await db.flush()  # run.id
+
+    cells: list[LinkFixCell] = []
+    for (rid, cid), g in grouped.items():
+        cells.append(
+            LinkFixCell(
+                run_id=run.id,
+                row_id=rid,
+                row_position=g["row_position"],
+                column_id=cid,
+                column_name=g["column_name"],
+                state="pending",
+                source_value=value_map.get((rid, cid)),
+                violations=g["violations"],
+            )
+        )
+    db.add_all(cells)
+    await db.commit()
+
+    cell_ids = [c.id for c in cells]
+    for cid in cell_ids:
+        fix_cell_task.delay(run.id, cid)
+
+    await db.refresh(run)
+    return run
+
+
+@router.get(
+    "/tables/{table_id}/link-fix-runs", response_model=list[LinkFixRunRead]
+)
+async def list_link_fix_runs(
+    table_id: int,
+    source_run_id: int | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[LinkFixRun]:
+    """Correction-run history for a table, newest first. Pass
+    ``source_run_id`` to list only the fixes launched from one check run
+    (the Link Checker run page nests them this way)."""
+    await _get_table_or_404(db, table_id, actor, level="read")
+    q = select(LinkFixRun).where(LinkFixRun.table_id == table_id)
+    if source_run_id is not None:
+        q = q.where(LinkFixRun.source_run_id == source_run_id)
+    runs = (
+        (
+            await db.execute(
+                q.order_by(LinkFixRun.created_at.desc()).limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return list(runs)
+
+
+@router.get("/link-fix-runs/{run_id}", response_model=LinkFixRunDetail)
+async def get_link_fix_run(
+    run_id: int,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=200),
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LinkFixRunDetail:
+    """Fix-run state + the per-cell before/after (paginated). The fix-run page
+    polls this every ~2s while active, then stops on a terminal status."""
+    run = await _get_link_fix_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="read")
+
+    total = (
+        await db.execute(
+            select(func.count())
+            .select_from(LinkFixCell)
+            .where(LinkFixCell.run_id == run_id)
+        )
+    ).scalar_one()
+    rows = (
+        (
+            await db.execute(
+                select(LinkFixCell)
+                .where(LinkFixCell.run_id == run_id)
+                .order_by(LinkFixCell.row_position, LinkFixCell.id)
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    return LinkFixRunDetail(
+        id=run.id,
+        table_id=run.table_id,
+        name=run.name,
+        source_run_id=run.source_run_id,
+        recheck_run_id=run.recheck_run_id,
+        target_column_id=run.target_column_id,
+        status=run.status,  # type: ignore[arg-type]
+        column_ids=run.column_ids,
+        expected_column_ids=run.expected_column_ids,
+        total=run.total,
+        done=run.done,
+        failed=run.failed,
+        skipped=run.skipped,
+        reverted_at=run.reverted_at,
+        error=run.error,
+        created_by_id=run.created_by_id,
+        created_at=run.created_at,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        created_by_name=await _resolve_creator_name(db, run.created_by_id),
+        page=page,
+        page_size=page_size,
+        total_cells=int(total),
+        items=[LinkFixCellRead.model_validate(c) for c in rows],
+    )
+
+
+@router.post("/link-fix-runs/{run_id}/cancel", response_model=LinkFixRunRead)
+async def cancel_link_fix_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LinkFixRun:
+    """Stop an in-flight fix. In-flight cells finish; pending cells are
+    skipped by the workers. No-op on terminal states."""
+    run = await _get_link_fix_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    if run.status in ("cancelled", "done", "failed"):
+        return run
+    run.status = "cancelled"
+    if run.finished_at is None:
+        run.finished_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(run)
+    return run
+
+
+@router.post("/link-fix-runs/{run_id}/resume", response_model=LinkFixRunRead)
+async def resume_link_fix_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LinkFixRun:
+    """Re-enqueue a stalled fix run's pending cells. No-op on terminal states."""
+    run = await _get_link_fix_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    if run.status in ("done", "failed", "cancelled"):
+        return run
+    resume_link_fix.delay(run.id)
+    return run
+
+
+@router.post("/link-fix-runs/{run_id}/revert", response_model=LinkFixRunRead)
+async def revert_link_fix_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LinkFixRun:
+    """Restore the pre-fix value of every cell this run changed.
+
+    Idempotent. A cell is skipped if its current value no longer matches the
+    value the fix wrote (someone edited or regenerated it since) — reverting
+    would otherwise discard that later change."""
+    run = await _get_link_fix_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    if run.reverted_at is not None:
+        return run
+
+    cells = (
+        (
+            await db.execute(
+                select(LinkFixCell).where(
+                    LinkFixCell.run_id == run_id,
+                    LinkFixCell.state == "done",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for fc in cells:
+        # Corrected content lives in the run's target column (or the source
+        # column when overwriting).
+        target_col = run.target_column_id or fc.column_id
+        current = (
+            await db.execute(
+                select(BulkTableCell.value).where(
+                    BulkTableCell.row_id == fc.row_id,
+                    BulkTableCell.column_id == target_col,
+                )
+            )
+        ).scalar_one_or_none()
+        # Only revert cells still holding exactly what the fix wrote.
+        if current == fc.new_value:
+            await db.execute(
+                update(BulkTableCell)
+                .where(
+                    BulkTableCell.row_id == fc.row_id,
+                    BulkTableCell.column_id == target_col,
+                )
+                .values(value=fc.old_value, translations=None)
+            )
+    run.reverted_at = datetime.now(timezone.utc)
+    await _bump_table_updated(db, run.table_id)
+    await db.commit()
+    await db.refresh(run)
+    return run
+
+
+def _norm_run_name(payload: RunRename) -> str | None:
+    n = (payload.name or "").strip()
+    return n or None
+
+
+@router.patch("/link-fix-runs/{run_id}", response_model=LinkFixRunRead)
+async def rename_link_fix_run(
+    run_id: int,
+    payload: RunRename,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LinkFixRun:
+    run = await _get_link_fix_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    run.name = _norm_run_name(payload)
+    await db.commit()
+    await db.refresh(run)
+    return run
+
+
+@router.delete("/link-fix-runs/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_link_fix_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    run = await _get_link_fix_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    if run.status in ("queued", "running"):
+        raise HTTPException(
+            status_code=409, detail="Cancel the run before deleting it."
+        )
+    await db.delete(run)  # cascades link_fix_cells
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch("/link-check-runs/{run_id}", response_model=LinkCheckRunRead)
+async def rename_link_check_run(
+    run_id: int,
+    payload: RunRename,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LinkCheckRun:
+    run = await _get_link_check_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    run.name = _norm_run_name(payload)
+    await db.commit()
+    await db.refresh(run)
+    return run
+
+
+@router.delete("/link-check-runs/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_link_check_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    run = await _get_link_check_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    if run.status in ("queued", "running"):
+        raise HTTPException(
+            status_code=409, detail="Cancel the run before deleting it."
+        )
+    await db.delete(run)  # cascades violations + crawl targets
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch("/replace-runs/{run_id}", response_model=FindReplaceRunRead)
+async def rename_replace_run(
+    run_id: int,
+    payload: RunRename,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FindReplaceRun:
+    run = await _get_replace_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    run.name = _norm_run_name(payload)
+    await db.commit()
+    await db.refresh(run)
+    return run
+
+
+@router.delete("/replace-runs/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_replace_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    run = await _get_replace_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    await db.delete(run)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch("/gen-runs/{run_id}", response_model=BulkGenerationRunRead)
+async def rename_gen_run(
+    run_id: int,
+    payload: RunRename,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BulkGenerationRun:
+    run = await _get_gen_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    run.name = _norm_run_name(payload)
+    await db.commit()
+    await db.refresh(run)
+    return run
+
+
+@router.delete("/gen-runs/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_gen_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    run = await _get_gen_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    if run.status in ("queued", "running"):
+        raise HTTPException(
+            status_code=409, detail="Cancel the run before deleting it."
+        )
+    await db.delete(run)  # cells.generation_run_id FK is SET NULL
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/tables/{table_id}/export.csv")

@@ -8,8 +8,15 @@ export interface TranslatePromptConfig {
   default_target_language: string;
 }
 
+export interface FixLinksPromptConfig {
+  prompt: string;
+  provider_code: string | null;
+  model: string | null;
+}
+
 export interface BrainPrompts {
   translate: TranslatePromptConfig;
+  fix_links: FixLinksPromptConfig;
 }
 
 export function getBrainPrompts(): Promise<BrainPrompts> {
@@ -20,6 +27,15 @@ export function updateTranslateConfig(
   payload: TranslatePromptConfig,
 ): Promise<TranslatePromptConfig> {
   return api<TranslatePromptConfig>("/brain/prompts/translate", {
+    method: "PUT",
+    body: payload,
+  });
+}
+
+export function updateFixLinksConfig(
+  payload: FixLinksPromptConfig,
+): Promise<FixLinksPromptConfig> {
+  return api<FixLinksPromptConfig>("/brain/prompts/fix-links", {
     method: "PUT",
     body: payload,
   });

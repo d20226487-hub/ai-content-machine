@@ -41,6 +41,7 @@ from app.schemas.publish import (
     BulkRunSummary,
     ByDomainStat,
     PublishMapping,
+    RunRename,
 )
 from app.tasks.publish_bulk import (
     publish_one_bulk_row as publish_one_bulk_row_task,
@@ -339,6 +340,24 @@ async def get_run(run_id: int, db: AsyncSession = Depends(get_db)) -> BulkRunDet
     run = await db.get(BulkPublishRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Not found")
+    return await _to_detail(db, run)
+
+
+@router.patch("/runs/{run_id}", response_model=BulkRunDetail)
+async def rename_run(
+    run_id: int,
+    payload: RunRename,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_role("admin", "manager")),
+) -> BulkRunDetail:
+    """Set/clear a run's display name. Blank → fall back to the id label."""
+    run = await db.get(BulkPublishRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    n = (payload.name or "").strip()
+    run.name = n or None
+    await db.commit()
+    await db.refresh(run)
     return await _to_detail(db, run)
 
 
@@ -792,6 +811,7 @@ def _to_summary(
 ) -> BulkRunSummary:
     return BulkRunSummary(
         id=run.id,
+        name=run.name,
         created_at=run.created_at,
         started_at=run.started_at,
         finished_at=run.finished_at,

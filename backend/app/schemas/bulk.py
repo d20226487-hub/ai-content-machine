@@ -216,6 +216,13 @@ class CsvImportRequest(BaseModel):
 
 # ----- Generation -----
 
+class RunRename(BaseModel):
+    """Body for renaming any tool run. Empty/blank clears the custom name
+    (UI falls back to the "<tool> #<id>" label)."""
+
+    name: str | None = Field(default=None, max_length=200)
+
+
 class RowRange(BaseModel):
     """A 1-based, inclusive ordinal row range (the visible '#' numbers in the
     grid, i.e. ordinal positions in the position-ordered row list — NOT the
@@ -322,6 +329,7 @@ class BulkGenerationRunRead(BaseModel):
 
     id: int
     table_id: int
+    name: str | None = None
     status: BulkGenerationRunStatus
     total: int
     done: int
@@ -397,6 +405,7 @@ class FindReplaceRunRead(BaseModel):
 
     id: int
     table_id: int
+    name: str | None = None
     pattern: str
     replacement: str
     is_regex: bool
@@ -490,6 +499,7 @@ class LinkCheckRunRead(BaseModel):
 
     id: int
     table_id: int
+    name: str | None = None
     status: LinkCheckStatus
     column_ids: list[int]
     expected_column_ids: list[int]
@@ -531,3 +541,91 @@ class LinkCheckRunDetail(LinkCheckRunRead):
     # populates the status-code filter dropdown.
     status_codes_present: list[int]
     items: list[LinkViolationRead]
+
+
+# ----- AI link fix (added in migration 0037) -----
+
+LinkFixStatus = Literal["queued", "running", "cancelled", "done", "failed"]
+
+
+class LinkFixRequest(BaseModel):
+    """Start an AI link-fix run off a completed check run.
+
+    ``row_ids`` empty/None = fix every flagged row; otherwise only those
+    rows. Only omitted / broken / hallucinated violations are fixable.
+
+    The optional filters mirror the run page's filter bar so "Fix all" sends
+    only what's currently shown (e.g. just the hallucinated links), not every
+    violation. Per cell, only the matching violations are handed to the AI."""
+
+    source_run_id: int
+    row_ids: list[int] | None = None
+    # Same filters as GET /link-check-runs/{id}.
+    problem: LinkProblem | None = None
+    status_code: int | None = None
+    q: str | None = None
+    # When true, ``q`` is a "does NOT contain" filter.
+    q_negate: bool = False
+    # Where corrected content goes. Provide an existing column id, OR a
+    # new_column_name to create one (keeps the original output intact). Both
+    # omitted = overwrite the scanned source column.
+    target_column_id: int | None = None
+    new_column_name: str | None = Field(default=None, max_length=120)
+
+
+class LinkFixRunRead(BaseModel):
+    """Run summary — counters + lifecycle. Polled by the fix-run page while
+    active, and used for the history list."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    table_id: int
+    name: str | None = None
+    source_run_id: int | None
+    recheck_run_id: int | None
+    target_column_id: int | None = None
+    status: LinkFixStatus
+    column_ids: list[int]
+    expected_column_ids: list[int]
+    total: int
+    done: int
+    failed: int
+    skipped: int
+    reverted_at: datetime | None = None
+    error: str | None = None
+    created_by_id: int | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class LinkFixViolationLite(BaseModel):
+    problem: LinkProblem
+    link: str
+    detail_code: str | None = None
+    status_code: int | None = None
+
+
+class LinkFixCellRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    row_id: int
+    row_position: int
+    column_id: int
+    column_name: str
+    state: Literal["pending", "done", "failed", "skipped"]
+    # Original source content (before); the corrected result (after).
+    source_value: str | None = None
+    old_value: str | None
+    new_value: str | None
+    violations: list[LinkFixViolationLite]
+    error: str | None = None
+
+
+class LinkFixRunDetail(LinkFixRunRead):
+    created_by_name: str | None = None
+    page: int
+    page_size: int
+    total_cells: int
+    items: list[LinkFixCellRead]

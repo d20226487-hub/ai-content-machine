@@ -24,6 +24,7 @@ export interface LinkCheckRequest {
 export interface LinkCheckRun {
   id: number;
   table_id: number;
+  name: string | null;
   status: LinkCheckStatus;
   column_ids: number[];
   expected_column_ids: number[];
@@ -67,6 +68,8 @@ export interface LinkViolationFilters {
   problem?: LinkProblem | "";
   status_code?: number | null;
   q?: string;
+  /** When true, `q` is a "does not contain" filter. */
+  q_negate?: boolean;
 }
 
 export function startLinkCheck(
@@ -97,7 +100,10 @@ export function getLinkCheckRun(
   });
   if (filters.problem) sp.set("problem", filters.problem);
   if (filters.status_code != null) sp.set("status_code", String(filters.status_code));
-  if (filters.q && filters.q.trim()) sp.set("q", filters.q.trim());
+  if (filters.q && filters.q.trim()) {
+    sp.set("q", filters.q.trim());
+    if (filters.q_negate) sp.set("q_negate", "true");
+  }
   return api<LinkCheckRunDetail>(
     `/library/link-check-runs/${runId}?${sp.toString()}`,
   );
@@ -113,4 +119,18 @@ export function resumeLinkCheckRun(runId: number): Promise<LinkCheckRun> {
   return api<LinkCheckRun>(`/library/link-check-runs/${runId}/resume`, {
     method: "POST",
   });
+}
+
+export function renameLinkCheckRun(
+  runId: number,
+  name: string | null,
+): Promise<LinkCheckRun> {
+  return api<LinkCheckRun>(`/library/link-check-runs/${runId}`, {
+    method: "PATCH",
+    body: { name },
+  });
+}
+
+export function deleteLinkCheckRun(runId: number): Promise<void> {
+  return api<void>(`/library/link-check-runs/${runId}`, { method: "DELETE" });
 }

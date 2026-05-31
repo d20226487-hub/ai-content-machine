@@ -52,6 +52,8 @@ class FindReplaceRun(Base):
 
     # 'applied' | 'reverted'
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="applied")
+    # Optional user-given label (NULL → UI shows a "<tool> #<id>" fallback).
+    name: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     # List of {row_id, column_id, old_value, old_status, new_value}. Drives
     # the before/after table on the run page AND the one-click revert.

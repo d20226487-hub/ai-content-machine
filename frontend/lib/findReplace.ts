@@ -34,6 +34,7 @@ export interface FindResponse {
 export interface FindReplaceRunRead {
   id: number;
   table_id: number;
+  name: string | null;
   pattern: string;
   replacement: string;
   is_regex: boolean;
@@ -125,4 +126,18 @@ export function revertReplaceRun(
   return api<FindReplaceRunRead>(`/library/replace-runs/${runId}/revert`, {
     method: "POST",
   });
+}
+
+export function renameReplaceRun(
+  runId: number,
+  name: string | null,
+): Promise<FindReplaceRunRead> {
+  return api<FindReplaceRunRead>(`/library/replace-runs/${runId}`, {
+    method: "PATCH",
+    body: { name },
+  });
+}
+
+export function deleteReplaceRun(runId: number): Promise<void> {
+  return api<void>(`/library/replace-runs/${runId}`, { method: "DELETE" });
 }

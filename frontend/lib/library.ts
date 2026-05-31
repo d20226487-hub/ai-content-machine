@@ -383,6 +383,7 @@ export type BulkGenerationRunStatus =
 export interface BulkGenerationRun {
   id: number;
   table_id: number;
+  name: string | null;
   status: BulkGenerationRunStatus;
   total: number;
   done: number;
@@ -422,6 +423,20 @@ export function cancelGenerationRun(runId: number): Promise<BulkGenerationRun> {
   return api<BulkGenerationRun>(`/library/gen-runs/${runId}/cancel`, {
     method: "POST",
   });
+}
+
+export function renameGenerationRun(
+  runId: number,
+  name: string | null,
+): Promise<BulkGenerationRun> {
+  return api<BulkGenerationRun>(`/library/gen-runs/${runId}`, {
+    method: "PATCH",
+    body: { name },
+  });
+}
+
+export function deleteGenerationRun(runId: number): Promise<void> {
+  return api<void>(`/library/gen-runs/${runId}`, { method: "DELETE" });
 }
 
 // ----- CSV -----

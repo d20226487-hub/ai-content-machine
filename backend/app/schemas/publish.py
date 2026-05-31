@@ -112,10 +112,17 @@ class BulkPublishRequest(BaseModel):
         return self
 
 
+class RunRename(BaseModel):
+    """Body for renaming a bulk publish run. Blank clears the custom name."""
+
+    name: str | None = Field(default=None, max_length=200)
+
+
 class BulkRunSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    name: str | None = None
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None

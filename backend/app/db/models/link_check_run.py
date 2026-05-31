@@ -41,6 +41,8 @@ class LinkCheckRun(Base):
 
     # queued → running → (cancelled | done | failed)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    # Optional user-given label (NULL → UI shows a "<tool> #<id>" fallback).
+    name: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     # Output columns to scan.
     column_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
@@ -57,6 +59,9 @@ class LinkCheckRun(Base):
     # When crawling, also record healthy links (2xx/3xx) as rows so the
     # results table can show a full per-link status inventory.
     include_ok: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Optional row scope (NULL = all rows). The auto re-check after an AI fix
+    # run sets this so it re-scans only the rows that were touched.
+    row_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
     # Crawl progress: total unique links to fetch, and how many done.
     total_links: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

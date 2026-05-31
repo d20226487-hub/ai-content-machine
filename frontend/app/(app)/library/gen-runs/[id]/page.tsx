@@ -1,13 +1,17 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { use, useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@/lib/api";
+import { RunRowActions } from "@/components/RunRowActions";
 import { useT } from "@/lib/i18n-context";
 import {
   cancelGenerationRun,
+  deleteGenerationRun,
   getGenerationRun,
+  renameGenerationRun,
   type BulkGenerationRunDetail,
 } from "@/lib/library";
 
@@ -32,6 +36,7 @@ export default function GenerationRunDetailPage({
   const { id } = use(params);
   const runId = Number(id);
   const { t } = useT();
+  const router = useRouter();
   const [run, setRun] = useState<BulkGenerationRunDetail | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
@@ -106,7 +111,23 @@ export default function GenerationRunDetailPage({
         </p>
       )}
 
-      {run && <RunBody run={run} cancelling={cancelling} onCancel={onCancel} />}
+      {run && (
+        <RunBody
+          run={run}
+          cancelling={cancelling}
+          onCancel={onCancel}
+          onRename={async (name) => {
+            await renameGenerationRun(runId, name);
+            stoppedRef.current = false;
+            await tick();
+          }}
+          onDelete={async () => {
+            const back = run.table_id;
+            await deleteGenerationRun(runId);
+            router.push(`/library/${back}`);
+          }}
+        />
+      )}
     </main>
   );
 }
@@ -115,10 +136,14 @@ function RunBody({
   run,
   cancelling,
   onCancel,
+  onRename,
+  onDelete,
 }: {
   run: BulkGenerationRunDetail;
   cancelling: boolean;
   onCancel: () => void;
+  onRename: (name: string | null) => Promise<void>;
+  onDelete: () => Promise<void>;
 }) {
   const { t } = useT();
   const accounted = run.done + run.failed + run.skipped;
@@ -136,7 +161,7 @@ function RunBody({
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
-            {t("genRun.title", { id: run.id })}
+            {run.name || t("genRun.title", { id: run.id })}
           </h1>
           <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
             {t("genRun.meta", {
@@ -157,6 +182,12 @@ function RunBody({
               {cancelling ? t("common.loading") : t("genRun.cancel")}
             </button>
           )}
+          <RunRowActions
+            name={run.name}
+            canDelete={!isActive}
+            onRename={onRename}
+            onDelete={onDelete}
+          />
         </div>
       </header>
 
