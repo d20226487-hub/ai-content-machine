@@ -234,20 +234,48 @@ Both modes have a way to test locally without touching production:
 
 ## Subsequent deploys
 
+Use the clean-sync deploy script — **do not** just `git pull`:
+
 ```bash
-git pull
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+./scripts/deploy.sh
 ```
 
-That's the whole story. Migrations run automatically before `api` and
-`worker` accept connections. Frontend is rebuilt with the new
-`ACM_PUBLIC_API_URL` build arg if it changed. Caddy keeps its volume so
-certs persist across deploys.
+It forces the working tree to match `origin/main` (`git reset --hard`),
+removes orphaned untracked files from the `frontend/` and `backend/` build
+contexts (`git clean -fd`), then runs the same `up -d --build`. Migrations run
+automatically before `api` and `worker` accept connections; the frontend is
+rebuilt with the current `ACM_PUBLIC_API_URL` build arg; Caddy keeps its
+volume so certs persist.
 
-If you only changed one service, you can save build time:
+> **Why not a plain `git pull`?** The web image is built from `./frontend`
+> with `COPY . .`, so Docker bakes in whatever is on disk. `git pull` updates
+> tracked files but never deletes a file that was *removed upstream* if a
+> stale untracked copy is sitting on the server. That orphan then gets
+> compiled by `next build` against the new code around it and fails the build
+> (see Troubleshooting → "Build fails on a component that was deleted
+> upstream"). `git reset --hard` + `git clean -fd` makes that impossible.
+> `clean` uses no `-x`, so gitignored `node_modules` / `.next` / `.env` are
+> preserved.
+
+If you only changed one service, pass it through to save build time:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build api worker
+./scripts/deploy.sh api worker
+```
+
+Traefik-fronted deploys add the overlay via an env var:
+
+```bash
+COMPOSE_FILES="docker-compose.yml docker-compose.prod.yml docker-compose.traefik.yml" \
+  ./scripts/deploy.sh
+```
+
+The equivalent by hand, if you'd rather not use the script:
+
+```bash
+git fetch origin main && git reset --hard origin/main
+git clean -fd -- frontend backend
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
 ## Backups
@@ -375,6 +403,22 @@ renamed any duplicates that existed before the upgrade — review
 **A test in `test_publish_state_machine.py` fails** — should not happen on
 a clean checkout; if it does, your image is probably stale. Rebuild:
 `docker compose -f docker-compose.yml -f docker-compose.prod.yml build api`.
+
+**Build fails on a component that was deleted upstream** — e.g.
+`next build` errors in `./components/SavedGenerationsModal.tsx` (or any file
+you can confirm is gone from the repo with `git cat-file -e
+HEAD:frontend/components/<name>` → "NOT IN HEAD"). The cause is a stale
+**untracked** copy of a deleted file lingering in the server's checkout: a
+plain `git pull` won't remove it, and `COPY . .` then bakes it into the web
+image where it's compiled against the newer code and fails type-checking.
+Fix by deploying clean — `./scripts/deploy.sh` (or the manual `git reset
+--hard origin/main && git clean -fd -- frontend backend` shown under
+"Subsequent deploys") — then rebuild with `--build`. To clear a Docker layer
+cache that may also hold the orphan, add `--no-cache`:
+`docker compose -f docker-compose.yml -f docker-compose.prod.yml build --no-cache web`.
+Known files removed in recent revisions that may still be orphaned on an
+old checkout: `SavedGenerationsModal.tsx`, `TestPromptModal.tsx`,
+`domains/DomainFolderSidebar.tsx`, `CategoryTree.tsx`, `ManageTagsModal.tsx`.
 
 ## Rolling back
 
