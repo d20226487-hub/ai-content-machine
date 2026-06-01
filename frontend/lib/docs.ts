@@ -50,6 +50,26 @@ export const DOC_ARTICLES: DocArticle[] = [
     roles: ["admin", "manager", "content_generator"],
   },
   {
+    slug: "bulk-tools",
+    titleEn: "Bulk: content tools",
+    titleRu: "Bulk: инструменты контента",
+    summaryEn:
+      "Find & Replace, Link Checker (+ AI fix), and Structure & Formatting — table-wide tools under the grid.",
+    summaryRu:
+      "Найти и заменить, Проверка ссылок (+ ИИ-исправление) и Структура и форматирование — инструменты по всей таблице.",
+    roles: ["admin", "manager", "content_generator"],
+  },
+  {
+    slug: "translate",
+    titleEn: "Translate content",
+    titleRu: "Перевод контента",
+    summaryEn:
+      "Translate bulk-table cells and other results in place; language picker, caching, Brain config.",
+    summaryRu:
+      "Перевод ячеек bulk-таблиц и других результатов на месте: выбор языка, кэш, настройка в «Мозге».",
+    roles: ["admin", "manager", "content_generator"],
+  },
+  {
     slug: "saved-generations",
     titleEn: "Saved generations",
     titleRu: "Сохранённые генерации",
@@ -105,12 +125,12 @@ export const DOC_ARTICLES: DocArticle[] = [
   },
   {
     slug: "settings",
-    titleEn: "Settings: LLM provider keys",
-    titleRu: "Настройки: ключи LLM-провайдеров",
+    titleEn: "Settings: providers, pricing, backups, Brain",
+    titleRu: "Настройки: провайдеры, цены, бэкапы, Мозг",
     summaryEn:
-      "Enabling providers, storing API keys, choosing models, tuning rate limits.",
+      "Tabbed settings — provider keys & limits, publishing defaults, token pricing, DB backups, trash retention, Brain prompts.",
     summaryRu:
-      "Включение провайдеров, хранение API-ключей, выбор моделей, настройка лимитов.",
+      "Вкладки настроек: ключи и лимиты провайдеров, дефолты публикации, цены токенов, бэкапы базы, корзина, промпты «Мозга».",
     roles: ["admin"],
   },
 ];

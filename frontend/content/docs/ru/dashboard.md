@@ -15,7 +15,7 @@
 | Publish | `/publish` | admin, manager | публикация в WordPress или Custom CMS |
 | Users | `/users` | admin, manager | управление пользователями |
 | Errors | `/errors` | admin, manager | журнал ошибок |
-| Settings | `/settings` | admin | ключи LLM-провайдеров и лимиты |
+| Settings | `/settings` | admin | провайдеры, цены, бэкапы, корзина, «Мозг» (вкладки) |
 | Docs | `/docs` | всем | эта документация |
 
 Если у Вас нет доступа к разделу — пункт меню просто не отображается.
