@@ -8,6 +8,7 @@ import { CellEditorModal } from "@/components/CellEditorModal";
 import { LinkCheckStatusChip } from "@/components/LinkCheckStatusChip";
 import { LinkFixModal, type FixTargetChoice } from "@/components/LinkFixModal";
 import { Pagination } from "@/components/Pagination";
+import { ToolBreadcrumb } from "@/components/ToolBreadcrumb";
 import { ApiError } from "@/lib/api";
 import { useT } from "@/lib/i18n-context";
 import { getTable, upsertCells } from "@/lib/library";
@@ -17,6 +18,7 @@ import {
   resumeLinkCheckRun,
   type LinkCheckRunDetail,
   type LinkProblem,
+  type LinkResolution,
   type LinkViolation,
 } from "@/lib/linkCheck";
 import {
@@ -61,6 +63,9 @@ export default function LinkCheckRunPage({
   const [editing, setEditing] = useState<LinkViolation | null>(null);
   const [filterProblem, setFilterProblem] = useState<LinkProblem | "">("");
   const [filterStatus, setFilterStatus] = useState<number | "">("");
+  const [filterResolution, setFilterResolution] = useState<
+    LinkResolution | "untouched" | ""
+  >("");
   const [qInput, setQInput] = useState("");
   const [q, setQ] = useState("");
   const [qNegate, setQNegate] = useState(false);
@@ -75,7 +80,7 @@ export default function LinkCheckRunPage({
   // Any filter change resets to page 1.
   useEffect(() => {
     setPage(1);
-  }, [filterProblem, filterStatus, q, qNegate]);
+  }, [filterProblem, filterStatus, filterResolution, q, qNegate]);
 
   const tick = useCallback(
     async (p: number) => {
@@ -83,6 +88,7 @@ export default function LinkCheckRunPage({
         const r = await getLinkCheckRun(rid, p, PAGE_SIZE, {
           problem: filterProblem || undefined,
           status_code: filterStatus === "" ? undefined : filterStatus,
+          resolution: filterResolution || undefined,
           q: q || undefined,
           q_negate: qNegate,
         });
@@ -96,7 +102,7 @@ export default function LinkCheckRunPage({
         stoppedRef.current = true;
       }
     },
-    [rid, filterProblem, filterStatus, q, qNegate],
+    [rid, filterProblem, filterStatus, filterResolution, q, qNegate],
   );
 
   // Poll while active; refetch immediately on page or filter change.
@@ -257,30 +263,27 @@ export default function LinkCheckRunPage({
     !!run && !isActive && run.expected_column_ids.length === 0 && fixableCount > 0;
   // A filter is narrowing the shown violations — the fix only touches those.
   const filterActive =
-    filterProblem !== "" || filterStatus !== "" || q.trim().length > 0;
+    filterProblem !== "" ||
+    filterStatus !== "" ||
+    filterResolution !== "" ||
+    q.trim().length > 0;
 
-  // (row:col) cells already corrected by an applied fix run — their
-  // violations render struck-through.
-  const fixedSet = new Set(
-    (run?.fixed_cells ?? []).map((f) => `${f.row_id}:${f.column_id}`),
-  );
+  // The in-place re-verify can stamp violations; show the Solved/Unsolved/
+  // Untouched filter once any correction run exists for this check.
+  const hasResolution = fixRuns.length > 0;
 
   return (
     <main className="mx-auto max-w-5xl px-5 py-6">
-      <div className="mb-4 flex items-center gap-4">
-        <Link
-          href={`/library/${tableId}/link-check`}
-          className="text-sm text-neutral-600 hover:underline dark:text-neutral-400"
-        >
-          {t("linkCheckRun.backToTool")}
-        </Link>
-        <Link
-          href={`/library/${tableId}`}
-          className="text-sm text-neutral-600 hover:underline dark:text-neutral-400"
-        >
-          {t("linkCheckRun.backToTable")}
-        </Link>
-      </div>
+      <ToolBreadcrumb
+        tableId={tableId}
+        trail={[
+          {
+            label: t("linkCheck.title"),
+            href: `/library/${tableId}/link-check`,
+          },
+          { label: run?.name ?? t("breadcrumb.run", { id: rid }) },
+        ]}
+      />
 
       {error && (
         <p className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
@@ -413,19 +416,40 @@ export default function LinkCheckRunPage({
           {/* filter bar — shown once the run produced any rows */}
           {!isActive && producedRows(run) && (
             <div className="mt-5 flex flex-wrap items-center gap-2">
-              <select
-                value={filterProblem}
-                onChange={(e) => setFilterProblem(e.target.value as LinkProblem | "")}
-                className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs dark:border-neutral-700 dark:bg-neutral-900"
-              >
-                <option value="">{t("linkCheckRun.filterAllProblems")}</option>
-                <option value="broken">{t("linkCheckRun.broken")}</option>
-                <option value="omitted">{t("linkCheckRun.omitted")}</option>
-                <option value="hallucinated">{t("linkCheckRun.hallucinated")}</option>
-                {run.include_ok && (
-                  <option value="ok">{t("linkCheckRun.ok")}</option>
-                )}
-              </select>
+              {/* The problem filter only makes sense when juxtapose ran — a
+                  crawl-only (status-codes) run has just broken/ok, which the
+                  status-code filter already covers. */}
+              {run.check_juxtapose && (
+                <select
+                  value={filterProblem}
+                  onChange={(e) => setFilterProblem(e.target.value as LinkProblem | "")}
+                  className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs dark:border-neutral-700 dark:bg-neutral-900"
+                >
+                  <option value="">{t("linkCheckRun.filterAllProblems")}</option>
+                  <option value="broken">{t("linkCheckRun.broken")}</option>
+                  <option value="omitted">{t("linkCheckRun.omitted")}</option>
+                  <option value="hallucinated">{t("linkCheckRun.hallucinated")}</option>
+                  {run.include_ok && (
+                    <option value="ok">{t("linkCheckRun.ok")}</option>
+                  )}
+                </select>
+              )}
+              {hasResolution && (
+                <select
+                  value={filterResolution}
+                  onChange={(e) =>
+                    setFilterResolution(
+                      e.target.value as LinkResolution | "untouched" | "",
+                    )
+                  }
+                  className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs dark:border-neutral-700 dark:bg-neutral-900"
+                >
+                  <option value="">{t("linkCheckRun.filterAllResolutions")}</option>
+                  <option value="solved">{t("linkCheckRun.resSolved")}</option>
+                  <option value="unsolved">{t("linkCheckRun.resUnsolved")}</option>
+                  <option value="untouched">{t("linkCheckRun.resUntouched")}</option>
+                </select>
+              )}
               {run.status_codes_present.length > 0 && (
                 <select
                   value={filterStatus}
@@ -463,7 +487,7 @@ export default function LinkCheckRunPage({
           {/* violations */}
           {run.total_violations === 0 ? (
             !isActive &&
-            (anyFilterActive(filterProblem, filterStatus, q) ? (
+            (anyFilterActive(filterProblem, filterStatus, filterResolution, q) ? (
               <p className="mt-4 rounded-md bg-neutral-50 px-4 py-3 text-sm text-neutral-600 dark:bg-neutral-900 dark:text-neutral-400">
                 {t("linkCheckRun.noMatches")}
               </p>
@@ -488,7 +512,7 @@ export default function LinkCheckRunPage({
                   </thead>
                   <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
                     {run.items.map((v, i) => {
-                      const solved = fixedSet.has(`${v.row_id}:${v.column_id}`);
+                      const solved = v.resolution === "solved";
                       return (
                       <tr
                         key={`${v.row_id}:${v.column_id}:${v.problem}:${i}`}
@@ -717,9 +741,12 @@ function producedRows(run: LinkCheckRunDetail): boolean {
 function anyFilterActive(
   problem: LinkProblem | "",
   status: number | "",
+  resolution: LinkResolution | "untouched" | "",
   q: string,
 ): boolean {
-  return problem !== "" || status !== "" || q.trim().length > 0;
+  return (
+    problem !== "" || status !== "" || resolution !== "" || q.trim().length > 0
+  );
 }
 
 function Counter({

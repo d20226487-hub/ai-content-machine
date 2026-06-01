@@ -7,9 +7,10 @@ import { Modal } from "@/components/Modal";
 import { TranslationPanel } from "@/components/TranslationPanel";
 import { translateCell } from "@/lib/brain";
 import { useT } from "@/lib/i18n-context";
+import type { UnifiedSegment } from "@/lib/linkFix";
 import type { CellTranslation } from "@/lib/types";
 
-type Mode = "edit" | "preview";
+type Mode = "edit" | "preview" | "changes";
 
 /**
  * Translation context — set only for output cells with a saved value.
@@ -42,6 +43,9 @@ interface Props {
   defaultMode?: Mode;
   /** Provided only for output cells with a saved value. */
   translation?: TranslationContext;
+  /** When set (cell corrected by an AI link-fix), enables a "Changes" view
+   *  highlighting only the spans that changed. Opens there by default. */
+  diff?: UnifiedSegment[];
 }
 
 export function CellEditorModal({
@@ -51,9 +55,11 @@ export function CellEditorModal({
   onClose,
   defaultMode = "edit",
   translation,
+  diff,
 }: Props) {
   const { t } = useT();
-  const [mode, setMode] = useState<Mode>(defaultMode);
+  const hasDiff = !!diff && diff.length > 0;
+  const [mode, setMode] = useState<Mode>(hasDiff ? "changes" : defaultMode);
   const [draft, setDraft] = useState(initialValue);
   const [saving, setSaving] = useState(false);
   const [translateOpen, setTranslateOpen] = useState(false);
@@ -144,6 +150,20 @@ export function CellEditorModal({
               >
                 {t("cellEditor.preview")}
               </button>
+              {hasDiff && (
+                <button
+                  type="button"
+                  onClick={() => setMode("changes")}
+                  className={
+                    "rounded px-3 py-1 font-medium " +
+                    (mode === "changes"
+                      ? "bg-green-600 text-white dark:bg-green-500 dark:text-neutral-900"
+                      : "text-green-700 hover:text-green-900 dark:text-green-400 dark:hover:text-green-200")
+                  }
+                >
+                  {t("cellEditor.changes")}
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -185,7 +205,34 @@ export function CellEditorModal({
            *  HtmlViewer toolbar already exposes a Raw view, and editing the
            *  source while a translation hangs next to it is more confusing
            *  than helpful. Users who want to edit close the panel first. */}
-          {mode === "edit" && !translateOpen ? (
+          {mode === "changes" && !translateOpen && hasDiff ? (
+            <div className="h-[28rem] overflow-auto rounded-md border border-neutral-300 bg-white p-3 dark:border-neutral-700 dark:bg-neutral-950">
+              <p className="mb-2 text-[11px] text-neutral-500 dark:text-neutral-400">
+                {t("cellEditor.changesHint")}
+              </p>
+              <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-neutral-700 dark:text-neutral-300">
+                {diff!.map((s, i) =>
+                  s.kind === "add" ? (
+                    <mark
+                      key={i}
+                      className="bg-green-100 text-green-900 dark:bg-green-900/40 dark:text-green-200"
+                    >
+                      {s.text}
+                    </mark>
+                  ) : s.kind === "del" ? (
+                    <mark
+                      key={i}
+                      className="bg-red-100 text-red-800 line-through dark:bg-red-950/50 dark:text-red-300"
+                    >
+                      {s.text}
+                    </mark>
+                  ) : (
+                    <span key={i}>{s.text}</span>
+                  ),
+                )}
+              </pre>
+            </div>
+          ) : mode === "edit" && !translateOpen ? (
             <textarea
               autoFocus
               value={draft}

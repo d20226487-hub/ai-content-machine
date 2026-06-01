@@ -1,10 +1,10 @@
 "use client";
 
-import Link from "next/link";
 import { use, useCallback, useEffect, useState } from "react";
 
 import { CellEditorModal } from "@/components/CellEditorModal";
 import { Pagination } from "@/components/Pagination";
+import { ToolBreadcrumb } from "@/components/ToolBreadcrumb";
 import { ApiError } from "@/lib/api";
 import {
   getReplaceRun,
@@ -95,20 +95,16 @@ export default function ReplaceRunPage({
 
   return (
     <main className="mx-auto max-w-6xl px-5 py-6">
-      <div className="mb-4 flex items-center gap-4">
-        <Link
-          href={`/library/${tableId}/find-replace`}
-          className="text-sm text-neutral-600 hover:underline dark:text-neutral-400"
-        >
-          {t("replaceRun.backToTool")}
-        </Link>
-        <Link
-          href={`/library/${tableId}`}
-          className="text-sm text-neutral-600 hover:underline dark:text-neutral-400"
-        >
-          {t("replaceRun.backToTable")}
-        </Link>
-      </div>
+      <ToolBreadcrumb
+        tableId={tableId}
+        trail={[
+          {
+            label: t("findReplace.title"),
+            href: `/library/${tableId}/find-replace`,
+          },
+          { label: run?.name ?? t("breadcrumb.run", { id: rid }) },
+        ]}
+      />
 
       {error && (
         <p className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">

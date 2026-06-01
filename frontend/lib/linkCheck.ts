@@ -9,6 +9,8 @@ export type LinkCheckStatus =
   | "done"
   | "failed";
 export type LinkProblem = "omitted" | "hallucinated" | "broken" | "ok";
+/** In-place AI re-verify outcome. null = untouched (never fixed). */
+export type LinkResolution = "solved" | "unsolved";
 
 export interface LinkCheckRequest {
   /** Output columns to scan (at least one). */
@@ -53,11 +55,8 @@ export interface LinkViolation {
   link: string;
   detail_code: string | null;
   status_code: number | null;
-}
-
-export interface FixedCellRef {
-  row_id: number;
-  column_id: number;
+  /** null = untouched; set by the in-place re-verify after an AI fix. */
+  resolution: LinkResolution | null;
 }
 
 export interface LinkCheckRunDetail extends LinkCheckRun {
@@ -66,8 +65,6 @@ export interface LinkCheckRunDetail extends LinkCheckRun {
   page_size: number;
   total_violations: number;
   status_codes_present: number[];
-  /** (row, column) cells corrected by an applied fix run — struck through. */
-  fixed_cells: FixedCellRef[];
   items: LinkViolation[];
 }
 
@@ -77,6 +74,8 @@ export interface LinkViolationFilters {
   q?: string;
   /** When true, `q` is a "does not contain" filter. */
   q_negate?: boolean;
+  /** solved | unsolved | untouched */
+  resolution?: LinkResolution | "untouched" | "";
 }
 
 export function startLinkCheck(
@@ -111,6 +110,7 @@ export function getLinkCheckRun(
     sp.set("q", filters.q.trim());
     if (filters.q_negate) sp.set("q_negate", "true");
   }
+  if (filters.resolution) sp.set("resolution", filters.resolution);
   return api<LinkCheckRunDetail>(
     `/library/link-check-runs/${runId}?${sp.toString()}`,
   );

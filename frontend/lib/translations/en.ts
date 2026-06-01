@@ -734,6 +734,9 @@ export const en = {
   // cell editor
   "cellEditor.edit": "Edit",
   "cellEditor.preview": "Preview",
+  "cellEditor.changes": "Changes",
+  "cellEditor.changesHint":
+    "Green = links added or changed by the AI fix; red strikethrough = removed.",
   "cellEditor.empty": "Cell is empty",
   "cellEditor.unsavedChanges": "Unsaved changes",
   "cellEditor.noChanges": "No changes",
@@ -870,6 +873,10 @@ export const en = {
   "saved.onlyYours": "Only yours are visible here.",
   "saved.empty": "You haven't saved any generations yet. Click Save on a result to keep it.",
   "saved.confirmDelete": "Delete \"{name}\"? This cannot be undone.",
+  "saved.searchPlaceholder": "Search by name or prompt…",
+  "saved.noMatches": "No saved generations match your search.",
+  "saved.backToCreate": "← Back to generator",
+  "saved.open": "Open",
 
   // publish to domain modal
   "pubMod.title": "Publish to a connected site",
@@ -1519,6 +1526,11 @@ export const en = {
   "tools.linkCheck.desc":
     "Find omitted, invented, or broken (404) links in generated content.",
 
+  // breadcrumbs (back to table › tool › run)
+  "breadcrumb.table": "Back to table",
+  "breadcrumb.run": "Run #{id}",
+  "breadcrumb.fix": "AI fix #{id}",
+
   "linkCheck.backToTable": "← Back to table",
   "linkCheck.title": "Link checker",
   "linkCheck.onTable": "On table “{name}”",
@@ -1572,6 +1584,10 @@ export const en = {
   "linkCheckRun.fix": "Fix",
   "linkCheckRun.filterAllProblems": "All problems",
   "linkCheckRun.filterAllCodes": "All status codes",
+  "linkCheckRun.filterAllResolutions": "All (fixed or not)",
+  "linkCheckRun.resSolved": "Solved",
+  "linkCheckRun.resUnsolved": "Unsolved",
+  "linkCheckRun.resUntouched": "Untouched",
   "linkCheckRun.searchPlaceholder": "Search links…",
   "linkCheckRun.searchContains": "contains",
   "linkCheckRun.searchNotContains": "does not contain",
@@ -1627,7 +1643,7 @@ export const en = {
   "linkFixRun.failed": "Failed",
   "linkFixRun.skipped": "Skipped",
   "linkFixRun.total": "Total",
-  "linkFixRun.viewRecheck": "View re-check of the fixed rows →",
+  "linkFixRun.viewRecheck": "See what's now Solved / Unsolved on the check run →",
   "linkFixRun.before": "Before",
   "linkFixRun.after": "After",
   "linkFixRun.state.pending": "Pending",

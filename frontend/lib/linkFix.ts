@@ -54,6 +54,18 @@ export interface LinkFixViolationLite {
   status_code: number | null;
 }
 
+/** Two-sided diff span. `changed` = struck red (Before) / green (After). */
+export interface DiffSegment {
+  text: string;
+  changed: boolean;
+}
+
+/** Single-pane diff span for the "Changes" view. */
+export interface UnifiedSegment {
+  text: string;
+  kind: "equal" | "add" | "del";
+}
+
 export interface LinkFixCell {
   row_id: number;
   row_position: number;
@@ -65,6 +77,15 @@ export interface LinkFixCell {
   new_value: string | null;
   violations: LinkFixViolationLite[];
   error: string | null;
+  before_segments: DiffSegment[];
+  after_segments: DiffSegment[];
+}
+
+/** A cell corrected by an applied fix run — grid tint + Changes view. */
+export interface TableFixedCell {
+  row_id: number;
+  column_id: number;
+  segments: UnifiedSegment[];
 }
 
 export interface LinkFixRunDetail extends LinkFixRun {
@@ -136,4 +157,12 @@ export function renameLinkFixRun(
 
 export function deleteLinkFixRun(runId: number): Promise<void> {
   return api<void>(`/library/link-fix-runs/${runId}`, { method: "DELETE" });
+}
+
+/** Cells corrected by an applied fix run, keyed by the target cell they
+ *  landed in. Drives the grid green tint + the cell editor "Changes" view. */
+export function listTableFixedCells(
+  tableId: number,
+): Promise<TableFixedCell[]> {
+  return api<TableFixedCell[]>(`/library/tables/${tableId}/link-fixes`);
 }

@@ -10,6 +10,7 @@ import { GenerationQueueModal } from "@/components/GenerationQueueModal";
 import { Modal } from "@/components/Modal";
 import { getBrainPrompts } from "@/lib/brain";
 import { useT, type TranslationKey } from "@/lib/i18n-context";
+import { listTableFixedCells, type UnifiedSegment } from "@/lib/linkFix";
 import {
   addColumn as apiAddColumn,
   addRow as apiAddRow,
@@ -241,6 +242,22 @@ export function BulkTableGrid({
     await flushPending();
     onPageSizeChange(size);
   }
+
+  // ---- AI link-fix corrected cells (green tint + "Changes" diff view) ----
+  // Keyed "row:col" → the unified diff segments of that correction.
+  const [fixedCells, setFixedCells] = useState<Map<string, UnifiedSegment[]>>(
+    new Map(),
+  );
+  const reloadFixedCells = useCallback(() => {
+    listTableFixedCells(table.id)
+      .then((list) => {
+        const m = new Map<string, UnifiedSegment[]>();
+        for (const f of list) m.set(`${f.row_id}:${f.column_id}`, f.segments);
+        setFixedCells(m);
+      })
+      .catch(() => {});
+  }, [table.id]);
+  useEffect(() => reloadFixedCells(), [reloadFixedCells]);
 
   // ---- Column widths (per-table, persisted in localStorage) ----
   const [colWidths, setColWidths] = useState<Record<number, number>>({});
@@ -898,6 +915,7 @@ export function BulkTableGrid({
                   const cellRef = cellMap.get(`${row.id}:${col.id}`) ?? null;
                   const value = getCellValue(row.id, col.id);
                   const status = getCellStatus(row.id, col.id);
+                  const fixed = fixedCells.has(`${row.id}:${col.id}`);
                   return (
                     <td
                       key={col.id}
@@ -912,9 +930,13 @@ export function BulkTableGrid({
                           ? "bg-amber-50 dark:bg-amber-950/30"
                           : status === "failed"
                             ? "bg-red-50 dark:bg-red-950/30"
-                            : status === "generated"
-                              ? "bg-green-50/30 dark:bg-green-950/20"
-                              : "")
+                            : fixed
+                              ? // AI link-fix: a ring makes it unmistakable
+                                // vs. the plain faint-green "generated" wash.
+                                "bg-green-100 ring-1 ring-inset ring-green-500/60 dark:bg-green-900/40 dark:ring-green-400/50"
+                              : status === "generated"
+                                ? "bg-green-50/30 dark:bg-green-950/20"
+                                : "")
                       }
                     >
                       {status === "generating" ? (
@@ -1105,6 +1127,9 @@ export function BulkTableGrid({
           // on edit (their content is what the user types in, no
           // rendered preview makes sense).
           defaultMode={viewing.column.kind === "output" ? "preview" : "edit"}
+          // When this cell was corrected by an AI link-fix, enable the
+          // "Changes" diff view (highlights only the changed link spans).
+          diff={fixedCells.get(`${viewing.row.id}:${viewing.column.id}`)}
           // Translation panel only makes sense for output cells that
           // already have a saved value to translate.
           translation={

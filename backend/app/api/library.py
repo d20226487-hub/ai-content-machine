@@ -50,6 +50,7 @@ from app.schemas.bulk import (
     ColumnUpdate,
     ColumnValuesResponse,
     CsvImportRequest,
+    DiffSegment,
     FindReplaceRunDetail,
     FindReplaceRunRead,
     FindRequest,
@@ -75,6 +76,8 @@ from app.schemas.bulk import (
     RunRename,
     TableBulkMove,
     TableCreate,
+    TableFixedCell,
+    UnifiedSegment,
     TableListItem,
     TableListResponse,
     TableRead,
@@ -86,8 +89,10 @@ from app.services.find_replace import (
     apply_replace,
     compile_pattern,
     count_matches,
+    diff_segments,
     drift_segments,
     segment_diff,
+    unified_segments,
 )
 from app.tasks.bulk_generation import generate_bulk_cell
 from app.tasks.link_check import resume_link_check, seed_link_check
@@ -2571,6 +2576,7 @@ async def get_link_check_run(
     status_code: int | None = Query(default=None),
     q: str | None = Query(default=None),
     q_negate: bool = Query(default=False),
+    resolution: str | None = Query(default=None),
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LinkCheckRunDetail:
@@ -2588,6 +2594,11 @@ async def get_link_check_run(
         base = base.where(LinkCheckViolation.problem == problem)
     if status_code is not None:
         base = base.where(LinkCheckViolation.status_code == status_code)
+    # Resolution from the in-place AI re-verify: untouched = never fixed.
+    if resolution == "untouched":
+        base = base.where(LinkCheckViolation.resolution.is_(None))
+    elif resolution in ("solved", "unsolved"):
+        base = base.where(LinkCheckViolation.resolution == resolution)
     if q and q.strip():
         pat = f"%{q.strip()}%"
         base = base.where(
@@ -2635,22 +2646,6 @@ async def get_link_check_run(
         .all()
     )
 
-    # Cells corrected by an applied (non-reverted) AI-fix run launched from
-    # this check — the UI strikes their violations through.
-    fixed_rows = (
-        await db.execute(
-            select(LinkFixCell.row_id, LinkFixCell.column_id)
-            .join(LinkFixRun, LinkFixRun.id == LinkFixCell.run_id)
-            .where(
-                LinkFixRun.source_run_id == run_id,
-                LinkFixRun.reverted_at.is_(None),
-                LinkFixCell.state == "done",
-            )
-            .distinct()
-        )
-    ).all()
-    fixed_cells = [{"row_id": r, "column_id": c} for r, c in fixed_rows]
-
     return LinkCheckRunDetail(
         id=run.id,
         table_id=run.table_id,
@@ -2677,7 +2672,6 @@ async def get_link_check_run(
         page_size=page_size,
         total_violations=total,
         status_codes_present=list(codes),
-        fixed_cells=fixed_cells,
         items=[LinkViolationRead.model_validate(v) for v in rows],
     )
 
@@ -2840,6 +2834,31 @@ async def start_link_fix(
         db.add(new_col)
         await db.flush()
         target_column_id = new_col.id
+
+        # Publish-readiness: the new column must hold EVERY row, not just the
+        # flagged ones, so it can be published as a complete column. Copy all
+        # cells of the single scanned source column into it up front; the
+        # fix workers then overwrite the corrected rows. (Link checks scan a
+        # single output column, so there's one unambiguous source.)
+        from sqlalchemy import literal
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        src_cols = [int(c) for c in (source.column_ids or [])]
+        if src_cols:
+            src_col = src_cols[0]
+            await db.execute(
+                pg_insert(BulkTableCell)
+                .from_select(
+                    ["row_id", "column_id", "value", "status"],
+                    select(
+                        BulkTableCell.row_id,
+                        literal(new_col.id),
+                        BulkTableCell.value,
+                        BulkTableCell.status,
+                    ).where(BulkTableCell.column_id == src_col),
+                )
+                .on_conflict_do_nothing(constraint="uq_bulk_cells_row_column")
+            )
     elif payload.target_column_id is not None:
         await _verify_columns_in_table(db, table_id, [payload.target_column_id])
         target_column_id = payload.target_column_id
@@ -2992,8 +3011,70 @@ async def get_link_fix_run(
         page=page,
         page_size=page_size,
         total_cells=int(total),
-        items=[LinkFixCellRead.model_validate(c) for c in rows],
+        items=[_fix_cell_read(c) for c in rows],
     )
+
+
+def _fix_cell_read(c: LinkFixCell) -> LinkFixCellRead:
+    """Build the read model with the Before/After char-diff segments
+    (only meaningful once the cell is done)."""
+    item = LinkFixCellRead.model_validate(c)
+    if c.state == "done":
+        before = c.source_value or c.old_value or ""
+        after = c.new_value or ""
+        old_segs, new_segs = diff_segments(before, after)
+        item.before_segments = [DiffSegment(**s) for s in old_segs]
+        item.after_segments = [DiffSegment(**s) for s in new_segs]
+    return item
+
+
+@router.get(
+    "/tables/{table_id}/link-fixes", response_model=list[TableFixedCell]
+)
+async def list_table_fixed_cells(
+    table_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[TableFixedCell]:
+    """Cells corrected by an applied (non-reverted) AI link-fix run, keyed by
+    the TARGET cell they landed in. Drives the grid's green tint and the cell
+    editor's "Changes" diff view. Latest fix wins when a cell was touched more
+    than once."""
+    await _get_table_or_404(db, table_id, actor, level="read")
+    rows = (
+        (
+            await db.execute(
+                select(LinkFixCell, LinkFixRun.target_column_id)
+                .join(LinkFixRun, LinkFixRun.id == LinkFixCell.run_id)
+                .where(
+                    LinkFixRun.table_id == table_id,
+                    LinkFixRun.reverted_at.is_(None),
+                    LinkFixCell.state == "done",
+                )
+                .order_by(LinkFixRun.created_at)
+            )
+        )
+        .all()
+    )
+    # Last write wins per target cell (rows are ordered oldest-first).
+    by_cell: dict[tuple[int, int], LinkFixCell] = {}
+    for cell, target_col_id in rows:
+        target_col = target_col_id or cell.column_id
+        by_cell[(cell.row_id, target_col)] = cell
+
+    out: list[TableFixedCell] = []
+    for (row_id, col_id), cell in by_cell.items():
+        before = cell.source_value or cell.old_value or ""
+        after = cell.new_value or ""
+        segs = unified_segments(before, after)
+        out.append(
+            TableFixedCell(
+                row_id=row_id,
+                column_id=col_id,
+                segments=[UnifiedSegment(**s) for s in segs],
+            )
+        )
+    return out
 
 
 @router.post("/link-fix-runs/{run_id}/cancel", response_model=LinkFixRunRead)
@@ -3081,6 +3162,22 @@ async def revert_link_fix_run(
                 )
                 .values(value=fc.old_value, translations=None)
             )
+
+    # Clear the in-place re-verify stamps this run set on the source check
+    # run's violations, so they read as "untouched" again.
+    if run.source_run_id is not None and cells:
+        cell_keys = {(fc.row_id, fc.column_id) for fc in cells}
+        rows = [r for r, _c in cell_keys]
+        cols = [c for _r, c in cell_keys]
+        await db.execute(
+            update(LinkCheckViolation)
+            .where(
+                LinkCheckViolation.run_id == run.source_run_id,
+                LinkCheckViolation.row_id.in_(rows),
+                LinkCheckViolation.column_id.in_(cols),
+            )
+            .values(resolution=None)
+        )
     run.reverted_at = datetime.now(timezone.utc)
     await _bump_table_updated(db, run.table_id)
     await db.commit()

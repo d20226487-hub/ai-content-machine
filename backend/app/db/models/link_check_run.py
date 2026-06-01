@@ -118,6 +118,12 @@ class LinkCheckViolation(Base):
     detail_code: Mapped[str | None] = mapped_column(String(24), nullable=True)
     status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # In-place AI re-verify outcome (migration 0039):
+    #   NULL = untouched (no applied fix processed this cell)
+    #   'solved'   = cell fixed, problem gone on re-juxtapose
+    #   'unsolved' = cell fixed, problem still present
+    resolution: Mapped[str | None] = mapped_column(String(12), nullable=True)
+
 
 class LinkCheckCrawlTarget(Base):
     """One unique crawlable URL within a run — the unit of distributed work.

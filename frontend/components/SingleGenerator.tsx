@@ -1,10 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { ErrorPanel } from "@/components/ErrorPanel";
-import { SavedGenerationsModal } from "@/components/SavedGenerationsModal";
 import { clearSession, readSession, updateSession } from "@/lib/createSession";
 import { useT } from "@/lib/i18n-context";
 import { generateSingle, listEnabledProviders } from "@/lib/generate";
@@ -14,7 +14,6 @@ import type {
   EnabledProvider,
   PromptDetail,
   PromptListItem,
-  SavedGeneration,
 } from "@/lib/types";
 
 /**
@@ -55,7 +54,6 @@ export function SingleGenerator() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
-  const [showSavedList, setShowSavedList] = useState(false);
 
   // True once the initial sessionStorage hydration has had a chance to
   // run — used to avoid a flash where varValues is `{}` and immediately
@@ -204,35 +202,6 @@ export function SingleGenerator() {
     }
   }
 
-  function loadSaved(s: SavedGeneration) {
-    // Loading a saved generation jumps straight to the output view —
-    // the form fields are preserved in the snapshot so the user can
-    // still go Back to form afterward.
-    updateSession({
-      form: {
-        selectedPromptId: s.prompt_id,
-        selectedPromptVersionNumber: s.prompt_version_number,
-        selectedPromptName: s.prompt_name_snapshot,
-        varValues: s.variables,
-        providerCode: s.provider_code,
-        model: s.model_used,
-      },
-      result: {
-        text: s.output,
-        rendered_prompt: s.rendered_prompt,
-        provider_used: s.provider_code,
-        model_used: s.model_used,
-        finish_reason: s.finish_reason,
-        missing_variables: [],
-      },
-      savedId: s.id,
-      viewingSaved: s,
-      localTranslations: {},
-    });
-    setShowSavedList(false);
-    router.push("/create/output");
-  }
-
   function startFresh() {
     // "Clear form" — drops both local state and the persisted snapshot
     // so a subsequent Back from /create/output doesn't resurrect the
@@ -298,13 +267,12 @@ export function SingleGenerator() {
       {/* Right: form */}
       <section className="min-w-0">
         <div className="mb-4 flex justify-end">
-          <button
-            type="button"
-            onClick={() => setShowSavedList(true)}
+          <Link
+            href="/create/saved"
             className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
           >
             {t("single.savedGenerations")}
-          </button>
+          </Link>
         </div>
 
         {hydrated && !selectedPrompt && (
@@ -447,12 +415,6 @@ export function SingleGenerator() {
           </>
         )}
 
-        {showSavedList && (
-          <SavedGenerationsModal
-            onClose={() => setShowSavedList(false)}
-            onLoad={loadSaved}
-          />
-        )}
       </section>
     </div>
   );

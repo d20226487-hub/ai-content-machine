@@ -4,7 +4,7 @@ import type {
   GenerateSingleResponse,
   RenderPromptResponse,
   SavedGeneration,
-  SavedGenerationListItem,
+  SavedGenerationListResponse,
 } from "./types";
 
 export function listEnabledProviders(): Promise<EnabledProvider[]> {
@@ -73,8 +73,17 @@ export function saveGeneration(p: SaveGenerationPayload): Promise<SavedGeneratio
   return api<SavedGeneration>("/generations", { method: "POST", body: p });
 }
 
-export function listSavedGenerations(): Promise<SavedGenerationListItem[]> {
-  return api<SavedGenerationListItem[]>("/generations");
+export function listSavedGenerations(
+  opts: { page?: number; pageSize?: number; q?: string } = {},
+): Promise<SavedGenerationListResponse> {
+  const sp = new URLSearchParams();
+  if (opts.page) sp.set("page", String(opts.page));
+  if (opts.pageSize) sp.set("page_size", String(opts.pageSize));
+  if (opts.q && opts.q.trim()) sp.set("q", opts.q.trim());
+  const qs = sp.toString();
+  return api<SavedGenerationListResponse>(
+    `/generations${qs ? `?${qs}` : ""}`,
+  );
 }
 
 export function getSavedGeneration(id: number): Promise<SavedGeneration> {

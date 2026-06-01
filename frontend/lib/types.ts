@@ -159,6 +159,13 @@ export interface SavedGeneration extends SavedGenerationListItem {
   translations?: Record<string, CellTranslation> | null;
 }
 
+export interface SavedGenerationListResponse {
+  items: SavedGenerationListItem[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
 // ----- Library / Bulk -----
 
 export type ColumnKind = "input" | "output";

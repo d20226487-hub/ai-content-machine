@@ -131,6 +131,70 @@ def drift_segments(new_value: str, current_value: str) -> list[dict]:
     return merged
 
 
+def diff_segments(old: str, new: str) -> tuple[list[dict], list[dict]]:
+    """Two-sided char-level diff of ``old`` vs ``new`` for a side-by-side view.
+
+    Returns ``(old_segments, new_segments)`` where each segment is
+    ``{"text": str, "changed": bool}``. In ``old`` the deleted/replaced spans
+    are ``changed=True`` (the UI strikes them in red); in ``new`` the
+    inserted/replaced spans are ``changed=True`` (highlighted green).
+    Concatenating each list reproduces the respective input exactly. Adjacent
+    same-flag runs are coalesced for tidy spans.
+    """
+    sm = difflib.SequenceMatcher(a=old or "", b=new or "", autojunk=False)
+    old_segs: list[dict] = []
+    new_segs: list[dict] = []
+
+    def push(segs: list[dict], text: str, changed: bool) -> None:
+        if not text:
+            return
+        if segs and segs[-1]["changed"] == changed:
+            segs[-1]["text"] += text
+        else:
+            segs.append({"text": text, "changed": changed})
+
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        same = tag == "equal"
+        push(old_segs, (old or "")[i1:i2], not same)
+        push(new_segs, (new or "")[j1:j2], not same)
+    return old_segs, new_segs
+
+
+def unified_segments(old: str, new: str) -> list[dict]:
+    """Single-pane char-level diff of ``old`` → ``new`` for a "Changes" view.
+
+    Returns a flat list of ``{"text": str, "kind": "equal"|"add"|"del"}``.
+    ``add`` spans (insertions/replacements on the new side) render green;
+    ``del`` spans (deletions/replacements on the old side) render red and
+    struck through; ``equal`` renders plain. A replacement yields a ``del``
+    span immediately followed by an ``add`` span. Adjacent same-kind runs are
+    coalesced.
+    """
+    sm = difflib.SequenceMatcher(a=old or "", b=new or "", autojunk=False)
+    out: list[dict] = []
+
+    def push(text: str, kind: str) -> None:
+        if not text:
+            return
+        if out and out[-1]["kind"] == kind:
+            out[-1]["text"] += text
+        else:
+            out.append({"text": text, "kind": kind})
+
+    o, n = old or "", new or ""
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            push(o[i1:i2], "equal")
+        elif tag == "delete":
+            push(o[i1:i2], "del")
+        elif tag == "insert":
+            push(n[j1:j2], "add")
+        else:  # replace — show the old span removed, then the new span added
+            push(o[i1:i2], "del")
+            push(n[j1:j2], "add")
+    return out
+
+
 def apply_replace(
     compiled: re.Pattern[str],
     value: str,

@@ -1,11 +1,11 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { use, useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@/lib/api";
 import { RunRowActions } from "@/components/RunRowActions";
+import { ToolBreadcrumb } from "@/components/ToolBreadcrumb";
 import { useT } from "@/lib/i18n-context";
 import {
   cancelGenerationRun,
@@ -96,14 +96,10 @@ export default function GenerationRunDetailPage({
 
   return (
     <main className="mx-auto max-w-3xl px-5 py-6">
-      <div className="mb-4">
-        <Link
-          href={run ? `/library/${run.table_id}` : "/library"}
-          className="text-sm text-neutral-600 hover:underline dark:text-neutral-400"
-        >
-          {t("genRun.backToTable")}
-        </Link>
-      </div>
+      <ToolBreadcrumb
+        tableId={run?.table_id ?? 0}
+        trail={[{ label: run?.name ?? t("breadcrumb.run", { id: runId }) }]}
+      />
 
       {loadError && (
         <p className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">

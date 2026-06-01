@@ -28,8 +28,9 @@ export default function LinkCheckPage({
 
   const [table, setTable] = useState<BulkTable | null>(null);
   const [columnIds, setColumnIds] = useState<Set<number>>(new Set());
+  // Neither check is pre-selected — the user picks the method(s) to run.
   const [checkJuxtapose, setCheckJuxtapose] = useState(false);
-  const [checkCrawl, setCheckCrawl] = useState(true);
+  const [checkCrawl, setCheckCrawl] = useState(false);
   const [includeOk, setIncludeOk] = useState(false);
   const [expectedColumnIds, setExpectedColumnIds] = useState<Set<number>>(
     new Set(),
@@ -40,7 +41,12 @@ export default function LinkCheckPage({
 
   useEffect(() => {
     if (!Number.isFinite(tableId)) return;
-    getTable(tableId).then(setTable).catch((e) => setError(String(e)));
+    // This page only needs the table name + columns (both returned in full
+    // regardless of paging). Request a 1-row page so a large table's cells
+    // don't bloat the payload and block the history list from rendering.
+    getTable(tableId, { page: 1, page_size: 1 })
+      .then(setTable)
+      .catch((e) => setError(String(e)));
   }, [tableId]);
 
   const loadRuns = useCallback(() => {

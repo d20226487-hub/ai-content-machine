@@ -9,8 +9,9 @@ and writes the corrected value back — keeping the before/after snapshot so
 the whole run can be reverted.
 
 When the last cell finishes, finalize (advisory-locked, runs once) flips the
-run ``done`` and auto-creates a ROW-SCOPED ``LinkCheckRun`` (recheck) so the
-user immediately sees any residual problems on just the touched rows.
+run ``done`` and re-juxtaposes the corrected cells IN PLACE — stamping the
+originating check run's violations 'solved' / 'unsolved' (no separate
+re-check job) so the user sees the outcome on the same check-run page.
 
 Fresh NullPool engine per task — same event-loop reason as the other task
 modules. Re-querying ``pending`` makes a redelivered / resumed task
@@ -28,17 +29,20 @@ from sqlalchemy.pool import NullPool
 from app.core.config import get_settings
 from app.db.models import (
     BulkTableCell,
-    BulkTableRow,
-    LinkCheckRun,
+    LinkCheckViolation,
     LinkFixCell,
     LinkFixRun,
 )
 from app.providers.base import ProviderError
 from app.providers.registry import ProviderNotConfigured
 from app.services.brain import fix_links_text
-from app.services.link_check import extract_expected_links
+from app.services.link_check import (
+    extract_expected_links,
+    extract_output_links,
+    juxtapose,
+    normalize_link,
+)
 from app.tasks.celery_app import celery_app
-from app.tasks.link_check import seed_link_check
 
 # Advisory-lock namespace for the per-run finalize ('LF').
 _ADVISORY_NS = 0x4C46
@@ -239,48 +243,86 @@ async def _finalize_if_done(db: AsyncSession, run_id: int) -> None:
     run.status = "done"
     run.finished_at = _now()
 
-    # Auto re-check: re-scan ONLY the rows we touched so the user sees what,
-    # if anything, is still wrong. Scoped via LinkCheckRun.row_ids.
-    fixed_rows = (
+    # Re-verify IN PLACE (no new job): re-juxtapose each corrected cell and
+    # stamp the SOURCE check run's matching violations 'solved' / 'unsolved'
+    # so the original run page shows what the fix did. We re-juxtapose only
+    # (the AI corrector runs in juxtapose mode), never crawl.
+    await _reverify_in_place(db, run)
+
+    await db.commit()
+
+
+async def _reverify_in_place(db: AsyncSession, run: LinkFixRun) -> None:
+    """Re-juxtapose the cells this run corrected and stamp the originating
+    check run's violations. NULL stays = untouched; 'solved' = the flagged
+    link is gone from the corrected cell, 'unsolved' = still present."""
+    if run.source_run_id is None:
+        return
+    exp_cols = [int(c) for c in (run.expected_column_ids or [])]
+
+    cells = (
         (
             await db.execute(
-                select(LinkFixCell.row_id)
-                .where(LinkFixCell.run_id == run_id)
-                .distinct()
+                select(LinkFixCell).where(
+                    LinkFixCell.run_id == run.id,
+                    LinkFixCell.state == "done",
+                )
             )
         )
         .scalars()
         .all()
     )
-    recheck_id: int | None = None
-    if fixed_rows:
-        # Re-scan the column the corrections landed in (the target column when
-        # one was chosen, else the original scanned columns).
-        recheck_cols = (
-            [run.target_column_id]
-            if run.target_column_id
-            else list(run.column_ids or [])
-        )
-        recheck = LinkCheckRun(
-            table_id=run.table_id,
-            created_by_id=run.created_by_id,
-            status="queued",
-            column_ids=recheck_cols,
-            expected_column_ids=list(run.expected_column_ids or []),
-            check_juxtapose=bool(run.expected_column_ids),
-            check_crawl=True,
-            include_ok=False,
-            row_ids=[int(r) for r in fixed_rows],
-        )
-        db.add(recheck)
-        await db.flush()
-        recheck_id = recheck.id
-        run.recheck_run_id = recheck_id
+    for cell in cells:
+        target_col = run.target_column_id or cell.column_id
+        corrected = (
+            await db.execute(
+                select(BulkTableCell.value).where(
+                    BulkTableCell.row_id == cell.row_id,
+                    BulkTableCell.column_id == target_col,
+                )
+            )
+        ).scalar_one_or_none()
 
-    await db.commit()
+        expected: list[str] = []
+        if exp_cols:
+            exp_cells = (
+                (
+                    await db.execute(
+                        select(BulkTableCell.value).where(
+                            BulkTableCell.row_id == cell.row_id,
+                            BulkTableCell.column_id.in_(exp_cols),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for v in exp_cells:
+                expected += extract_expected_links(v)
 
-    if recheck_id is not None:
-        seed_link_check.delay(recheck_id)
+        omitted, hallucinated = juxtapose(
+            extract_output_links(corrected), expected
+        )
+        still = {normalize_link(u) for u in omitted + hallucinated}
+
+        violations = (
+            (
+                await db.execute(
+                    select(LinkCheckViolation).where(
+                        LinkCheckViolation.run_id == run.source_run_id,
+                        LinkCheckViolation.row_id == cell.row_id,
+                        LinkCheckViolation.column_id == cell.column_id,
+                        LinkCheckViolation.problem.in_(("omitted", "hallucinated")),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for v in violations:
+            v.resolution = (
+                "unsolved" if normalize_link(v.link) in still else "solved"
+            )
 
 
 # ---------- resume ----------

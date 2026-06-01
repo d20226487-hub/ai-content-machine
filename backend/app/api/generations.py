@@ -5,8 +5,8 @@ Per-user visibility: each user sees only their own saves. Admins are NOT given
 """
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -15,6 +15,7 @@ from app.db.session import get_db
 from app.schemas.generation import (
     SaveGenerationRequest,
     SavedGenerationListItem,
+    SavedGenerationListResponse,
     SavedGenerationRead,
     SavedGenerationRenameRequest,
 )
@@ -40,21 +41,47 @@ async def _get_owned_or_404(
     return g
 
 
-@router.get("", response_model=list[SavedGenerationListItem])
+@router.get("", response_model=SavedGenerationListResponse)
 async def list_my_generations(
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    limit: int = 100,
-) -> list[Generation]:
-    rows = (
-        await db.execute(
-            select(Generation)
-            .where(Generation.created_by_id == actor.id)
-            .order_by(Generation.created_at.desc())
-            .limit(min(limit, 500))
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+    q: str | None = Query(default=None),
+) -> SavedGenerationListResponse:
+    """The signed-in user's saved generations, newest first. Optional ``q``
+    matches the save name OR the snapshotted prompt name (case-insensitive)."""
+    base = select(Generation).where(Generation.created_by_id == actor.id)
+    if q and q.strip():
+        pat = f"%{q.strip()}%"
+        base = base.where(
+            or_(
+                Generation.name.ilike(pat),
+                Generation.prompt_name_snapshot.ilike(pat),
+            )
         )
-    ).scalars().all()
-    return list(rows)
+
+    total = (
+        await db.execute(select(func.count()).select_from(base.subquery()))
+    ).scalar_one()
+
+    rows = (
+        (
+            await db.execute(
+                base.order_by(Generation.created_at.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return SavedGenerationListResponse(
+        items=[SavedGenerationListItem.model_validate(r) for r in rows],
+        total=int(total),
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.get("/{gen_id}", response_model=SavedGenerationRead)

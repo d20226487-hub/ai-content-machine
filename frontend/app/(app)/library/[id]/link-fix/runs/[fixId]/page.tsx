@@ -5,6 +5,7 @@ import { use, useCallback, useEffect, useRef, useState } from "react";
 
 import { LinkCheckStatusChip } from "@/components/LinkCheckStatusChip";
 import { Pagination } from "@/components/Pagination";
+import { ToolBreadcrumb } from "@/components/ToolBreadcrumb";
 import { ApiError } from "@/lib/api";
 import { useT } from "@/lib/i18n-context";
 import {
@@ -12,6 +13,7 @@ import {
   getLinkFixRun,
   resumeLinkFixRun,
   revertLinkFixRun,
+  type DiffSegment,
   type LinkFixCell,
   type LinkFixRunDetail,
 } from "@/lib/linkFix";
@@ -119,20 +121,16 @@ export default function LinkFixRunPage({
 
   return (
     <main className="mx-auto max-w-5xl px-5 py-6">
-      <div className="mb-4 flex items-center gap-4">
-        <Link
-          href={`/library/${tableId}/link-check`}
-          className="text-sm text-neutral-600 hover:underline dark:text-neutral-400"
-        >
-          {t("linkCheckRun.backToTool")}
-        </Link>
-        <Link
-          href={`/library/${tableId}`}
-          className="text-sm text-neutral-600 hover:underline dark:text-neutral-400"
-        >
-          {t("linkCheckRun.backToTable")}
-        </Link>
-      </div>
+      <ToolBreadcrumb
+        tableId={tableId}
+        trail={[
+          {
+            label: t("linkCheck.title"),
+            href: `/library/${tableId}/link-check`,
+          },
+          { label: run?.name ?? t("breadcrumb.fix", { id: rid }) },
+        ]}
+      />
 
       {error && (
         <p className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
@@ -231,11 +229,12 @@ export default function LinkFixRunPage({
             <Counter label={t("linkFixRun.total")} value={run.total} accent="neutral" />
           </div>
 
-          {/* link to the auto re-check */}
-          {run.recheck_run_id && (
+          {/* The fix re-verifies in place — point the user back to the source
+              check run to see what's now Solved / Unsolved. */}
+          {run.source_run_id && run.status === "done" && (
             <p className="mt-3 text-sm">
               <Link
-                href={`/library/${tableId}/link-check/runs/${run.recheck_run_id}`}
+                href={`/library/${tableId}/link-check/runs/${run.source_run_id}`}
                 className="text-violet-700 hover:underline dark:text-violet-300"
               >
                 {t("linkFixRun.viewRecheck")}
@@ -306,20 +305,53 @@ function FixCellRow({ cell }: { cell: LinkFixCell }) {
               {t("linkFixRun.before")}
             </p>
             <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-neutral-50 p-2 text-xs text-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
-              {cell.source_value ?? cell.old_value ?? ""}
+              <DiffText segments={cell.before_segments} side="before" />
             </pre>
           </div>
           <div>
             <p className="mb-1 text-[10px] uppercase tracking-wide text-neutral-400">
               {t("linkFixRun.after")}
             </p>
-            <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-green-50 p-2 text-xs text-green-900 dark:bg-green-950/20 dark:text-green-200">
-              {cell.new_value ?? ""}
+            <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-neutral-50 p-2 text-xs text-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
+              <DiffText segments={cell.after_segments} side="after" />
             </pre>
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+/** Renders diff segments: on the Before side changed spans are struck red
+ *  (links being removed/changed); on the After side they're highlighted green
+ *  (links added/changed). */
+function DiffText({
+  segments,
+  side,
+}: {
+  segments: DiffSegment[];
+  side: "before" | "after";
+}) {
+  if (!segments || segments.length === 0) return null;
+  return (
+    <>
+      {segments.map((s, i) =>
+        s.changed ? (
+          <mark
+            key={i}
+            className={
+              side === "before"
+                ? "bg-red-100 text-red-800 line-through dark:bg-red-950/50 dark:text-red-300"
+                : "bg-green-100 text-green-900 dark:bg-green-900/40 dark:text-green-200"
+            }
+          >
+            {s.text}
+          </mark>
+        ) : (
+          <span key={i}>{s.text}</span>
+        ),
+      )}
+    </>
   );
 }
 

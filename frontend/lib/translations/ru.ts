@@ -763,6 +763,9 @@ export const ru: Record<keyof typeof en, string> = {
   // cell editor
   "cellEditor.edit": "Редактирование",
   "cellEditor.preview": "Предпросмотр",
+  "cellEditor.changes": "Изменения",
+  "cellEditor.changesHint":
+    "Зелёным — ссылки, добавленные или изменённые ИИ; зачёркнутым красным — удалённые.",
   "cellEditor.empty": "Ячейка пуста",
   "cellEditor.unsavedChanges": "Несохранённые изменения",
   "cellEditor.noChanges": "Изменений нет",
@@ -910,6 +913,10 @@ export const ru: Record<keyof typeof en, string> = {
     "Вы ещё не сохраняли генерации. Нажмите «Сохранить» на результате, чтобы оставить его.",
   "saved.confirmDelete":
     "Удалить «{name}»? Это действие нельзя отменить.",
+  "saved.searchPlaceholder": "Поиск по названию или промпту…",
+  "saved.noMatches": "Нет сохранённых генераций по вашему запросу.",
+  "saved.backToCreate": "← Назад к генератору",
+  "saved.open": "Открыть",
 
   // publish to domain modal
   "pubMod.title": "Публикация на подключённый сайт",
@@ -1582,6 +1589,11 @@ export const ru: Record<keyof typeof en, string> = {
   "tools.linkCheck.desc":
     "Находит пропущенные, выдуманные и нерабочие (404) ссылки в контенте.",
 
+  // breadcrumbs (назад к таблице › инструмент › запуск)
+  "breadcrumb.table": "Назад к таблице",
+  "breadcrumb.run": "Запуск #{id}",
+  "breadcrumb.fix": "ИИ-исправление #{id}",
+
   "linkCheck.backToTable": "← Назад к таблице",
   "linkCheck.title": "Проверка ссылок",
   "linkCheck.onTable": "В таблице «{name}»",
@@ -1635,6 +1647,10 @@ export const ru: Record<keyof typeof en, string> = {
   "linkCheckRun.fix": "Исправить",
   "linkCheckRun.filterAllProblems": "Все проблемы",
   "linkCheckRun.filterAllCodes": "Все коды статуса",
+  "linkCheckRun.filterAllResolutions": "Все (исправленные и нет)",
+  "linkCheckRun.resSolved": "Решено",
+  "linkCheckRun.resUnsolved": "Не решено",
+  "linkCheckRun.resUntouched": "Не трогали",
   "linkCheckRun.searchPlaceholder": "Поиск по ссылкам…",
   "linkCheckRun.searchContains": "содержит",
   "linkCheckRun.searchNotContains": "не содержит",
@@ -1690,7 +1706,7 @@ export const ru: Record<keyof typeof en, string> = {
   "linkFixRun.failed": "Ошибки",
   "linkFixRun.skipped": "Пропущено",
   "linkFixRun.total": "Всего",
-  "linkFixRun.viewRecheck": "Посмотреть перепроверку исправленных строк →",
+  "linkFixRun.viewRecheck": "Что теперь Решено / Не решено — на странице проверки →",
   "linkFixRun.before": "До",
   "linkFixRun.after": "После",
   "linkFixRun.state.pending": "В очереди",

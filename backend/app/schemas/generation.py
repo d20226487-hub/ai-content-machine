@@ -86,3 +86,12 @@ class SaveGenerationRequest(BaseModel):
 
 class SavedGenerationRenameRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
+
+
+class SavedGenerationListResponse(BaseModel):
+    """Paginated saved-generation list for the dedicated /create/saved page."""
+
+    items: list[SavedGenerationListItem]
+    total: int
+    page: int
+    page_size: int

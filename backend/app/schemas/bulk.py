@@ -519,6 +519,10 @@ class LinkCheckRunRead(BaseModel):
     finished_at: datetime | None
 
 
+# Resolution stamp from the in-place AI re-verify (None = untouched).
+LinkResolution = Literal["solved", "unsolved"]
+
+
 class LinkViolationRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -530,14 +534,8 @@ class LinkViolationRead(BaseModel):
     link: str
     detail_code: str | None = None
     status_code: int | None = None
-
-
-class FixedCellRef(BaseModel):
-    """A (row, column) cell that an applied AI-fix run corrected. Used to
-    strike through the corresponding violations on the check-run page."""
-
-    row_id: int
-    column_id: int
+    # None = untouched; set by the in-place re-verify after an AI fix.
+    resolution: LinkResolution | None = None
 
 
 class LinkCheckRunDetail(LinkCheckRunRead):
@@ -548,9 +546,6 @@ class LinkCheckRunDetail(LinkCheckRunRead):
     # Distinct HTTP codes present across the run's violations (unfiltered) —
     # populates the status-code filter dropdown.
     status_codes_present: list[int]
-    # (row, column) cells fixed by an applied (non-reverted) correction run
-    # launched from this check — their violations render struck-through.
-    fixed_cells: list[FixedCellRef] = []
     items: list[LinkViolationRead]
 
 
@@ -618,6 +613,22 @@ class LinkFixViolationLite(BaseModel):
     status_code: int | None = None
 
 
+class DiffSegment(BaseModel):
+    """One span of a two-sided diff. ``changed`` spans are struck red on the
+    Before side / highlighted green on the After side."""
+
+    text: str
+    changed: bool
+
+
+class UnifiedSegment(BaseModel):
+    """One span of a single-pane diff: ``add`` green, ``del`` red+struck,
+    ``equal`` plain."""
+
+    text: str
+    kind: Literal["equal", "add", "del"]
+
+
 class LinkFixCellRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -632,6 +643,9 @@ class LinkFixCellRead(BaseModel):
     new_value: str | None
     violations: list[LinkFixViolationLite]
     error: str | None = None
+    # Char-level diff of source_value → new_value (Before / After highlight).
+    before_segments: list[DiffSegment] = []
+    after_segments: list[DiffSegment] = []
 
 
 class LinkFixRunDetail(LinkFixRunRead):
@@ -640,3 +654,12 @@ class LinkFixRunDetail(LinkFixRunRead):
     page_size: int
     total_cells: int
     items: list[LinkFixCellRead]
+
+
+class TableFixedCell(BaseModel):
+    """A cell corrected by an applied (non-reverted) fix run — drives the
+    grid's green tint and the cell editor's "Changes" diff view."""
+
+    row_id: int
+    column_id: int
+    segments: list[UnifiedSegment]
