@@ -136,6 +136,10 @@ class TableRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None = None
+    # Autotool (3rd publishing mode): whether this table is exposed as a
+    # public CSV and the token that forms its URL (null when disabled).
+    autotool_enabled: bool = False
+    autotool_token: str | None = None
     columns: list[ColumnRead] = []
     rows: list[RowRead] = []
     cells: list[CellRead] = []
@@ -144,6 +148,19 @@ class TableRead(BaseModel):
     # reflects the whole table (footer + selection math). On a full
     # (unpaginated) fetch it equals len(rows).
     total_row_count: int = 0
+
+
+class AutotoolState(BaseModel):
+    """Lightweight result of toggling a table's Autotool exposure.
+
+    Returned by the enable/disable endpoints instead of the full TableRead so
+    a large table doesn't ship every cell on a one-click toggle. ``csv_path``
+    is the relative public path the frontend resolves against the API origin.
+    """
+
+    autotool_enabled: bool
+    autotool_token: str | None = None
+    csv_path: str | None = None
 
 
 class TrashBulkIds(BaseModel):

@@ -712,6 +712,24 @@ export const ru: Record<keyof typeof en, string> = {
   "bulkGrid.generateDisabledHint":
     "Сначала настройте промпт хотя бы для одной выходной колонки",
   "bulkGrid.generateOpenHint": "Открыть очередь генерации",
+  "autotool.button": "Autotool",
+  "autotool.remove": "Удалить из Autotool",
+  "autotool.disabledHint":
+    "Сделать таблицу публичным CSV, который сможет забирать Autotool",
+  "autotool.enabledHint": "Таблица доступна как публичный CSV для Autotool",
+  "autotool.copyLink": "Копировать ссылку на CSV",
+  "autotool.copied": "Скопировано",
+  "autotool.linkLabel": "Публичная ссылка на CSV",
+  "autotool.enableTitle": "Добавить в Autotool?",
+  "autotool.enableBody":
+    "Будет опубликован публичный CSV этой таблицы по неугадываемой ссылке без авторизации. Любой, у кого есть ссылка, сможет прочитать содержимое — сгенерированный текст, домены назначения, ID постов. Autotool по этой ссылке публикует строки таблицы на ваши сайты.",
+  "autotool.enableConfirm": "Добавить в Autotool",
+  "autotool.removeTitle": "Удалить из Autotool?",
+  "autotool.removeBody":
+    "Таблица будет удалена из Autotool, а её публичная ссылка сразу станет недействительной — Autotool больше не сможет её забрать. Добавить обратно можно будет позже, но ссылка будет новой.",
+  "autotool.removeConfirm": "Удалить из Autotool",
+  "autotool.cancel": "Отмена",
+  "autotool.failed": "Что-то пошло не так. Попробуйте ещё раз.",
   "bulkGrid.selectAllOnPage": "Выбрать все строки на этой странице",
   "bulkGrid.colKindOutput": "выход",
   "bulkGrid.colKindInput": "вход",
@@ -954,6 +972,46 @@ export const ru: Record<keyof typeof en, string> = {
   "publish.tabSingleRuns": "Одиночные публикации",
   "publish.tabBulkRuns": "Массовые публикации",
   "publish.tabLanguages": "Языки",
+  "publish.tabAutotool": "Autotool",
+
+  // настройка подключения Autotool
+  "autotoolCfg.title": "Autotool",
+  "autotoolCfg.subtitle":
+    "Подключение к внешнему прокси Autotool. Он забирает публичный CSV таблицы (включается кнопкой Autotool в bulk-таблице) и публикует его на ваши сайты.",
+  "autotoolCfg.targetUrl": "Целевой URL",
+  "autotoolCfg.targetUrlHint":
+    "Эндпойнт Autotool ImportPosts, куда отправляются запросы.",
+  "autotoolCfg.apiKey": "API-ключ (X-Api-Key)",
+  "autotoolCfg.apiKeyConfigured": "Задан — введите новое значение для замены",
+  "autotoolCfg.apiKeyPlaceholder": "Вставьте API-ключ Autotool",
+  "autotoolCfg.apiKeyHint": "Хранится в зашифрованном виде; после сохранения не показывается.",
+  "autotoolCfg.clearKey": "Удалить ключ",
+  "autotoolCfg.undoClear": "Отменить",
+  "autotoolCfg.clearKeyPending": "Сохранённый ключ будет удалён при сохранении.",
+  "autotoolCfg.test": "Проверить",
+  "autotoolCfg.testing": "Проверка…",
+  "autotoolCfg.testHint": "Отправляет пробный запрос на сохранённый URL с сохранённым ключом.",
+  "autotoolCfg.testNote":
+    "Проверка использует сохранённые настройки — сначала сохраните, если только что их меняли. Она отправляет на эндпойнт ImportPosts пустой запрос: 401/403 означает, что ключ отклонён; любой другой ответ — прокси доступен и принял ключ.",
+  "autotoolCfg.sharedHeading": "Таблицы в Autotool",
+  "autotoolCfg.sharedSubtitle":
+    "Таблицы, сейчас доступные Autotool. Можно посмотреть точный POST-запрос, который будет отправлен для каждой.",
+  "autotoolCfg.sharedEmpty":
+    "Пока ни одна таблица не отдана в Autotool. Включите кнопкой Autotool в bulk-таблице.",
+  "autotoolCfg.rowsCols": "{rows} строк · {cols} колонок",
+  "autotoolCfg.viewRequest": "Показать POST-запрос",
+  "autotoolCfg.previewTitle": "POST-запрос — {name}",
+  "autotoolCfg.noTarget": "Целевой URL не задан — настройте выше.",
+  "autotoolCfg.noKey": "API-ключ не задан — настройте выше.",
+  "autotoolCfg.siteColumn": "Колонка с сайтами",
+  "autotoolCfg.siteColumnNone": "— нет —",
+  "autotoolCfg.detected": "определена автоматически",
+  "autotoolCfg.siteCount": "сайтов: {n}",
+  "autotoolCfg.request": "Запрос",
+  "autotoolCfg.copy": "Копировать",
+  "autotoolCfg.keyMaskedNote":
+    "X-Api-Key здесь скрыт; реальный ключ отправляется с запросом.",
+  "autotoolCfg.close": "Закрыть",
 
   // domains page
   "domains.title": "Домены",

@@ -461,6 +461,44 @@ export function exportCsvUrl(tableId: number): string {
   return `${API_URL}/library/tables/${tableId}/export.csv`;
 }
 
+// ----- Autotool (3rd publishing mode) -----
+
+export interface AutotoolState {
+  autotool_enabled: boolean;
+  autotool_token: string | null;
+  /** Relative public path, e.g. "/autotool/<token>.csv"; null when disabled. */
+  csv_path: string | null;
+}
+
+/** Expose the table as a public CSV the Autotool proxy can fetch. */
+export function enableAutotool(tableId: number): Promise<AutotoolState> {
+  return api<AutotoolState>(`/library/tables/${tableId}/autotool`, {
+    method: "POST",
+  });
+}
+
+/** Remove the table from Autotool — invalidates the public link immediately. */
+export function disableAutotool(tableId: number): Promise<AutotoolState> {
+  return api<AutotoolState>(`/library/tables/${tableId}/autotool`, {
+    method: "DELETE",
+  });
+}
+
+/** Absolute public URL for the Autotool CSV. Resolves a relative API base
+ *  (e.g. "/api" in production) against the current origin so the value is a
+ *  full URL the external proxy can use. */
+export function autotoolCsvUrl(token: string): string {
+  const path = `${API_URL}/autotool/${token}.csv`;
+  if (typeof window !== "undefined") {
+    try {
+      return new URL(path, window.location.origin).href;
+    } catch {
+      /* fall through to the raw path */
+    }
+  }
+  return path;
+}
+
 /** Trigger a CSV download for the given table. */
 export async function downloadCsv(tableId: number, filename: string): Promise<void> {
   const token = getToken();

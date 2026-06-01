@@ -242,6 +242,10 @@ export interface BulkTable {
   updated_at: string;
   /** Non-null only when fetched via /library/trash/{id}. */
   deleted_at?: string | null;
+  /** Autotool (3rd publishing mode): whether the table is exposed as a
+   *  public CSV, and the token forming its URL (null when disabled). */
+  autotool_enabled: boolean;
+  autotool_token: string | null;
   columns: BulkColumn[];
   rows: BulkRow[];
   cells: BulkCell[];

@@ -15,6 +15,7 @@ from datetime import datetime
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
@@ -61,6 +62,18 @@ class BulkTable(Base, TimestampMixin):
     # place trashed rows are reachable.
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    # ----- Autotool (3rd publishing mode) -----
+    # When enabled, the table is exposed as a CSV at an unauthenticated,
+    # unguessable URL (/autotool/<token>.csv) so the external Autotool proxy
+    # can fetch it and push the content to target sites. Disabling clears the
+    # token, so the public link dies immediately. See migration 0043.
+    autotool_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=func.false()
+    )
+    autotool_token: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, unique=True, index=True
     )
 
     columns: Mapped[list["BulkTableColumn"]] = relationship(

@@ -8,6 +8,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import (
     auth,
+    autotool as autotool_router,
+    autotool_config as autotool_config_router,
     backup as backup_router,
     brain as brain_router,
     categories,
@@ -90,6 +92,8 @@ async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSON
 
 app.include_router(health.router)
 app.include_router(auth.router)
+# Public, unauthenticated CSV proxy for the Autotool publishing mode.
+app.include_router(autotool_router.router)
 app.include_router(settings_router.router)
 app.include_router(users_module.users_router)
 app.include_router(users_module.roles_router)
@@ -99,6 +103,8 @@ app.include_router(prompts.router)
 app.include_router(generate.router)
 app.include_router(generations_router.router)
 app.include_router(library.router)
+# Autotool connection config (admin + manager) — backs the /publish Autotool tab.
+app.include_router(autotool_config_router.router)
 app.include_router(errors_router.router)
 app.include_router(domains_router.router)
 app.include_router(domain_folders_router.router)

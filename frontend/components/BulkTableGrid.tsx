@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { AutotoolButton } from "@/components/AutotoolButton";
 import { CellEditorModal } from "@/components/CellEditorModal";
 import { ColumnConfigModal } from "@/components/ColumnConfigModal";
 import { BulkPublishModal } from "@/components/BulkPublishModal";
@@ -737,6 +738,11 @@ export function BulkTableGrid({
               ? t("bulkGrid.publishLabelSelected", { count: selectedCount })
               : t("bulkGrid.publishLabel")}
           </button>
+          <AutotoolButton
+            tableId={table.id}
+            initialEnabled={!!table.autotool_enabled}
+            initialToken={table.autotool_token ?? null}
+          />
           <button
             type="button"
             onClick={() => void openQueue()}

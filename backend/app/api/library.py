@@ -10,6 +10,7 @@ endpoint short-circuits the owner filter for manager/admin.
 """
 import csv
 import io
+import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -41,6 +42,7 @@ from app.db.models import (
 )
 from app.db.session import get_db
 from app.schemas.bulk import (
+    AutotoolState,
     BulkGenerationRunDetail,
     BulkGenerationRunRead,
     CellsBatchUpsert,
@@ -92,6 +94,7 @@ from app.schemas.bulk import (
     TableUpdate,
     TrashBulkIds,
 )
+from app.services.bulk_csv import build_table_csv
 from app.services.find_replace import (
     InvalidPattern,
     apply_replace,
@@ -278,6 +281,8 @@ async def _table_to_read(db: AsyncSession, table: BulkTable) -> TableRead:
             "created_by_name": await _resolve_creator_name(db, table.created_by_id),
             "created_at": table.created_at,
             "updated_at": table.updated_at,
+            "autotool_enabled": table.autotool_enabled,
+            "autotool_token": table.autotool_token,
             "columns": [ColumnRead.model_validate(c) for c in table.columns],
             "rows": [RowRead.model_validate(r) for r in table.rows],
             "cells": [
@@ -364,6 +369,8 @@ async def _table_to_read_paginated(
             "created_by_name": await _resolve_creator_name(db, table.created_by_id),
             "created_at": table.created_at,
             "updated_at": table.updated_at,
+            "autotool_enabled": table.autotool_enabled,
+            "autotool_token": table.autotool_token,
             "columns": [ColumnRead.model_validate(c) for c in columns],
             "rows": [RowRead.model_validate(r) for r in rows],
             "cells": [
@@ -3774,30 +3781,55 @@ async def export_csv(
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     t = await _get_table_or_404(db, table_id, actor, level="read", full=True)
-    cells = []
-    if t.rows:
-        cells = (
-            (
-                await db.execute(
-                    select(BulkTableCell).where(
-                        BulkTableCell.row_id.in_([r.id for r in t.rows])
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-    cell_lookup = {(c.row_id, c.column_id): c.value or "" for c in cells}
-
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow([c.name for c in t.columns])
-    for r in t.rows:
-        writer.writerow([cell_lookup.get((r.id, c.id), "") for c in t.columns])
-
+    csv_text = await build_table_csv(db, t)
     safe_name = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in t.name)
     return Response(
-        content=buf.getvalue(),
+        content=csv_text,
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{safe_name}.csv"'},
     )
+
+
+# ---------- Autotool (3rd publishing mode) ----------
+#
+# Enabling exposes the table's CSV at an unauthenticated, unguessable URL
+# (/autotool/<token>.csv, served by app/api/autotool.py) so the external
+# Autotool proxy can fetch it. Gated by "write" access — anyone who can edit
+# the table can expose it. Disabling clears the token so the public link dies
+# at once. The toggle returns a lightweight AutotoolState (not the full table)
+# so a one-click action doesn't ship every cell.
+
+
+@router.post("/tables/{table_id}/autotool", response_model=AutotoolState)
+async def enable_autotool(
+    table_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AutotoolState:
+    t = await _get_table_or_404(db, table_id, actor, level="write")
+    if not t.autotool_token:
+        t.autotool_token = uuid.uuid4().hex  # 32 hex chars, 128 bits
+    t.autotool_enabled = True
+    # Capture before commit; expire_on_commit would otherwise require a reload.
+    token = t.autotool_token
+    await db.commit()
+    return AutotoolState(
+        autotool_enabled=True,
+        autotool_token=token,
+        csv_path=f"/autotool/{token}.csv",
+    )
+
+
+@router.delete("/tables/{table_id}/autotool", response_model=AutotoolState)
+async def disable_autotool(
+    table_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AutotoolState:
+    t = await _get_table_or_404(db, table_id, actor, level="write")
+    # Drop the token, not just the flag, so a leaked URL can never be revived
+    # by re-enabling — the next enable mints a brand-new token.
+    t.autotool_enabled = False
+    t.autotool_token = None
+    await db.commit()
+    return AutotoolState(autotool_enabled=False, autotool_token=None, csv_path=None)

@@ -689,6 +689,24 @@ export const en = {
   "bulkGrid.generateDisabledHint":
     "Configure a prompt on at least one output column first",
   "bulkGrid.generateOpenHint": "Open the generation queue",
+  "autotool.button": "Autotool",
+  "autotool.remove": "Remove from Autotool",
+  "autotool.disabledHint":
+    "Expose this table as a public CSV the Autotool proxy can fetch",
+  "autotool.enabledHint": "This table is exposed as a public CSV for Autotool",
+  "autotool.copyLink": "Copy CSV link",
+  "autotool.copied": "Copied",
+  "autotool.linkLabel": "Public CSV link",
+  "autotool.enableTitle": "Add to Autotool?",
+  "autotool.enableBody":
+    "This publishes a public, unauthenticated CSV of this table at an unguessable link. Anyone who has that link can read its contents — generated text, target domains, post IDs. The Autotool proxy uses the link to publish this table's rows to your sites.",
+  "autotool.enableConfirm": "Add to Autotool",
+  "autotool.removeTitle": "Remove from Autotool?",
+  "autotool.removeBody":
+    "This removes the table from Autotool and immediately invalidates its public link — the Autotool proxy will no longer be able to fetch it. You can add it back later, but it will get a brand-new link.",
+  "autotool.removeConfirm": "Remove from Autotool",
+  "autotool.cancel": "Cancel",
+  "autotool.failed": "Something went wrong. Please try again.",
   "bulkGrid.selectAllOnPage": "Select all rows on this page",
   "bulkGrid.colKindOutput": "output",
   "bulkGrid.colKindInput": "input",
@@ -911,6 +929,46 @@ export const en = {
   "publish.tabSingleRuns": "Single Runs",
   "publish.tabBulkRuns": "Bulk Runs",
   "publish.tabLanguages": "Languages",
+  "publish.tabAutotool": "Autotool",
+
+  // autotool connection config
+  "autotoolCfg.title": "Autotool",
+  "autotoolCfg.subtitle":
+    "Connection to the external Autotool proxy. It fetches a table's public CSV (enabled via the Autotool button on a bulk table) and publishes it to your sites.",
+  "autotoolCfg.targetUrl": "Target URL",
+  "autotoolCfg.targetUrlHint":
+    "The Autotool ImportPosts endpoint posts are sent to.",
+  "autotoolCfg.apiKey": "API key (X-Api-Key)",
+  "autotoolCfg.apiKeyConfigured": "Configured — enter a new value to replace",
+  "autotoolCfg.apiKeyPlaceholder": "Paste the Autotool API key",
+  "autotoolCfg.apiKeyHint": "Stored encrypted; never shown again after saving.",
+  "autotoolCfg.clearKey": "Clear key",
+  "autotoolCfg.undoClear": "Undo",
+  "autotoolCfg.clearKeyPending": "The saved key will be removed on Save.",
+  "autotoolCfg.test": "Test",
+  "autotoolCfg.testing": "Testing…",
+  "autotoolCfg.testHint": "Sends a probe request to the saved target with the saved key.",
+  "autotoolCfg.testNote":
+    "Test uses the saved settings — Save first if you just changed them. It probes the ImportPosts endpoint with an empty payload: a 401/403 means the key was rejected; any other response means the proxy is reachable and accepted the key.",
+  "autotoolCfg.sharedHeading": "Shared tables",
+  "autotoolCfg.sharedSubtitle":
+    "Tables currently exposed to Autotool. View the exact POST request that would be sent for each.",
+  "autotoolCfg.sharedEmpty":
+    "No tables are shared to Autotool yet. Enable one with the Autotool button on a bulk table.",
+  "autotoolCfg.rowsCols": "{rows} rows · {cols} cols",
+  "autotoolCfg.viewRequest": "View POST request",
+  "autotoolCfg.previewTitle": "POST request — {name}",
+  "autotoolCfg.noTarget": "No target URL set — configure it above.",
+  "autotoolCfg.noKey": "No API key set — configure it above.",
+  "autotoolCfg.siteColumn": "Site column",
+  "autotoolCfg.siteColumnNone": "— none —",
+  "autotoolCfg.detected": "auto-detected",
+  "autotoolCfg.siteCount": "{n} sites",
+  "autotoolCfg.request": "Request",
+  "autotoolCfg.copy": "Copy",
+  "autotoolCfg.keyMaskedNote":
+    "X-Api-Key is masked here; the real key is sent with the request.",
+  "autotoolCfg.close": "Close",
 
   // domains page
   "domains.title": "Domains",
