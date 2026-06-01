@@ -1467,6 +1467,9 @@ export const en = {
   "tools.findReplace.title": "Find & replace",
   "tools.findReplace.desc":
     "Search or bulk-replace text across cells. Supports regex; replaces are revertable.",
+  "tools.structureFormat.title": "Structure & formatting",
+  "tools.structureFormat.desc":
+    "Clean up AI output: markdown→HTML, strip response-start junk, inline CSS, and bold/italic.",
 
   // ---------- pagination ----------
   "pager.showing": "Showing {from}–{to} of {total}",
@@ -1520,6 +1523,65 @@ export const en = {
   "replaceRun.colBefore": "Before",
   "replaceRun.colAfter": "After",
   "replaceRun.editedSince": "edited since",
+  "replaceRun.revertedRow": "Reverted",
+
+  // ---------- structure & formatting tool ----------
+  "structureFormat.backToTable": "← Back to table",
+  "structureFormat.title": "Structure & formatting",
+  "structureFormat.onTable": "On table “{name}”",
+  "structureFormat.opsLabel": "Operations",
+  "structureFormat.opsHint":
+    "Selected operations run in the listed order — later ones build on earlier ones.",
+  "structureFormat.op.markdown.title": "Markdown → HTML",
+  "structureFormat.op.markdown.desc":
+    "Convert leftover markdown (headings, bold, italic, links, lists, code) to HTML tags.",
+  "structureFormat.op.response_start.title": "Response start",
+  "structureFormat.op.response_start.desc":
+    "Strip a leading “html” / ``` fence and the <!DOCTYPE>/<html>/<head>/<body> wrapper so the cell starts at a real tag.",
+  "structureFormat.op.inline_css.title": "Inline CSS",
+  "structureFormat.op.inline_css.desc":
+    "Remove style=\"…\" attributes and <style> blocks; other attributes are kept.",
+  "structureFormat.op.html_format.title": "HTML formatting",
+  "structureFormat.op.html_format.desc":
+    "Unwrap <b> <strong> <i> <em> <u> tags, keeping the text inside.",
+  "structureFormat.columnsLabel": "Columns to clean",
+  "structureFormat.previewBtn": "Preview",
+  "structureFormat.previewResult": "{change} of {total} cells will change",
+  "structureFormat.previewHeading": "Preview — cells that will change",
+  "structureFormat.previewNone": "No cells would change with the current selection.",
+  "structureFormat.applyBtn": "Apply",
+  "structureFormat.confirmApply":
+    "Apply the selected operations to every cell in the chosen columns? This runs in the background and is revertable.",
+  "structureFormat.historyHeading": "History",
+  "structureFormat.historyCells": "{n} changed",
+  "structureFormat.runLabel": "Run #{id}",
+  "structureFormat.reverted": "reverted",
+
+  // ---------- structure & formatting run ----------
+  "structureFormatRun.title": "Structure run #{id}",
+  "structureFormatRun.meta": "{cells} changed · by {by} · {when}",
+  "structureFormatRun.colApplied": "Applied",
+  "structureFormatRun.colChanges": "Changes",
+  "structureFormatRun.filterLabel": "Applied:",
+  "structureFormatRun.filterAllOps": "All operations",
+  "structureFormatRun.noFilterMatch": "No cells were changed by that operation.",
+  "structureFormatRun.processing": "Processing {done} / {total} cells…",
+  "structureFormatRun.preparing": "Preparing…",
+  "structureFormatRun.cancel": "Cancel",
+  "structureFormatRun.resume": "Resume",
+  "structureFormatRun.resumeHint": "Re-enqueue if the run seems stuck",
+  "structureFormatRun.confirmCancel":
+    "Stop this run? Cells already processed keep their change (and stay revertable); the rest are left untouched.",
+  "structureFormatRun.noChanges":
+    "Nothing changed — the selected cells were already clean.",
+  "structureFormatRun.revert": "Revert",
+  "structureFormatRun.revertedAt": "Reverted · {when}",
+  "structureFormatRun.confirmRevert":
+    "Restore every cell this run changed to its previous value?",
+  "structureFormatRun.confirmRevertDrift":
+    "{n} cell(s) were edited after this run. Reverting will discard those later changes too. Continue?",
+  "structureFormatRun.driftWarning":
+    "{n} cell(s) have been edited since this run — reverting would discard those changes.",
 
   // ---------- link checker tool ----------
   "tools.linkCheck.title": "Link checker",

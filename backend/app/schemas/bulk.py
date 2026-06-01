@@ -428,6 +428,22 @@ class HighlightSegment(BaseModel):
     changed: bool
 
 
+class DiffSegment(BaseModel):
+    """One span of a two-sided diff. ``changed`` spans are struck red on the
+    Before side / highlighted green on the After side."""
+
+    text: str
+    changed: bool
+
+
+class UnifiedSegment(BaseModel):
+    """One span of a single-pane diff: ``add`` green, ``del`` red+struck,
+    ``equal`` plain."""
+
+    text: str
+    kind: Literal["equal", "add", "del"]
+
+
 class ReplacedCell(BaseModel):
     """One affected cell on the run detail page. ``current_value`` is the
     cell's value right now; ``drifted`` is True when it no longer equals the
@@ -457,6 +473,107 @@ class FindReplaceRunDetail(FindReplaceRunRead):
     total_cells: int  # == cell_count, echoed for pagination math
     drifted_count: int
     items: list[ReplacedCell]
+
+
+# ----- Structure & Formatting (added in migration 0040) -----
+
+# The selectable transforms. Applied in THIS canonical order regardless of the
+# order they arrive in (mirrors services/structure_format.OPERATIONS).
+StructureFormatOp = Literal[
+    "markdown", "response_start", "inline_css", "html_format"
+]
+
+
+StructureFormatStatus = Literal[
+    "queued", "running", "done", "failed", "cancelled"
+]
+
+
+class StructureFormatRequest(BaseModel):
+    """Run a subset of the structure/formatting transforms across the chosen
+    columns. ``column_ids`` empty = every column. At least one operation is
+    required (validated in the endpoint)."""
+
+    operations: list[StructureFormatOp] = Field(default_factory=list)
+    column_ids: list[int] = Field(default_factory=list)
+
+
+class StructureFormatPreviewCell(BaseModel):
+    """One cell that would change, for the preview's scope table — same
+    Applied / Changes shape as the result table, without writing anything."""
+
+    row_id: int
+    row_position: int
+    column_id: int
+    column_name: str
+    applied_ops: list[str] = []
+    change_segments: list[UnifiedSegment] = []
+
+
+class StructureFormatPreview(BaseModel):
+    """Dry-run impact: counts + a paginated sample of the cells that would
+    change (with the Applied/Changes view), so the user sees the scope before
+    applying."""
+
+    candidates: int  # non-empty cells in scope
+    would_change: int  # of those, how many the transforms would alter
+    page: int
+    page_size: int
+    items: list[StructureFormatPreviewCell] = []
+
+
+class StructureFormatRunRead(BaseModel):
+    """Summary of a structure-format run — drives the history list + polling."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    table_id: int
+    name: str | None = None
+    operations: list[str]
+    column_ids: list[int]
+    status: StructureFormatStatus
+    total: int
+    done: int
+    failed: int
+    cell_count: int
+    reverted_at: datetime | None = None
+    error: str | None = None
+    created_by_id: int | None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class StructureFormatCell(BaseModel):
+    """One affected cell on the run detail page. ``drifted`` is True when the
+    cell was edited since the run (reverting would discard that change).
+
+    ``change_segments`` is a CONDENSED single-pane diff (old→new) — long
+    unchanged stretches are elided so the changes stay visible in a huge HTML
+    cell. ``applied_ops`` is the subset of the run's transforms that actually
+    changed THIS cell."""
+
+    row_id: int
+    row_position: int
+    column_id: int
+    column_name: str
+    old_value: str | None
+    new_value: str | None
+    current_value: str | None
+    current_status: CellStatus
+    drifted: bool
+    applied_ops: list[str] = []
+    change_segments: list[UnifiedSegment] = []
+
+
+class StructureFormatRunDetail(StructureFormatRunRead):
+    created_by_name: str | None = None
+    page: int
+    page_size: int
+    total_cells: int  # == cell_count, echoed for pagination math
+    drifted_count: int
+    items: list[StructureFormatCell]
 
 
 # ----- Link checker (added in migration 0034) -----
@@ -611,22 +728,6 @@ class LinkFixViolationLite(BaseModel):
     link: str
     detail_code: str | None = None
     status_code: int | None = None
-
-
-class DiffSegment(BaseModel):
-    """One span of a two-sided diff. ``changed`` spans are struck red on the
-    Before side / highlighted green on the After side."""
-
-    text: str
-    changed: bool
-
-
-class UnifiedSegment(BaseModel):
-    """One span of a single-pane diff: ``add`` green, ``del`` red+struck,
-    ``equal`` plain."""
-
-    text: str
-    kind: Literal["equal", "add", "del"]
 
 
 class LinkFixCellRead(BaseModel):

@@ -1530,6 +1530,9 @@ export const ru: Record<keyof typeof en, string> = {
   "tools.findReplace.title": "Найти и заменить",
   "tools.findReplace.desc":
     "Поиск и массовая замена текста в ячейках. Поддержка regex; замены можно откатить.",
+  "tools.structureFormat.title": "Структура и форматирование",
+  "tools.structureFormat.desc":
+    "Чистка вывода ИИ: markdown→HTML, удаление мусора в начале, инлайн-CSS и жирный/курсив.",
 
   // ---------- пагинация ----------
   "pager.showing": "Показано {from}–{to} из {total}",
@@ -1583,8 +1586,67 @@ export const ru: Record<keyof typeof en, string> = {
   "replaceRun.colBefore": "Было",
   "replaceRun.colAfter": "Стало",
   "replaceRun.editedSince": "изменено позже",
+  "replaceRun.revertedRow": "Откачено",
 
   // ---------- проверка ссылок ----------
+  // ---------- инструмент структуры и форматирования ----------
+  "structureFormat.backToTable": "← Назад к таблице",
+  "structureFormat.title": "Структура и форматирование",
+  "structureFormat.onTable": "В таблице «{name}»",
+  "structureFormat.opsLabel": "Операции",
+  "structureFormat.opsHint":
+    "Выбранные операции выполняются в указанном порядке — последующие опираются на предыдущие.",
+  "structureFormat.op.markdown.title": "Markdown → HTML",
+  "structureFormat.op.markdown.desc":
+    "Преобразовать оставшийся markdown (заголовки, жирный, курсив, ссылки, списки, код) в HTML-теги.",
+  "structureFormat.op.response_start.title": "Начало ответа",
+  "structureFormat.op.response_start.desc":
+    "Убрать ведущее «html» / ограждение ``` и обёртку <!DOCTYPE>/<html>/<head>/<body>, чтобы ячейка начиналась с реального тега.",
+  "structureFormat.op.inline_css.title": "Инлайн-CSS",
+  "structureFormat.op.inline_css.desc":
+    "Удалить атрибуты style=\"…\" и блоки <style>; прочие атрибуты сохраняются.",
+  "structureFormat.op.html_format.title": "HTML-форматирование",
+  "structureFormat.op.html_format.desc":
+    "Снять теги <b> <strong> <i> <em> <u>, сохранив текст внутри.",
+  "structureFormat.columnsLabel": "Колонки для чистки",
+  "structureFormat.previewBtn": "Предпросмотр",
+  "structureFormat.previewResult": "Изменится {change} из {total} ячеек",
+  "structureFormat.previewHeading": "Предпросмотр — ячейки, которые изменятся",
+  "structureFormat.previewNone": "С текущим выбором ни одна ячейка не изменится.",
+  "structureFormat.applyBtn": "Применить",
+  "structureFormat.confirmApply":
+    "Применить выбранные операции ко всем ячейкам выбранных колонок? Выполняется в фоне, действие можно откатить.",
+  "structureFormat.historyHeading": "История",
+  "structureFormat.historyCells": "{n} изменено",
+  "structureFormat.runLabel": "Запуск #{id}",
+  "structureFormat.reverted": "откачено",
+
+  // ---------- запуск структуры и форматирования ----------
+  "structureFormatRun.title": "Запуск структуры #{id}",
+  "structureFormatRun.meta": "{cells} изменено · {by} · {when}",
+  "structureFormatRun.colApplied": "Применено",
+  "structureFormatRun.colChanges": "Изменения",
+  "structureFormatRun.filterLabel": "Применено:",
+  "structureFormatRun.filterAllOps": "Все операции",
+  "structureFormatRun.noFilterMatch": "Эта операция не изменила ни одной ячейки.",
+  "structureFormatRun.processing": "Обработано {done} / {total} ячеек…",
+  "structureFormatRun.preparing": "Подготовка…",
+  "structureFormatRun.cancel": "Отменить",
+  "structureFormatRun.resume": "Возобновить",
+  "structureFormatRun.resumeHint": "Поставить заново, если запуск завис",
+  "structureFormatRun.confirmCancel":
+    "Остановить запуск? Уже обработанные ячейки сохранят изменения (и их можно откатить); остальные не тронуты.",
+  "structureFormatRun.noChanges":
+    "Ничего не изменилось — выбранные ячейки уже чистые.",
+  "structureFormatRun.revert": "Откатить",
+  "structureFormatRun.revertedAt": "Откачено · {when}",
+  "structureFormatRun.confirmRevert":
+    "Восстановить все изменённые этим запуском ячейки к прежним значениям?",
+  "structureFormatRun.confirmRevertDrift":
+    "{n} ячеек были изменены после этого запуска. Откат отменит и эти изменения. Продолжить?",
+  "structureFormatRun.driftWarning":
+    "{n} ячеек были изменены после этого запуска — откат отменит эти изменения.",
+
   "tools.linkCheck.title": "Проверка ссылок",
   "tools.linkCheck.desc":
     "Находит пропущенные, выдуманные и нерабочие (404) ссылки в контенте.",

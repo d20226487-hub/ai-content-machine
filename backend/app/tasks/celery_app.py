@@ -28,6 +28,7 @@ celery_app = Celery(
         "app.tasks.bulk_generation",
         "app.tasks.link_check",
         "app.tasks.link_fix",
+        "app.tasks.structure_format",
         "app.tasks.publish_bulk",
         "app.tasks.publish_single",
         "app.tasks.backup",

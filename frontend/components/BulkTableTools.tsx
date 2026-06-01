@@ -30,6 +30,12 @@ export function BulkTableTools({ tableId }: { tableId: number }) {
           title={t("tools.linkCheck.title")}
           description={t("tools.linkCheck.desc")}
         />
+        <ToolCard
+          href={`/library/${tableId}/structure-format`}
+          icon="⊞"
+          title={t("tools.structureFormat.title")}
+          description={t("tools.structureFormat.desc")}
+        />
       </div>
     </section>
   );

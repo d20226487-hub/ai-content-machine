@@ -26,6 +26,10 @@ from app.db.models.prompt import Prompt, PromptVersion
 from app.db.models.provider import Provider
 from app.db.models.publish_job import PublishJob
 from app.db.models.role import Role
+from app.db.models.structure_format_run import (
+    StructureFormatCell,
+    StructureFormatRun,
+)
 from app.db.models.tag import Tag, prompt_tags
 from app.db.models.usage_event import UsageEvent
 from app.db.models.user import User
@@ -60,6 +64,8 @@ __all__ = [
     "Provider",
     "PublishJob",
     "Role",
+    "StructureFormatCell",
+    "StructureFormatRun",
     "Tag",
     "UsageEvent",
     "User",

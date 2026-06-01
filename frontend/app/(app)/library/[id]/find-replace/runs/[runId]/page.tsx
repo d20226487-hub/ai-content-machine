@@ -203,11 +203,16 @@ export default function ReplaceRunPage({
                           side={c.drifted ? "drift" : "new"}
                         />
                       </span>
-                      {c.drifted && (
-                        <span className="mt-1 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-900 dark:bg-amber-400/15 dark:text-amber-200">
-                          {t("replaceRun.editedSince")}
-                        </span>
-                      )}
+                      {c.drifted &&
+                        (run.status === "reverted" ? (
+                          <span className="mt-1 inline-block rounded-full bg-neutral-200 px-2 py-0.5 text-[10px] font-medium text-neutral-600 dark:bg-neutral-700 dark:text-neutral-300">
+                            {t("replaceRun.revertedRow")}
+                          </span>
+                        ) : (
+                          <span className="mt-1 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-900 dark:bg-amber-400/15 dark:text-amber-200">
+                            {t("replaceRun.editedSince")}
+                          </span>
+                        ))}
                     </td>
                   </tr>
                 ))}

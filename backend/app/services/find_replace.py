@@ -195,6 +195,107 @@ def unified_segments(old: str, new: str) -> list[dict]:
     return out
 
 
+# Tokens for a coarse-grained diff: a whole HTML tag, a run of whitespace, a
+# word, or a single punctuation char. Tokenizing first cuts difflib's input
+# from ~thousands of chars to ~hundreds of tokens — and SequenceMatcher is
+# ~quadratic, so a big cell diffs ~100x faster with the same visible spans
+# (tag/word granularity is also more readable). Every char matches exactly one
+# alternative, so "".join(tokens) == original.
+_DIFF_TOKEN_RE = re.compile(r"<[^>]+>|\s+|\w+|[^\w\s]")
+
+
+def unified_segments_tokens(old: str, new: str) -> list[dict]:
+    """Same ``{text, kind}`` output as ``unified_segments`` but diffs at TOKEN
+    granularity (HTML tags / words / whitespace / punctuation) — far faster on
+    large cells. Use for big HTML values; the char-level version stays for
+    short cells where per-character precision matters."""
+    a = _DIFF_TOKEN_RE.findall(old or "")
+    b = _DIFF_TOKEN_RE.findall(new or "")
+    sm = difflib.SequenceMatcher(a=a, b=b, autojunk=False)
+    out: list[dict] = []
+
+    def push(text: str, kind: str) -> None:
+        if not text:
+            return
+        if out and out[-1]["kind"] == kind:
+            out[-1]["text"] += text
+        else:
+            out.append({"text": text, "kind": kind})
+
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            push("".join(a[i1:i2]), "equal")
+        elif tag == "delete":
+            push("".join(a[i1:i2]), "del")
+        elif tag == "insert":
+            push("".join(b[j1:j2]), "add")
+        else:  # replace
+            push("".join(a[i1:i2]), "del")
+            push("".join(b[j1:j2]), "add")
+    return out
+
+
+def condense_unified(
+    old: str, new: str, *, context: int = 48, max_keep: int = 120
+) -> list[dict]:
+    """A condensed single-pane diff for a long value: like
+    ``unified_segments_tokens`` but long UNCHANGED runs are elided to
+    ``context`` chars of surrounding
+    context with an ellipsis, so the changes stay visible instead of scrolling
+    off-screen. Changed (add/del) spans are always kept in full.
+
+    Two-level diff for speed: SequenceMatcher first runs over LINES (cheap —
+    ~hundreds of elements, not ~thousands of chars), then only the CHANGED
+    line-blocks are re-diffed at token granularity for inline precision. On a
+    big multi-line HTML cell this is dramatically faster than a flat
+    char/token diff, with the same visible spans.
+    """
+    a_lines = (old or "").splitlines(keepends=True)
+    b_lines = (new or "").splitlines(keepends=True)
+    sm = difflib.SequenceMatcher(a=a_lines, b=b_lines, autojunk=False)
+
+    raw: list[dict] = []
+
+    def push(text: str, kind: str) -> None:
+        if not text:
+            return
+        if raw and raw[-1]["kind"] == kind:
+            raw[-1]["text"] += text
+        else:
+            raw.append({"text": text, "kind": kind})
+
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            push("".join(a_lines[i1:i2]), "equal")
+        elif tag == "delete":
+            push("".join(a_lines[i1:i2]), "del")
+        elif tag == "insert":
+            push("".join(b_lines[j1:j2]), "add")
+        else:  # replace — token-diff just the changed block (small) for detail
+            for s in unified_segments_tokens(
+                "".join(a_lines[i1:i2]), "".join(b_lines[j1:j2])
+            ):
+                push(s["text"], s["kind"])
+
+    n = len(raw)
+    out: list[dict] = []
+    for i, s in enumerate(raw):
+        if s["kind"] != "equal" or len(s["text"]) <= max_keep:
+            out.append(s)
+            continue
+        text = s["text"]
+        has_left = i > 0
+        has_right = i < n - 1
+        if has_left and has_right:
+            text = text[:context] + " … " + text[-context:]
+        elif has_right:
+            text = "… " + text[-context:]
+        else:  # leading-only context, or whole-cell unchanged (shouldn't occur)
+            text = text[:context] + " …"
+        out.append({"text": text, "kind": "equal"})
+    return out
+
+
 def apply_replace(
     compiled: re.Pattern[str],
     value: str,

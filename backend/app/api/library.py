@@ -13,7 +13,7 @@ import io
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -35,6 +35,8 @@ from app.db.models import (
     LinkCheckViolation,
     LinkFixCell,
     LinkFixRun,
+    StructureFormatCell,
+    StructureFormatRun,
     User,
 )
 from app.db.session import get_db
@@ -74,6 +76,12 @@ from app.schemas.bulk import (
     ReplaceRequest,
     RowRead,
     RunRename,
+    StructureFormatCell as StructureFormatCellSchema,
+    StructureFormatPreview,
+    StructureFormatPreviewCell,
+    StructureFormatRequest,
+    StructureFormatRunDetail,
+    StructureFormatRunRead,
     TableBulkMove,
     TableCreate,
     TableFixedCell,
@@ -88,15 +96,21 @@ from app.services.find_replace import (
     InvalidPattern,
     apply_replace,
     compile_pattern,
+    condense_unified,
     count_matches,
     diff_segments,
     drift_segments,
     segment_diff,
     unified_segments,
 )
+from app.services.structure_format import (
+    OPERATIONS as SF_OPERATIONS,
+    apply_operations_traced as sf_apply_traced,
+)
 from app.tasks.bulk_generation import generate_bulk_cell
 from app.tasks.link_check import resume_link_check, seed_link_check
 from app.tasks.link_fix import fix_cell as fix_cell_task, resume_link_fix
+from app.tasks.structure_format import resume_sf, run_sf
 
 router = APIRouter(
     prefix="/library", tags=["library"], dependencies=[Depends(get_current_user)]
@@ -2467,6 +2481,445 @@ async def revert_replace_run(
     await db.commit()
     await db.refresh(run)
     return run
+
+
+# ---------- Structure & Formatting (content tool) ----------
+
+
+async def _get_sf_run_or_404(
+    db: AsyncSession, run_id: int
+) -> StructureFormatRun:
+    run = await db.get(StructureFormatRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run
+
+
+@router.post(
+    "/tables/{table_id}/structure-format/preview",
+    response_model=StructureFormatPreview,
+)
+async def structure_format_preview(
+    table_id: int,
+    payload: StructureFormatRequest,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=200),
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StructureFormatPreview:
+    """Dry run (writes nothing): the cells the selected transforms WOULD change
+    — counts + a paginated sample with the same Applied / Changes view as the
+    result table — so the user sees the scope before applying."""
+    await _get_table_or_404(db, table_id, actor, level="read")
+    ops = [op for op in SF_OPERATIONS if op in set(payload.operations)]
+    if not ops:
+        raise HTTPException(
+            status_code=400, detail="Select at least one operation."
+        )
+
+    candidates = 0
+    # Lightweight rows (no values retained) for changed cells, so the count is
+    # exact; the page's diff is computed only for the slice that's shown.
+    changed: list[tuple[int, int, int, str, str, str, list[str]]] = []
+    for cell, row_pos, col_name in await _load_cells_with_meta(
+        db, table_id, payload.column_ids
+    ):
+        if not cell.value or not cell.value.strip():
+            continue
+        candidates += 1
+        new_value, applied = sf_apply_traced(cell.value, ops)
+        if new_value != cell.value:
+            changed.append(
+                (
+                    row_pos,
+                    cell.row_id,
+                    cell.column_id,
+                    col_name,
+                    cell.value,
+                    new_value,
+                    applied,
+                )
+            )
+
+    start = (page - 1) * page_size
+    page_rows = changed[start : start + page_size]
+    items = [
+        StructureFormatPreviewCell(
+            row_id=rid,
+            row_position=rp,
+            column_id=cid,
+            column_name=cn,
+            applied_ops=applied,
+            change_segments=[
+                UnifiedSegment(**s) for s in condense_unified(old, new)
+            ],
+        )
+        for (rp, rid, cid, cn, old, new, applied) in page_rows
+    ]
+    return StructureFormatPreview(
+        candidates=candidates,
+        would_change=len(changed),
+        page=page,
+        page_size=page_size,
+        items=items,
+    )
+
+
+@router.post(
+    "/tables/{table_id}/structure-format",
+    response_model=StructureFormatRunRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def structure_format_apply(
+    table_id: int,
+    payload: StructureFormatRequest,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StructureFormatRun:
+    """Queue a structure-format run (202) and process it in a Celery worker
+    with live progress — the apply scales to large tables without blocking the
+    request. Poll ``GET /structure-format-runs/{id}``."""
+    await _get_table_or_404(db, table_id, actor, level="write")
+    ops = [op for op in SF_OPERATIONS if op in set(payload.operations)]
+    if not ops:
+        raise HTTPException(
+            status_code=400, detail="Select at least one operation."
+        )
+    if payload.column_ids:
+        await _verify_columns_in_table(db, table_id, payload.column_ids)
+
+    run = StructureFormatRun(
+        table_id=table_id,
+        operations=ops,
+        column_ids=list(payload.column_ids),
+        status="queued",
+        created_by_id=actor.id,
+    )
+    db.add(run)
+    await db.commit()
+    await db.refresh(run)
+    run_sf.delay(run.id)
+    return run
+
+
+@router.get(
+    "/tables/{table_id}/structure-format-runs",
+    response_model=list[StructureFormatRunRead],
+)
+async def list_structure_format_runs(
+    table_id: int,
+    limit: int = Query(default=100, ge=1, le=500),
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[StructureFormatRun]:
+    """Structure-format history for a table, newest first."""
+    await _get_table_or_404(db, table_id, actor, level="read")
+    runs = (
+        (
+            await db.execute(
+                select(StructureFormatRun)
+                .where(StructureFormatRun.table_id == table_id)
+                .order_by(StructureFormatRun.created_at.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return list(runs)
+
+
+@router.get(
+    "/structure-format-runs/{run_id}",
+    response_model=StructureFormatRunDetail,
+)
+async def get_structure_format_run(
+    run_id: int,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=500),
+    op: str | None = Query(default=None),
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StructureFormatRunDetail:
+    """Run state (status/progress) + the CHANGED cells (paginated) with
+    before/after diff and a per-cell ``drifted`` flag. The run page polls this
+    every ~2s while active, then stops on a terminal status. ``op`` filters to
+    cells where that transform actually applied."""
+    run = await _get_sf_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="read")
+
+    # Only 'done' cells (the ones that actually changed) appear in results.
+    base = select(StructureFormatCell).where(
+        StructureFormatCell.run_id == run_id,
+        StructureFormatCell.state == "done",
+    )
+    if op in SF_OPERATIONS:
+        base = base.where(StructureFormatCell.applied_ops.contains([op]))
+    total = (
+        await db.execute(select(func.count()).select_from(base.subquery()))
+    ).scalar_one()
+    rows = (
+        (
+            await db.execute(
+                base.order_by(
+                    StructureFormatCell.row_position, StructureFormatCell.id
+                )
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    # Current values for the shown cells → drift detection + the "after" side.
+    keys = [(c.row_id, c.column_id) for c in rows]
+    cur: dict[tuple[int, int], tuple[str | None, str]] = {}
+    if keys:
+        cur_cells = (
+            (
+                await db.execute(
+                    select(BulkTableCell).where(
+                        BulkTableCell.row_id.in_([k[0] for k in keys]),
+                        BulkTableCell.column_id.in_([k[1] for k in keys]),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        cur = {
+            (c.row_id, c.column_id): (c.value, c.status) for c in cur_cells
+        }
+
+    # drifted_count across the whole run (cheap: current != new_value).
+    drifted_count = (
+        await db.execute(
+            text(
+                """
+                SELECT count(*) FROM structure_format_cells sfc
+                LEFT JOIN bulk_table_cells bc
+                  ON bc.row_id = sfc.row_id AND bc.column_id = sfc.column_id
+                WHERE sfc.run_id = :rid AND sfc.state = 'done'
+                  AND bc.value IS DISTINCT FROM sfc.new_value
+                """
+            ),
+            {"rid": run_id},
+        )
+    ).scalar_one()
+
+    items: list[StructureFormatCellSchema] = []
+    for c in rows:
+        cur_val, cur_status = cur.get(
+            (c.row_id, c.column_id), (None, "empty")
+        )
+        old_v = c.old_value
+        new_v = c.new_value
+        drifted = cur_val != new_v
+        # Condensed single-pane diff (old→new) keeps the changes visible in a
+        # huge cell; applied_ops (stored) = which transforms touched this cell.
+        change_segs = condense_unified(old_v or "", new_v or "")
+        items.append(
+            StructureFormatCellSchema(
+                row_id=c.row_id,
+                row_position=c.row_position,
+                column_id=c.column_id,
+                column_name=c.column_name,
+                old_value=old_v,
+                new_value=new_v,
+                current_value=cur_val,
+                current_status=cur_status,  # type: ignore[arg-type]
+                drifted=drifted,
+                applied_ops=list(c.applied_ops or []),
+                change_segments=change_segs,  # type: ignore[arg-type]
+            )
+        )
+
+    return StructureFormatRunDetail(
+        id=run.id,
+        table_id=run.table_id,
+        name=run.name,
+        operations=run.operations,
+        column_ids=run.column_ids,
+        status=run.status,  # type: ignore[arg-type]
+        total=run.total,
+        done=run.done,
+        failed=run.failed,
+        cell_count=run.cell_count,
+        reverted_at=run.reverted_at,
+        error=run.error,
+        created_by_id=run.created_by_id,
+        created_at=run.created_at,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        created_by_name=await _resolve_creator_name(db, run.created_by_id),
+        page=page,
+        page_size=page_size,
+        total_cells=int(total),
+        drifted_count=int(drifted_count),
+        items=items,
+    )
+
+
+@router.post(
+    "/structure-format-runs/{run_id}/revert",
+    response_model=StructureFormatRunRead,
+)
+async def revert_structure_format_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StructureFormatRun:
+    """Restore every cell this run changed to its pre-run value. Idempotent;
+    skips rows/columns that no longer exist. Discards edits made after the
+    run (the run page surfaces a drift count first)."""
+    run = await _get_sf_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    if run.reverted_at is not None:
+        return run
+
+    valid_rows = {
+        rid
+        for (rid,) in (
+            await db.execute(
+                select(BulkTableRow.id).where(
+                    BulkTableRow.table_id == run.table_id
+                )
+            )
+        ).all()
+    }
+    valid_cols = {
+        cid
+        for (cid,) in (
+            await db.execute(
+                select(BulkTableColumn.id).where(
+                    BulkTableColumn.table_id == run.table_id
+                )
+            )
+        ).all()
+    }
+
+    changed_cells = (
+        (
+            await db.execute(
+                select(StructureFormatCell).where(
+                    StructureFormatCell.run_id == run_id,
+                    StructureFormatCell.state == "done",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for sfc in changed_cells:
+        rid, cid = sfc.row_id, sfc.column_id
+        if rid not in valid_rows or cid not in valid_cols:
+            continue
+        cell = (
+            await db.execute(
+                select(BulkTableCell).where(
+                    BulkTableCell.row_id == rid,
+                    BulkTableCell.column_id == cid,
+                )
+            )
+        ).scalar_one_or_none()
+        old_value = sfc.old_value
+        old_status = sfc.old_status or _default_status_for(old_value)
+        if cell is None:
+            db.add(
+                BulkTableCell(
+                    row_id=rid,
+                    column_id=cid,
+                    value=old_value,
+                    status=old_status,
+                )
+            )
+        else:
+            if cell.value != old_value and cell.translations is not None:
+                cell.translations = None
+            cell.value = old_value
+            cell.status = old_status
+
+    run.reverted_at = datetime.now(timezone.utc)
+    await _bump_table_updated(db, run.table_id)
+    await db.commit()
+    await db.refresh(run)
+    return run
+
+
+@router.post(
+    "/structure-format-runs/{run_id}/cancel",
+    response_model=StructureFormatRunRead,
+)
+async def cancel_structure_format_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StructureFormatRun:
+    """Stop an in-flight run. Cells already processed keep their change (and
+    are revertable); the rest are left untouched. No-op on terminal states."""
+    run = await _get_sf_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    if run.status in ("done", "failed", "cancelled"):
+        return run
+    run.status = "cancelled"
+    if run.finished_at is None:
+        run.finished_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(run)
+    return run
+
+
+@router.post(
+    "/structure-format-runs/{run_id}/resume",
+    response_model=StructureFormatRunRead,
+)
+async def resume_structure_format_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StructureFormatRun:
+    """Re-enqueue a stalled run's remaining cells. No-op on terminal states."""
+    run = await _get_sf_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    if run.status in ("done", "failed", "cancelled"):
+        return run
+    resume_sf.delay(run.id)
+    return run
+
+
+@router.patch(
+    "/structure-format-runs/{run_id}",
+    response_model=StructureFormatRunRead,
+)
+async def rename_structure_format_run(
+    run_id: int,
+    payload: RunRename,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StructureFormatRun:
+    run = await _get_sf_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    run.name = _norm_run_name(payload)
+    await db.commit()
+    await db.refresh(run)
+    return run
+
+
+@router.delete(
+    "/structure-format-runs/{run_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_structure_format_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    run = await _get_sf_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    await db.delete(run)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ---------- Link checker (content tool) ----------
