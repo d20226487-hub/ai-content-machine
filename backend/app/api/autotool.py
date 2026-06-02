@@ -61,7 +61,9 @@ async def get_autotool_csv(
     if t is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
-    csv_text = await build_table_csv(db, t)
+    # single_line: collapse newlines inside cells so every row is one physical
+    # line — the Autotool proxy consumes this directly.
+    csv_text = await build_table_csv(db, t, single_line=True)
     safe_name = "".join(
         ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in t.name
     )
