@@ -56,15 +56,25 @@ export interface AutotoolTablesPage {
   page_size: number;
 }
 
+export interface AutotoolDomainRequest {
+  site: string;
+  file: string;
+  csv_path: string;
+  row_count: number;
+  body: { sites: string[]; data: { file: string } };
+}
+
 export interface AutotoolPostPreview {
   method: string;
   url: string | null;
   headers: Record<string, string>;
-  body: { sites: string[]; data: { file: string | null } };
   columns: { id: number; name: string }[];
   site_column_id: number | null;
   detected_site_column_id: number | null;
-  site_count: number;
+  domain_count: number;
+  total_rows_matched: number;
+  table_row_count: number;
+  requests: AutotoolDomainRequest[];
   target_configured: boolean;
   api_key_configured: boolean;
 }
@@ -86,5 +96,36 @@ export function getPostPreview(
     siteColumnId != null ? `?site_column_id=${siteColumnId}` : "";
   return api<AutotoolPostPreview>(
     `/autotool/tables/${tableId}/post-preview${qs}`,
+  );
+}
+
+export interface AutotoolSendItem {
+  site: string;
+  file: string;
+  ok: boolean;
+  status_code: number | null;
+  detail: string;
+  response_snippet: string | null;
+  elapsed_ms: number | null;
+}
+
+export interface AutotoolSendResult {
+  total: number;
+  sent: number;
+  failed: number;
+  target_url: string | null;
+  items: AutotoolSendItem[];
+}
+
+/** Fire one ImportPosts POST per domain. This publishes to live sites — the
+ *  caller must confirm with the user first. */
+export function sendToAutotool(
+  tableId: number,
+  siteColumnId?: number | null,
+): Promise<AutotoolSendResult> {
+  const qs = siteColumnId != null ? `?site_column_id=${siteColumnId}` : "";
+  return api<AutotoolSendResult>(
+    `/autotool/tables/${tableId}/send${qs}`,
+    { method: "POST" },
   );
 }

@@ -969,6 +969,23 @@ export const en = {
   "autotoolCfg.keyMaskedNote":
     "X-Api-Key is masked here; the real key is sent with the request.",
   "autotoolCfg.close": "Close",
+  "autotoolCfg.splitSummary": "{domains} domains · {rows} rows",
+  "autotoolCfg.unmatchedWarn":
+    "{n} rows have no value in this column and are excluded from every file.",
+  "autotoolCfg.requestsHeading": "{n} requests (one per domain)",
+  "autotoolCfg.copyAll": "Copy all",
+  "autotoolCfg.noDomains":
+    "No domains found in the selected column — pick the column that holds the target sites.",
+  "autotoolCfg.rowsForDomain": "{n} rows",
+  "autotoolCfg.copyCsvLink": "Copy link",
+  "autotoolCfg.sendAll": "Send all ({n})",
+  "autotoolCfg.sendConfirmWarn":
+    "This sends {n} POST requests and publishes those domains to live sites via Autotool. Continue?",
+  "autotoolCfg.sendConfirm": "Send now",
+  "autotoolCfg.sending": "Sending…",
+  "autotoolCfg.sendResult": "Sent {sent} · failed {failed}",
+  "autotoolCfg.sendNeedsConfig":
+    "Set the target URL and API key above before sending.",
 
   // domains page
   "domains.title": "Domains",

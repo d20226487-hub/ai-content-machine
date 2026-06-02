@@ -8,10 +8,13 @@ import { ApiError } from "@/lib/api";
 import {
   getPostPreview,
   listSharedTables,
+  sendToAutotool,
   type AutotoolPostPreview,
+  type AutotoolSendResult,
   type AutotoolTableItem,
   type AutotoolTablesPage,
 } from "@/lib/autotool";
+import { autotoolCsvUrl } from "@/lib/library";
 import { useT } from "@/lib/i18n-context";
 
 const PAGE_SIZE = 20;
@@ -122,6 +125,21 @@ function PostRequestModal({
   const [data, setData] = useState<AutotoolPostPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sendResult, setSendResult] = useState<AutotoolSendResult | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [copiedFile, setCopiedFile] = useState<string | null>(null);
+
+  async function copyCsvLink(file: string) {
+    try {
+      await navigator.clipboard.writeText(autotoolCsvUrl(file));
+      setCopiedFile(file);
+      setTimeout(() => setCopiedFile(null), 1500);
+    } catch {
+      /* clipboard blocked — ignore */
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -139,24 +157,53 @@ function PostRequestModal({
     };
   }, [table.id, siteColumnId, touchedColumn, t]);
 
-  const requestText = data
-    ? `${data.method} ${data.url ?? "—"}\n\n` +
+  function fmtRequest(body: object): string {
+    if (!data) return "";
+    return (
+      `${data.method} ${data.url ?? "—"}\n` +
       Object.entries(data.headers)
         .map(([k, v]) => `${k}: ${v}`)
         .join("\n") +
       `\n\n` +
-      JSON.stringify(data.body, null, 2)
-    : "";
+      JSON.stringify(body, null, 2)
+    );
+  }
 
-  async function copy() {
+  async function copyAll() {
+    if (!data) return;
+    const text = data.requests
+      .map((r) => fmtRequest(r.body))
+      .join("\n\n— — —\n\n");
     try {
-      await navigator.clipboard.writeText(requestText);
+      await navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
       /* ignore */
     }
   }
+
+  async function send() {
+    if (!data) return;
+    setSending(true);
+    setSendError(null);
+    try {
+      const res = await sendToAutotool(
+        table.id,
+        touchedColumn ? siteColumnId : undefined,
+      );
+      setSendResult(res);
+      setConfirming(false);
+    } catch (e) {
+      setSendError(
+        e instanceof ApiError ? e.message : t("common.somethingWentWrong"),
+      );
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const unmatched = data ? data.table_row_count - data.total_rows_matched : 0;
 
   return (
     <Modal onClose={onClose} size="max-w-2xl">
@@ -188,12 +235,16 @@ function PostRequestModal({
             <span className="font-medium text-neutral-700 dark:text-neutral-300">
               {t("autotoolCfg.siteColumn")}
             </span>
-            <span className="mt-1 flex items-center gap-2">
+            <span className="mt-1 flex flex-wrap items-center gap-2">
               <select
                 value={siteColumnId ?? ""}
                 onChange={(e) => {
                   setTouchedColumn(true);
                   setSiteColumnId(e.target.value ? Number(e.target.value) : null);
+                  // A column change regroups the requests; drop stale send state.
+                  setSendResult(null);
+                  setConfirming(false);
+                  setSendError(null);
                 }}
                 className="rounded-md border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
               >
@@ -208,32 +259,174 @@ function PostRequestModal({
                 ))}
               </select>
               <span className="text-xs text-neutral-500 dark:text-neutral-400">
-                {t("autotoolCfg.siteCount", { n: data.site_count })}
+                {t("autotoolCfg.splitSummary", {
+                  domains: data.domain_count,
+                  rows: data.total_rows_matched,
+                })}
               </span>
             </span>
           </label>
 
-          {/* Full request */}
+          {unmatched > 0 && (
+            <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+              {t("autotoolCfg.unmatchedWarn", { n: unmatched })}
+            </p>
+          )}
+
+          {/* Per-domain requests */}
           <div>
             <div className="mb-1 flex items-center justify-between">
               <span className="text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
-                {t("autotoolCfg.request")}
+                {t("autotoolCfg.requestsHeading", { n: data.domain_count })}
               </span>
-              <button
-                type="button"
-                onClick={() => void copy()}
-                className="text-xs font-medium text-neutral-600 hover:underline dark:text-neutral-300"
-              >
-                {copied ? t("autotool.copied") : t("autotoolCfg.copy")}
-              </button>
+              {data.requests.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => void copyAll()}
+                  className="text-xs font-medium text-neutral-600 hover:underline dark:text-neutral-300"
+                >
+                  {copied ? t("autotool.copied") : t("autotoolCfg.copyAll")}
+                </button>
+              )}
             </div>
-            <pre className="max-h-80 overflow-auto rounded-md bg-neutral-50 p-3 text-xs leading-relaxed text-neutral-800 dark:bg-neutral-950 dark:text-neutral-200">
-              {requestText}
-            </pre>
+
+            {data.requests.length === 0 ? (
+              <p className="rounded-md border border-dashed border-neutral-300 px-3 py-4 text-center text-xs text-neutral-500 dark:border-neutral-700 dark:text-neutral-400">
+                {t("autotoolCfg.noDomains")}
+              </p>
+            ) : (
+              <div className="max-h-96 space-y-3 overflow-auto">
+                {data.requests.map((r) => (
+                  <div key={r.file}>
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="truncate text-xs font-medium text-neutral-800 dark:text-neutral-200">
+                        {r.site}
+                      </span>
+                      <span className="shrink-0 text-xs text-neutral-400 dark:text-neutral-500">
+                        {t("autotoolCfg.rowsForDomain", { n: r.row_count })}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <a
+                        href={autotoolCsvUrl(r.file)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="min-w-0 flex-1 truncate font-mono text-xs text-blue-600 hover:underline dark:text-blue-400"
+                        title={autotoolCsvUrl(r.file)}
+                      >
+                        {autotoolCsvUrl(r.file)}
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => void copyCsvLink(r.file)}
+                        className="shrink-0 rounded-md border border-neutral-300 px-2 py-0.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                      >
+                        {copiedFile === r.file
+                          ? t("autotool.copied")
+                          : t("autotoolCfg.copyCsvLink")}
+                      </button>
+                    </div>
+                    <pre className="mt-1 overflow-auto rounded-md bg-neutral-50 p-3 text-xs leading-relaxed text-neutral-800 dark:bg-neutral-950 dark:text-neutral-200">
+                      {fmtRequest(r.body)}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            )}
             <p className="mt-1 text-xs text-neutral-400 dark:text-neutral-500">
               {t("autotoolCfg.keyMaskedNote")}
             </p>
           </div>
+
+          {/* Send */}
+          {data.requests.length > 0 && (
+            <div className="border-t border-neutral-200 pt-4 dark:border-neutral-800">
+              {!data.target_configured || !data.api_key_configured ? (
+                <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                  {t("autotoolCfg.sendNeedsConfig")}
+                </p>
+              ) : sendResult ? (
+                <div>
+                  <p
+                    className={
+                      "text-sm font-medium " +
+                      (sendResult.failed === 0
+                        ? "text-green-700 dark:text-green-400"
+                        : "text-amber-700 dark:text-amber-300")
+                    }
+                  >
+                    {t("autotoolCfg.sendResult", {
+                      sent: sendResult.sent,
+                      failed: sendResult.failed,
+                    })}
+                  </p>
+                  <ul className="mt-2 max-h-56 space-y-1 overflow-auto">
+                    {sendResult.items.map((it) => (
+                      <li
+                        key={it.file}
+                        className="flex items-start gap-2 text-xs"
+                        title={it.response_snippet ?? undefined}
+                      >
+                        <span
+                          className={
+                            it.ok
+                              ? "text-green-600 dark:text-green-400"
+                              : "text-red-600 dark:text-red-400"
+                          }
+                        >
+                          {it.ok ? "✓" : "✗"}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-neutral-700 dark:text-neutral-300">
+                          {it.site}
+                        </span>
+                        <span className="shrink-0 text-neutral-500 dark:text-neutral-400">
+                          {it.status_code != null ? `HTTP ${it.status_code}` : it.detail}
+                          {it.elapsed_ms != null ? ` · ${it.elapsed_ms}ms` : ""}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : confirming ? (
+                <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 dark:border-amber-700/60 dark:bg-amber-950/40">
+                  <p className="text-xs text-amber-900 dark:text-amber-200">
+                    {t("autotoolCfg.sendConfirmWarn", { n: data.domain_count })}
+                  </p>
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void send()}
+                      disabled={sending}
+                      className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-60"
+                    >
+                      {sending ? t("autotoolCfg.sending") : t("autotoolCfg.sendConfirm")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirming(false)}
+                      disabled={sending}
+                      className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-60 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                    >
+                      {t("autotool.cancel")}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirming(true)}
+                  className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
+                >
+                  {t("autotoolCfg.sendAll", { n: data.domain_count })}
+                </button>
+              )}
+              {sendError && (
+                <p className="mt-2 rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">
+                  {sendError}
+                </p>
+              )}
+            </div>
+          )}
         </div>
       )}
 

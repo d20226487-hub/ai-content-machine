@@ -25,6 +25,7 @@ from sqlalchemy.orm import selectinload
 
 from app.db.models import BulkTable
 from app.db.session import get_db
+from app.services.autotool_files import decode_file_token, rows_for_domain
 from app.services.bulk_csv import build_table_csv
 
 router = APIRouter(prefix="/autotool", tags=["autotool"])
@@ -35,17 +36,24 @@ async def get_autotool_csv(
     token: str,
     db: AsyncSession = Depends(get_db),
 ) -> Response:
-    """Return the live CSV for the enabled table owning ``token``, or 404.
+    """Return the live CSV for ``token``, or 404.
 
-    Regenerated from the DB on every request, so the Autotool always sees the
-    current table state without any file to keep in sync.
+    A plain table token serves the whole table; a composite token
+    (<table_token>~<col_id>~<b64domain>) serves only that domain's rows — one
+    Autotool file per site. Regenerated from the DB on every request.
     """
+    decoded = decode_file_token(token)
+    if decoded is not None:
+        table_token, column_id, domain = decoded
+    else:
+        table_token, column_id, domain = token, None, None
+
     t = (
         (
             await db.execute(
                 select(BulkTable)
                 .where(
-                    BulkTable.autotool_token == token,
+                    BulkTable.autotool_token == table_token,
                     BulkTable.autotool_enabled.is_(True),
                     BulkTable.deleted_at.is_(None),
                 )
@@ -61,9 +69,15 @@ async def get_autotool_csv(
     if t is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
+    include_row_ids: set[int] | None = None
+    if domain is not None and column_id is not None:
+        include_row_ids = await rows_for_domain(db, t.id, column_id, domain)
+
     # single_line: collapse newlines inside cells so every row is one physical
     # line — the Autotool proxy consumes this directly.
-    csv_text = await build_table_csv(db, t, single_line=True)
+    csv_text = await build_table_csv(
+        db, t, single_line=True, include_row_ids=include_row_ids
+    )
     safe_name = "".join(
         ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in t.name
     )

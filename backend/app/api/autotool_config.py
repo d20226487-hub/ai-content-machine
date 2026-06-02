@@ -17,6 +17,7 @@ from app.schemas.autotool import (
     AutotoolConfigRead,
     AutotoolConfigUpdate,
     AutotoolPostPreview,
+    AutotoolSendResult,
     AutotoolTablesPage,
     AutotoolTestResult,
 )
@@ -87,3 +88,35 @@ async def autotool_post_preview(
     if t is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return await svc.build_post_preview(db, t, site_column_id)
+
+
+@router.post("/tables/{table_id}/send", response_model=AutotoolSendResult)
+async def send_table_to_autotool(
+    table_id: int,
+    site_column_id: int | None = Query(default=None),
+    _actor: User = Depends(require_role("admin", "manager")),
+    db: AsyncSession = Depends(get_db),
+) -> AutotoolSendResult:
+    """Fire one ImportPosts POST per domain for a shared table.
+
+    This actually triggers publishing on the target sites — the UI confirms
+    with the user before calling it.
+    """
+    t = (
+        (
+            await db.execute(
+                select(BulkTable)
+                .where(
+                    BulkTable.id == table_id,
+                    BulkTable.autotool_enabled.is_(True),
+                    BulkTable.deleted_at.is_(None),
+                )
+                .options(selectinload(BulkTable.columns))
+            )
+        )
+        .unique()
+        .scalar_one_or_none()
+    )
+    if t is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return await svc.send_table(db, t, site_column_id)

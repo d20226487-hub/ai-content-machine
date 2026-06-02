@@ -24,7 +24,11 @@ _NEWLINES = re.compile(r"[\r\n]+")
 
 
 async def build_table_csv(
-    db: AsyncSession, table: BulkTable, *, single_line: bool = False
+    db: AsyncSession,
+    table: BulkTable,
+    *,
+    single_line: bool = False,
+    include_row_ids: set[int] | None = None,
 ) -> str:
     """Render ``table`` (must be loaded with ``columns`` + ``rows``) to CSV.
 
@@ -32,20 +36,27 @@ async def build_table_csv(
     the cell value at every (row_id, column_id) coordinate, defaulting to an
     empty string where no cell exists. When ``single_line`` is set, runs of
     CR/LF inside a value are replaced with a single space so each row occupies
-    exactly one physical line.
+    exactly one physical line. When ``include_row_ids`` is given, only those
+    rows are emitted (used to serve one Autotool file per domain).
     """
 
     def render(value: str | None) -> str:
         s = value or ""
         return _NEWLINES.sub(" ", s) if single_line else s
 
+    emit_rows = [
+        r
+        for r in table.rows
+        if include_row_ids is None or r.id in include_row_ids
+    ]
+
     cells = []
-    if table.rows:
+    if emit_rows:
         cells = (
             (
                 await db.execute(
                     select(BulkTableCell).where(
-                        BulkTableCell.row_id.in_([r.id for r in table.rows])
+                        BulkTableCell.row_id.in_([r.id for r in emit_rows])
                     )
                 )
             )
@@ -57,6 +68,6 @@ async def build_table_csv(
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow([render(c.name) for c in table.columns])
-    for r in table.rows:
+    for r in emit_rows:
         writer.writerow([lookup.get((r.id, c.id), "") for c in table.columns])
     return buf.getvalue()

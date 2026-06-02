@@ -16,10 +16,12 @@ domain Test uses.
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
 import httpx
+from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,23 +31,30 @@ from app.core.ssrf import SafeAsyncTransport, UnsafeUrlError, validate_public_ur
 from app.db.models import (
     AppSetting,
     BulkTable,
-    BulkTableCell,
     BulkTableColumn,
     BulkTableRow,
 )
 from app.schemas.autotool import (
     AutotoolConfigRead,
     AutotoolConfigUpdate,
+    AutotoolDomainRequest,
     AutotoolPostPreview,
+    AutotoolSendItem,
+    AutotoolSendResult,
     AutotoolTableItem,
     AutotoolTablesPage,
     AutotoolTestResult,
     ColumnRef,
 )
 from app.services.app_settings_cache import invalidate
+from app.services.autotool_files import column_value_counts, encode_file_token
 
 CONFIG_KEY = "autotool_config"
 _TEST_TIMEOUT_S = 15.0
+_SEND_TIMEOUT_S = 20.0
+_SEND_CONCURRENCY = 8
+_MAX_SYNC_DOMAINS = 100
+_RESPONSE_SNIPPET = 500
 _API_KEY_MASK = "••••••••"
 # Column-name hints used to auto-detect which column holds the target sites.
 _SITE_EXACT = ("site", "sites", "domain", "domains", "url", "urls", "host", "hosts")
@@ -246,42 +255,14 @@ def _detect_site_column(columns: list[BulkTableColumn]) -> int | None:
     return None
 
 
-async def _column_sites(
-    db: AsyncSession, table_id: int, column_id: int
-) -> list[str]:
-    """Distinct, order-preserving non-empty values of one column."""
-    values = (
-        (
-            await db.execute(
-                select(BulkTableCell.value)
-                .join(BulkTableRow, BulkTableCell.row_id == BulkTableRow.id)
-                .where(
-                    BulkTableRow.table_id == table_id,
-                    BulkTableCell.column_id == column_id,
-                )
-                .order_by(BulkTableRow.position, BulkTableRow.id)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    seen: set[str] = set()
-    out: list[str] = []
-    for v in values:
-        s = (v or "").strip()
-        if s and s not in seen:
-            seen.add(s)
-            out.append(s)
-    return out
-
-
 async def build_post_preview(
     db: AsyncSession, table: BulkTable, site_column_id: int | None
 ) -> AutotoolPostPreview:
-    """Construct the ImportPosts POST request preview for one shared table.
+    """Build the per-domain ImportPosts request preview for one shared table.
 
-    ``table`` must be loaded with its columns. ``site_column_id`` overrides the
-    auto-detected site column; an invalid id falls back to auto-detect.
+    ``table`` must be loaded with its columns. The table is split by the site
+    column (auto-detected, or ``site_column_id`` if it's a valid column) into
+    one request per distinct domain — Autotool needs one file per site.
     """
     raw = await _read_raw(db)
     target = raw.get("target_url")
@@ -292,22 +273,143 @@ async def build_post_preview(
     detected = _detect_site_column(columns)
     chosen = site_column_id if site_column_id in valid_ids else detected
 
-    sites = await _column_sites(db, table.id, chosen) if chosen is not None else []
+    table_row_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(BulkTableRow)
+            .where(BulkTableRow.table_id == table.id)
+        )
+    ).scalar_one()
 
-    headers = {"Content-Type": "application/json"}
-    headers["X-Api-Key"] = _API_KEY_MASK if api_key_configured else ""
+    headers = {
+        "Content-Type": "application/json",
+        "X-Api-Key": _API_KEY_MASK if api_key_configured else "",
+    }
 
-    body = {"sites": sites, "data": {"file": table.autotool_token}}
+    requests: list[AutotoolDomainRequest] = []
+    total_matched = 0
+    if chosen is not None and table.autotool_token:
+        for domain, count in await column_value_counts(db, table.id, chosen):
+            file_token = encode_file_token(table.autotool_token, chosen, domain)
+            requests.append(
+                AutotoolDomainRequest(
+                    site=domain,
+                    file=file_token,
+                    csv_path=f"/autotool/{file_token}.csv",
+                    row_count=count,
+                    body={"sites": [domain], "data": {"file": file_token}},
+                )
+            )
+            total_matched += count
 
     return AutotoolPostPreview(
         method="POST",
         url=target,
         headers=headers,
-        body=body,
         columns=[ColumnRef(id=c.id, name=c.name) for c in columns],
         site_column_id=chosen,
         detected_site_column_id=detected,
-        site_count=len(sites),
+        domain_count=len(requests),
+        total_rows_matched=total_matched,
+        table_row_count=int(table_row_count),
+        requests=requests,
         target_configured=bool(target),
         api_key_configured=api_key_configured,
+    )
+
+
+def _bad_request(detail: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+
+async def send_table(
+    db: AsyncSession, table: BulkTable, site_column_id: int | None
+) -> AutotoolSendResult:
+    """Fire one ImportPosts POST per domain, synchronously, returning each
+    result. ``table`` must be loaded with its columns.
+
+    The X-Api-Key is decrypted here (server-side only) and sent with every
+    request, behind the SSRF guard. This actually triggers publishing on the
+    target sites — callers must confirm with the user first.
+    """
+    raw = await _read_raw(db)
+    target = raw.get("target_url")
+    enc = raw.get("api_key_encrypted")
+    if not target:
+        raise _bad_request("Set the Autotool target URL first.")
+    if not enc:
+        raise _bad_request("Set the Autotool API key first.")
+    try:
+        api_key = decrypt(enc)
+    except Exception:
+        raise _bad_request("Stored API key could not be decrypted.")
+    try:
+        validate_public_url(target)
+    except UnsafeUrlError as e:
+        raise _bad_request(f"Target URL rejected: {e}")
+
+    columns = list(table.columns)
+    valid_ids = {c.id for c in columns}
+    chosen = (
+        site_column_id
+        if site_column_id in valid_ids
+        else _detect_site_column(columns)
+    )
+    if chosen is None or not table.autotool_token:
+        raise _bad_request(
+            "No site column selected — pick the column that holds the target sites."
+        )
+    counts = await column_value_counts(db, table.id, chosen)
+    if not counts:
+        raise _bad_request("No domains to send.")
+    if len(counts) > _MAX_SYNC_DOMAINS:
+        raise _bad_request(
+            f"Too many domains ({len(counts)}) for a synchronous send "
+            f"(max {_MAX_SYNC_DOMAINS})."
+        )
+
+    headers = {"Content-Type": "application/json", "X-Api-Key": api_key}
+    sem = asyncio.Semaphore(_SEND_CONCURRENCY)
+
+    async with httpx.AsyncClient(
+        transport=SafeAsyncTransport(),
+        timeout=_SEND_TIMEOUT_S,
+        follow_redirects=True,
+    ) as client:
+
+        async def fire(domain: str) -> AutotoolSendItem:
+            token = encode_file_token(table.autotool_token, chosen, domain)
+            body = {"sites": [domain], "data": {"file": token}}
+            start = time.perf_counter()
+            async with sem:
+                try:
+                    resp = await client.post(target, json=body, headers=headers)
+                except (UnsafeUrlError, httpx.HTTPError) as e:
+                    return AutotoolSendItem(
+                        site=domain,
+                        file=token,
+                        ok=False,
+                        detail=f"{type(e).__name__}: {e}"[:200],
+                    )
+            elapsed = int((time.perf_counter() - start) * 1000)
+            ok = 200 <= resp.status_code < 300
+            return AutotoolSendItem(
+                site=domain,
+                file=token,
+                ok=ok,
+                status_code=resp.status_code,
+                detail="Accepted" if ok else f"HTTP {resp.status_code}",
+                response_snippet=(resp.text or "")[:_RESPONSE_SNIPPET],
+                elapsed_ms=elapsed,
+            )
+
+        items = list(await asyncio.gather(*[fire(d) for d, _ in counts]))
+
+    sent = sum(1 for i in items if i.ok)
+    return AutotoolSendResult(
+        total=len(items),
+        sent=sent,
+        failed=len(items) - sent,
+        target_url=target,
+        items=items,
     )

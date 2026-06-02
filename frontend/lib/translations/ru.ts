@@ -1012,6 +1012,23 @@ export const ru: Record<keyof typeof en, string> = {
   "autotoolCfg.keyMaskedNote":
     "X-Api-Key здесь скрыт; реальный ключ отправляется с запросом.",
   "autotoolCfg.close": "Закрыть",
+  "autotoolCfg.splitSummary": "доменов: {domains} · строк: {rows}",
+  "autotoolCfg.unmatchedWarn":
+    "У {n} строк нет значения в этой колонке — они не попадут ни в один файл.",
+  "autotoolCfg.requestsHeading": "запросов: {n} (по одному на домен)",
+  "autotoolCfg.copyAll": "Копировать все",
+  "autotoolCfg.noDomains":
+    "В выбранной колонке нет доменов — выберите колонку с целевыми сайтами.",
+  "autotoolCfg.rowsForDomain": "строк: {n}",
+  "autotoolCfg.copyCsvLink": "Копировать ссылку",
+  "autotoolCfg.sendAll": "Отправить все ({n})",
+  "autotoolCfg.sendConfirmWarn":
+    "Будет отправлено {n} POST-запросов, и эти домены будут опубликованы на реальные сайты через Autotool. Продолжить?",
+  "autotoolCfg.sendConfirm": "Отправить",
+  "autotoolCfg.sending": "Отправка…",
+  "autotoolCfg.sendResult": "Отправлено: {sent} · ошибок: {failed}",
+  "autotoolCfg.sendNeedsConfig":
+    "Сначала задайте целевой URL и API-ключ выше.",
 
   // domains page
   "domains.title": "Домены",

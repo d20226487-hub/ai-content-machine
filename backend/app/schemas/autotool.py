@@ -65,22 +65,58 @@ class ColumnRef(BaseModel):
     name: str
 
 
-class AutotoolPostPreview(BaseModel):
-    """The POST request that would be sent to ImportPosts for one table.
+class AutotoolDomainRequest(BaseModel):
+    """One ImportPosts POST — for a single target site, with that site's file."""
 
-    Step 2 (actual sending) isn't built yet, so this is a faithful preview.
-    ``site_column_id`` is the column whose distinct values fill ``body.sites``
-    — auto-detected by default, remappable via the ``site_column_id`` query
-    param. The X-Api-Key header is masked (the real key is never returned).
+    site: str
+    file: str
+    csv_path: str
+    row_count: int
+    body: dict[str, Any]
+
+
+class AutotoolPostPreview(BaseModel):
+    """The POST requests that would be sent to ImportPosts for one table.
+
+    The table is split by its site column into ONE request per distinct domain
+    (Autotool needs one file per site). ``site_column_id`` is auto-detected by
+    default and remappable via the query param. Shared ``headers`` carry a
+    masked X-Api-Key (the real key is never returned). Step 2 (actual sending)
+    isn't built yet, so this is a faithful preview.
     """
 
     method: str = "POST"
     url: str | None = None
     headers: dict[str, str]
-    body: dict[str, Any]
     columns: list[ColumnRef] = []
     site_column_id: int | None = None
     detected_site_column_id: int | None = None
-    site_count: int = 0
+    domain_count: int = 0
+    total_rows_matched: int = 0
+    table_row_count: int = 0
+    requests: list[AutotoolDomainRequest] = []
     target_configured: bool = False
     api_key_configured: bool = False
+
+
+# ----- firing the requests -----
+
+
+class AutotoolSendItem(BaseModel):
+    """Outcome of one per-domain ImportPosts POST."""
+
+    site: str
+    file: str
+    ok: bool
+    status_code: int | None = None
+    detail: str
+    response_snippet: str | None = None
+    elapsed_ms: int | None = None
+
+
+class AutotoolSendResult(BaseModel):
+    total: int
+    sent: int
+    failed: int
+    target_url: str | None = None
+    items: list[AutotoolSendItem] = []
