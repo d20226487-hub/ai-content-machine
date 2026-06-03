@@ -83,7 +83,7 @@ export default function LinkCheckRunPage({
   }, [filterProblem, filterStatus, filterResolution, q, qNegate]);
 
   const tick = useCallback(
-    async (p: number) => {
+    async (p: number, isStale?: () => boolean) => {
       try {
         const r = await getLinkCheckRun(rid, p, PAGE_SIZE, {
           problem: filterProblem || undefined,
@@ -92,12 +92,16 @@ export default function LinkCheckRunPage({
           q: q || undefined,
           q_negate: qNegate,
         });
+        // A page/filter change may have superseded this request while it was
+        // in flight — don't let the late response clobber the newer state.
+        if (isStale?.()) return;
         setRun(r);
         setError(null);
         if (r.status === "done" || r.status === "cancelled" || r.status === "failed") {
           stoppedRef.current = true;
         }
       } catch (e) {
+        if (isStale?.()) return;
         setError(e instanceof ApiError ? e.message : String(e));
         stoppedRef.current = true;
       }
@@ -113,7 +117,7 @@ export default function LinkCheckRunPage({
     let timer: ReturnType<typeof setTimeout> | null = null;
     async function loop() {
       if (cancelled) return;
-      await tick(page);
+      await tick(page, () => cancelled);
       if (cancelled || stoppedRef.current) return;
       timer = setTimeout(loop, 2000);
     }
@@ -353,12 +357,24 @@ export default function LinkCheckRunPage({
             </div>
           )}
 
-          {/* summary counters */}
+          {/* summary counters — juxtapose contributes omitted/hallucinated;
+              the crawl contributes the HTTP status-class breakdown (404 =
+              "битые", plus whole 5xx / 3xx / 2xx classes). */}
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Counter label={t("linkCheckRun.broken")} value={run.broken_count} accent="red" />
-            <Counter label={t("linkCheckRun.omitted")} value={run.omitted_count} accent="amber" />
-            <Counter label={t("linkCheckRun.hallucinated")} value={run.hallucinated_count} accent="violet" />
-            <Counter label={t("linkCheckRun.ok")} value={run.ok_count} accent="green" />
+            {run.check_juxtapose && (
+              <>
+                <Counter label={t("linkCheckRun.omitted")} value={run.omitted_count} accent="amber" />
+                <Counter label={t("linkCheckRun.hallucinated")} value={run.hallucinated_count} accent="violet" />
+              </>
+            )}
+            {run.check_crawl && (
+              <>
+                <Counter label={t("linkCheckRun.broken")} value={run.status_404} accent="red" />
+                <Counter label={t("linkCheckRun.status5xx")} value={run.status_5xx} accent="orange" />
+                <Counter label={t("linkCheckRun.status3xx")} value={run.status_3xx} accent="sky" />
+                <Counter label={t("linkCheckRun.status2xx")} value={run.status_2xx} accent="green" />
+              </>
+            )}
           </div>
 
           {run.error && (
@@ -544,7 +560,7 @@ export default function LinkCheckRunPage({
                         </td>
                         <td className="px-3 py-2">
                           <span className="inline-flex items-center gap-1.5">
-                            <ProblemBadge problem={v.problem} />
+                            <ProblemBadge v={v} />
                             {solved && (
                               <span
                                 className="text-green-600 no-underline dark:text-green-400"
@@ -583,8 +599,8 @@ export default function LinkCheckRunPage({
                 </table>
               </div>
               <Pagination
-                page={run.page}
-                pageSize={run.page_size}
+                page={page}
+                pageSize={PAGE_SIZE}
                 total={run.total_violations}
                 onPage={setPage}
               />
@@ -674,24 +690,60 @@ export default function LinkCheckRunPage({
   );
 }
 
-function ProblemBadge({ problem }: { problem: LinkProblem }) {
+const BADGE_RED =
+  "bg-red-50 text-red-700 ring-red-200 dark:bg-red-950/40 dark:text-red-300 dark:ring-red-500/30";
+const BADGE_AMBER =
+  "bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-400/10 dark:text-amber-200 dark:ring-amber-400/25";
+const BADGE_VIOLET =
+  "bg-violet-50 text-violet-700 ring-violet-200 dark:bg-violet-950/40 dark:text-violet-300 dark:ring-violet-500/30";
+const BADGE_GREEN =
+  "bg-green-50 text-green-700 ring-green-200 dark:bg-green-950/40 dark:text-green-300 dark:ring-green-500/30";
+const BADGE_ORANGE =
+  "bg-orange-50 text-orange-700 ring-orange-200 dark:bg-orange-950/40 dark:text-orange-300 dark:ring-orange-500/30";
+const BADGE_SKY =
+  "bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-950/40 dark:text-sky-300 dark:ring-sky-500/30";
+
+/** Badge for one violation. Juxtapose problems keep their semantic label;
+ * crawl problems (broken/ok) are classified by HTTP status — only a 404 is
+ * "битые", with whole 5xx / 3xx / 2xx classes otherwise. */
+function ProblemBadge({ v }: { v: LinkViolation }) {
   const { t } = useT();
-  const cls =
-    problem === "broken"
-      ? "bg-red-50 text-red-700 ring-red-200 dark:bg-red-950/40 dark:text-red-300 dark:ring-red-500/30"
-      : problem === "omitted"
-        ? "bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-400/10 dark:text-amber-200 dark:ring-amber-400/25"
-        : problem === "ok"
-          ? "bg-green-50 text-green-700 ring-green-200 dark:bg-green-950/40 dark:text-green-300 dark:ring-green-500/30"
-          : "bg-violet-50 text-violet-700 ring-violet-200 dark:bg-violet-950/40 dark:text-violet-300 dark:ring-violet-500/30";
-  const label =
-    problem === "broken"
-      ? t("linkCheckRun.broken")
-      : problem === "omitted"
-        ? t("linkCheckRun.omitted")
-        : problem === "ok"
-          ? t("linkCheckRun.ok")
-          : t("linkCheckRun.hallucinated");
+  let label: string;
+  let cls: string;
+  if (v.problem === "omitted") {
+    label = t("linkCheckRun.omitted");
+    cls = BADGE_AMBER;
+  } else if (v.problem === "hallucinated") {
+    label = t("linkCheckRun.hallucinated");
+    cls = BADGE_VIOLET;
+  } else {
+    // crawl-origin: broken | ok → classify by status code.
+    const sc = v.status_code;
+    if (sc === 404) {
+      label = t("linkCheckRun.broken");
+      cls = BADGE_RED;
+    } else if (sc != null && sc >= 500 && sc <= 599) {
+      label = t("linkCheckRun.status5xx");
+      cls = BADGE_ORANGE;
+    } else if (sc != null && sc >= 300 && sc <= 399) {
+      label = t("linkCheckRun.status3xx");
+      cls = BADGE_SKY;
+    } else if (sc != null && sc >= 200 && sc <= 299) {
+      label = t("linkCheckRun.status2xx");
+      cls = BADGE_GREEN;
+    } else if (sc != null) {
+      // Other 4xx (403/410/…): a real problem, but not "битые".
+      label = `HTTP ${sc}`;
+      cls = BADGE_RED;
+    } else if (v.problem === "ok") {
+      label = t("linkCheckRun.ok");
+      cls = BADGE_GREEN;
+    } else {
+      // No status code — a network failure (timeout / unreachable / blocked).
+      label = t("linkCheckRun.errorBadge");
+      cls = BADGE_RED;
+    }
+  }
   return (
     <span
       className={
@@ -756,7 +808,7 @@ function Counter({
 }: {
   label: string;
   value: number;
-  accent: "red" | "amber" | "violet" | "green";
+  accent: "red" | "amber" | "violet" | "green" | "orange" | "sky";
 }) {
   const cls =
     accent === "red"
@@ -765,7 +817,11 @@ function Counter({
         ? "text-amber-700 dark:text-amber-300"
         : accent === "violet"
           ? "text-violet-700 dark:text-violet-400"
-          : "text-green-700 dark:text-green-400";
+          : accent === "orange"
+            ? "text-orange-700 dark:text-orange-400"
+            : accent === "sky"
+              ? "text-sky-700 dark:text-sky-400"
+              : "text-green-700 dark:text-green-400";
   return (
     <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2 dark:border-neutral-800 dark:bg-neutral-900">
       <p className="text-[10px] uppercase tracking-wide text-neutral-500 dark:text-neutral-400">

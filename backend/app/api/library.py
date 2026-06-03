@@ -32,6 +32,7 @@ from app.db.models import (
     BulkTableFolder,
     BulkTableRow,
     FindReplaceRun,
+    LinkCheckCrawlTarget,
     LinkCheckRun,
     LinkCheckViolation,
     LinkFixCell,
@@ -3106,6 +3107,30 @@ async def get_link_check_run(
         .all()
     )
 
+    # Per-status-class breakdown for the crawl overview (unique-URL based,
+    # from the crawl-targets table — consistent with ok_count/broken_count,
+    # and the only source that has 2xx/3xx codes when include_ok is off).
+    # "Битые" is now exactly 404; 5xx/3xx/2xx are whole-class buckets.
+    s_2xx = s_3xx = s_404 = s_5xx = 0
+    if run.check_crawl:
+        agg = (
+            await db.execute(
+                select(
+                    func.count().filter(LinkCheckCrawlTarget.status_code == 404),
+                    func.count().filter(
+                        LinkCheckCrawlTarget.status_code.between(500, 599)
+                    ),
+                    func.count().filter(
+                        LinkCheckCrawlTarget.status_code.between(300, 399)
+                    ),
+                    func.count().filter(
+                        LinkCheckCrawlTarget.status_code.between(200, 299)
+                    ),
+                ).where(LinkCheckCrawlTarget.run_id == run_id)
+            )
+        ).one()
+        s_404, s_5xx, s_3xx, s_2xx = (int(x) for x in agg)
+
     return LinkCheckRunDetail(
         id=run.id,
         table_id=run.table_id,
@@ -3132,6 +3157,10 @@ async def get_link_check_run(
         page_size=page_size,
         total_violations=total,
         status_codes_present=list(codes),
+        status_2xx=s_2xx,
+        status_3xx=s_3xx,
+        status_404=s_404,
+        status_5xx=s_5xx,
         items=[LinkViolationRead.model_validate(v) for v in rows],
     )
 

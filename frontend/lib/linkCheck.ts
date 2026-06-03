@@ -65,6 +65,11 @@ export interface LinkCheckRunDetail extends LinkCheckRun {
   page_size: number;
   total_violations: number;
   status_codes_present: number[];
+  /** Crawl status-class breakdown (unique-URL based) for the overview. */
+  status_2xx: number;
+  status_3xx: number;
+  status_404: number;
+  status_5xx: number;
   items: LinkViolation[];
 }
 

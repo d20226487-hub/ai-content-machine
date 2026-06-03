@@ -680,6 +680,12 @@ class LinkCheckRunDetail(LinkCheckRunRead):
     # Distinct HTTP codes present across the run's violations (unfiltered) —
     # populates the status-code filter dropdown.
     status_codes_present: list[int]
+    # Crawl status-class breakdown (unique-URL based, from crawl targets) for
+    # the status-code overview. 404 = "битые"; 5xx/3xx/2xx are whole classes.
+    status_2xx: int = 0
+    status_3xx: int = 0
+    status_404: int = 0
+    status_5xx: int = 0
     items: list[LinkViolationRead]
 
 
