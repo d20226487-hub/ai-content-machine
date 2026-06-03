@@ -63,6 +63,10 @@ class LinkFixRun(Base):
     target_column_id: Mapped[int | None] = mapped_column(
         ForeignKey("bulk_table_columns.id", ondelete="SET NULL"), nullable=True
     )
+    # Per-job correction prompt (system prompt override). NULL = the run used
+    # the global Brain ``fix_links`` prompt. Recorded per run so the UI can
+    # default the next job to the previously-used prompt (migration 0045).
+    prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Snapshot of the source run's column config (scan + expected columns) so
     # the worker + auto re-check don't depend on the mutable check run.

@@ -599,6 +599,46 @@ LinkCheckStatus = Literal["queued", "running", "cancelled", "done", "failed"]
 LinkProblem = Literal["omitted", "hallucinated", "broken", "ok"]
 
 
+class TranslationCheckConfig(BaseModel):
+    """Config for the translation-links mode (3rd mode).
+
+    Three column roles: ``original`` (source-language content whose links are
+    localized), ``translated`` (the translation whose links are checked), and
+    ``lang`` (the target language code per row, used verbatim as the subfolder).
+
+    Link type is decided by domain: ``internal_domain_column_ids`` name the
+    column(s) that hold each row's own site domain (links on those hosts are
+    internal); ``product_domain`` (one or a few, comma/space separated) marks
+    product links. Only ``exceptions`` is a bulk textarea ("language, page" per
+    line; those pages keep their root URL). Treatments: products always
+    localize (minus exceptions); internal & external are skip-or-localize."""
+
+    original_column_id: int
+    translated_column_id: int
+    lang_column_id: int
+    # Columns whose values are this row's internal site domain(s).
+    internal_domain_column_ids: list[int] = Field(default_factory=list)
+    # Product domain(s) — links on these hosts are products.
+    product_domain: str = ""
+    # One "language, page" per line; the page keeps its root URL (no subfolder).
+    exceptions: str = ""
+    internal_treatment: Literal["skip", "localize"] = "skip"
+    external_treatment: Literal["skip", "localize"] = "skip"
+
+    @model_validator(mode="after")
+    def _distinct(self) -> "TranslationCheckConfig":
+        ids = {
+            self.original_column_id,
+            self.translated_column_id,
+            self.lang_column_id,
+        }
+        if len(ids) < 3:
+            raise ValueError(
+                "Original, Translated, and Lang must be three different columns."
+            )
+        return self
+
+
 class LinkCheckRequest(BaseModel):
     """Start a link-check run.
 
@@ -606,16 +646,24 @@ class LinkCheckRequest(BaseModel):
     ``check_juxtapose`` compares against the union of ``expected_column_ids``
     (at least one required when juxtapose is on). ``check_crawl`` fetches each
     link to verify its HTTP status; ``include_ok`` additionally records the
-    healthy links. At least one check must be enabled."""
+    healthy links. At least one check must be enabled.
 
-    column_ids: list[int] = Field(min_length=1)
+    ``translation`` selects the 3rd mode instead — when set, the other checks
+    are ignored (the server runs a computed-expected juxtapose)."""
+
+    column_ids: list[int] = Field(default_factory=list)
     expected_column_ids: list[int] = Field(default_factory=list)
     check_juxtapose: bool = False
     check_crawl: bool = False
     include_ok: bool = False
+    translation: TranslationCheckConfig | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> "LinkCheckRequest":
+        if self.translation is not None:
+            return self  # translation mode has its own column roles
+        if not self.column_ids:
+            raise ValueError("Select at least one column to scan.")
         if not self.check_juxtapose and not self.check_crawl:
             raise ValueError("Enable at least one check (juxtapose or crawl).")
         if self.check_juxtapose and not self.expected_column_ids:
@@ -651,6 +699,9 @@ class LinkCheckRunRead(BaseModel):
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+    # Present (non-NULL) only for translation-mode runs; the frontend uses it
+    # to label the run and surface the computed-expected-links column.
+    translation_config: dict | None = None
 
 
 # Resolution stamp from the in-place AI re-verify (None = untouched).
@@ -689,6 +740,25 @@ class LinkCheckRunDetail(LinkCheckRunRead):
     items: list[LinkViolationRead]
 
 
+class TranslationTableRow(BaseModel):
+    """One row of the translation raw-table view: the 4-column link breakdown,
+    computed on demand (not stored)."""
+
+    row_id: int
+    row_position: int
+    original: list[str]
+    expected: list[str]
+    translation: list[str]
+    mismatches: list[str]
+
+
+class TranslationTableResponse(BaseModel):
+    page: int
+    page_size: int
+    total_rows: int
+    items: list[TranslationTableRow]
+
+
 # ----- AI link fix (added in migration 0037) -----
 
 LinkFixStatus = Literal["queued", "running", "cancelled", "done", "failed"]
@@ -717,6 +787,16 @@ class LinkFixRequest(BaseModel):
     # omitted = overwrite the scanned source column.
     target_column_id: int | None = None
     new_column_name: str | None = Field(default=None, max_length=120)
+    # Per-job correction prompt (system prompt override). None/empty = use the
+    # global Brain ``fix_links`` prompt.
+    prompt: str | None = None
+
+
+class LinkFixDefaultPrompt(BaseModel):
+    """Default correction prompt for the fix modal — the previously-used job
+    prompt for this table, else the Brain ``fix_links`` default."""
+
+    prompt: str
 
 
 class LinkFixRunRead(BaseModel):
@@ -731,6 +811,7 @@ class LinkFixRunRead(BaseModel):
     source_run_id: int | None
     recheck_run_id: int | None
     target_column_id: int | None = None
+    prompt: str | None = None
     status: LinkFixStatus
     column_ids: list[int]
     expected_column_ids: list[int]

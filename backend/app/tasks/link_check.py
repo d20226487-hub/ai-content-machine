@@ -46,9 +46,11 @@ from app.services.link_check import (
     crawlable_url,
     extract_expected_links,
     extract_output_links,
+    juxtapose,
     make_crawl_client,
     normalize_link,
 )
+from app.services.translation_links import compute_expected_links, parse_domains
 from app.tasks.celery_app import celery_app
 
 # Namespace for the per-run finalize advisory lock (2-int form).
@@ -115,6 +117,12 @@ async def _seed(db: AsyncSession, run_id: int) -> None:
         # Redelivery after a partial seed (targets + status already
         # committed) — just make sure the crawl continues.
         await _resume(db, run_id)
+        return
+
+    # Translation mode (3rd mode): computed-expected juxtapose, no crawl. The
+    # whole thing commits once, so a crash before commit re-runs cleanly.
+    if run.translation_config:
+        await _seed_translation(db, run)
         return
 
     # status == 'queued': full seed. Compute everything first, commit once.
@@ -299,6 +307,141 @@ def _violation(
         detail_code=detail_code,
         status_code=status_code,
     )
+
+
+# ---------- translation-links seed ----------
+
+
+async def _seed_translation(db: AsyncSession, run: LinkCheckRun) -> None:
+    """Computed-expected juxtapose for the translation-links mode (no crawl).
+
+    Per row: localize the ORIGINAL content's links (insert the row's language
+    as a subfolder, per the per-type treatment), write that list into a fresh
+    "Expected links" column, extract the TRANSLATION's actual links, and record
+    the mismatches as violations ON the translated cell (so AI-fix rewrites the
+    translation). Pointing ``expected_column_ids`` at the new column lets the
+    existing AI-fix / revert / re-verify run unchanged. Everything commits once.
+    """
+    cfg = dict(run.translation_config or {})
+    orig_col = int(cfg["original_column_id"])
+    trans_col = int(cfg["translated_column_id"])
+    lang_col = int(cfg["lang_column_id"])
+    domain_cols = [int(c) for c in cfg.get("internal_domain_column_ids", [])]
+    product_domains = cfg.get("product_domains", []) or []
+    exceptions = cfg.get("exceptions", []) or []
+    internal_t = cfg.get("internal_treatment", "skip")
+    external_t = cfg.get("external_treatment", "skip")
+
+    cols = (
+        (
+            await db.execute(
+                select(BulkTableColumn).where(
+                    BulkTableColumn.table_id == run.table_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    col_names = {c.id: c.name for c in cols}
+    if not {orig_col, trans_col, lang_col} <= set(col_names):
+        run.status = "failed"
+        run.error = "A selected column was deleted before the run started."
+        run.started_at = _now()
+        run.finished_at = _now()
+        await db.commit()
+        return
+    # A deleted domain column is simply dropped (not fatal).
+    domain_cols = [c for c in domain_cols if c in col_names]
+
+    # No columns are materialized (keeps the bulk table uncluttered). The
+    # 4-column breakdown (original / expected / translation / mismatches) is
+    # shown on the run page's raw-table view, computed on demand. Here we only
+    # juxtapose to produce the run's violations.
+    row_pos = dict(
+        (
+            await db.execute(
+                select(BulkTableRow.id, BulkTableRow.position).where(
+                    BulkTableRow.table_id == run.table_id
+                )
+            )
+        ).all()
+    )
+    by_row: dict[int, dict[int, str | None]] = defaultdict(dict)
+    cells = (
+        (
+            await db.execute(
+                select(BulkTableCell)
+                .join(BulkTableRow, BulkTableRow.id == BulkTableCell.row_id)
+                .where(
+                    BulkTableRow.table_id == run.table_id,
+                    BulkTableCell.column_id.in_(
+                        [orig_col, trans_col, lang_col, *domain_cols]
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for c in cells:
+        by_row[c.row_id][c.column_id] = c.value
+
+    violations: list[LinkCheckViolation] = []
+    omitted_n = 0
+    halluc_n = 0
+
+    for rid, pos in row_pos.items():
+        vals = by_row.get(rid, {})
+        lang = (vals.get(lang_col) or "").strip()
+        # Internal domains for this row come from the chosen domain column(s).
+        internal_domains: list[str] = []
+        for dc in domain_cols:
+            internal_domains += parse_domains(vals.get(dc))
+        expected = (
+            compute_expected_links(
+                vals.get(orig_col),
+                lang,
+                internal_domains=internal_domains,
+                product_domains=product_domains,
+                exceptions=exceptions,
+                internal_treatment=internal_t,
+                external_treatment=external_t,
+            )
+            if lang
+            else []
+        )
+        # Nothing to compare against (no lang / original had no links) — skip.
+        if not expected:
+            continue
+        actual = extract_output_links(vals.get(trans_col))
+        omitted, hallucinated = juxtapose(actual, expected)
+        for e in omitted:
+            violations.append(
+                _violation(rid, pos, trans_col, col_names, "omitted", e, "expected_missing")
+            )
+            omitted_n += 1
+        for h in hallucinated:
+            violations.append(
+                _violation(rid, pos, trans_col, col_names, "hallucinated", h, "not_in_expected")
+            )
+            halluc_n += 1
+
+    for v in violations:
+        v.run_id = run.id
+    if violations:
+        db.add_all(violations)
+
+    run.expected_column_ids = []
+    run.omitted_count = omitted_n
+    run.hallucinated_count = halluc_n
+    run.ok_count = 0
+    run.broken_count = 0
+    run.status = "done"
+    run.started_at = _now()
+    run.finished_at = _now()
+    run.last_progress_at = _now()
+    await db.commit()
 
 
 # ---------- crawl chunk ----------

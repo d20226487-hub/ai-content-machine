@@ -12,15 +12,36 @@ export type LinkProblem = "omitted" | "hallucinated" | "broken" | "ok";
 /** In-place AI re-verify outcome. null = untouched (never fixed). */
 export type LinkResolution = "solved" | "unsolved";
 
+/** Per-type link treatment for the translation-links mode. */
+export type LinkTreatment = "skip" | "localize";
+
+/** Config for the 3rd mode — translation links. Bulk textareas
+ * (internal_domains / product_patterns / exceptions) are parsed server-side. */
+export interface TranslationCheckConfig {
+  original_column_id: number;
+  translated_column_id: number;
+  lang_column_id: number;
+  /** Columns holding each row's own site domain(s) → internal links. */
+  internal_domain_column_ids: number[];
+  /** Product domain(s) (comma/space separated) → product links. */
+  product_domain: string;
+  /** One "language, page" per line; the page keeps its root URL. */
+  exceptions: string;
+  internal_treatment: LinkTreatment;
+  external_treatment: LinkTreatment;
+}
+
 export interface LinkCheckRequest {
-  /** Output columns to scan (at least one). */
-  column_ids: number[];
+  /** Output columns to scan (at least one) — omitted in translation mode. */
+  column_ids?: number[];
   /** Expected-link columns (union); required when check_juxtapose is true. */
-  expected_column_ids: number[];
-  check_juxtapose: boolean;
-  check_crawl: boolean;
+  expected_column_ids?: number[];
+  check_juxtapose?: boolean;
+  check_crawl?: boolean;
   /** Also record healthy links as rows (full per-link inventory). */
-  include_ok: boolean;
+  include_ok?: boolean;
+  /** When set, runs the translation-links mode instead of the checks above. */
+  translation?: TranslationCheckConfig;
 }
 
 export interface LinkCheckRun {
@@ -44,6 +65,8 @@ export interface LinkCheckRun {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  /** Non-null only for translation-mode runs. */
+  translation_config?: Record<string, unknown> | null;
 }
 
 export interface LinkViolation {
@@ -118,6 +141,38 @@ export function getLinkCheckRun(
   if (filters.resolution) sp.set("resolution", filters.resolution);
   return api<LinkCheckRunDetail>(
     `/library/link-check-runs/${runId}?${sp.toString()}`,
+  );
+}
+
+export interface TranslationTableRow {
+  row_id: number;
+  row_position: number;
+  original: string[];
+  expected: string[];
+  translation: string[];
+  mismatches: string[];
+}
+
+export interface TranslationTableResponse {
+  page: number;
+  page_size: number;
+  total_rows: number;
+  items: TranslationTableRow[];
+}
+
+/** The 4-column raw breakdown for a translation run, paginated by row
+ *  (computed on demand — nothing is materialized into the bulk table). */
+export function getTranslationTable(
+  runId: number,
+  page = 1,
+  pageSize = 25,
+): Promise<TranslationTableResponse> {
+  const sp = new URLSearchParams({
+    page: String(page),
+    page_size: String(pageSize),
+  });
+  return api<TranslationTableResponse>(
+    `/library/link-check-runs/${runId}/translation-table?${sp.toString()}`,
   );
 }
 

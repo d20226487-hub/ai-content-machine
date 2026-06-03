@@ -11,6 +11,7 @@ endpoint short-circuits the owner filter for manager/admin.
 import csv
 import io
 import uuid
+from collections import defaultdict
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -70,6 +71,7 @@ from app.schemas.bulk import (
     LinkCheckRunDetail,
     LinkCheckRunRead,
     LinkFixCellRead,
+    LinkFixDefaultPrompt,
     LinkFixRequest,
     LinkFixRunDetail,
     LinkFixRunRead,
@@ -91,6 +93,9 @@ from app.schemas.bulk import (
     UnifiedSegment,
     TableListItem,
     TableListResponse,
+    TranslationCheckConfig,
+    TranslationTableResponse,
+    TranslationTableRow,
     TableRead,
     TableUpdate,
     TrashBulkIds,
@@ -2980,24 +2985,80 @@ async def start_link_check(
     when enabled, runs in a Celery worker; poll ``GET /link-check-runs/{id}``
     for progress and results."""
     await _get_table_or_404(db, table_id, actor, level="read")
-    await _verify_columns_in_table(db, table_id, payload.column_ids)
-    if payload.expected_column_ids:
-        await _verify_columns_in_table(db, table_id, payload.expected_column_ids)
 
+    if payload.translation is not None:
+        run = await _create_translation_run(db, table_id, actor, payload.translation)
+    else:
+        await _verify_columns_in_table(db, table_id, payload.column_ids)
+        if payload.expected_column_ids:
+            await _verify_columns_in_table(db, table_id, payload.expected_column_ids)
+        run = LinkCheckRun(
+            table_id=table_id,
+            created_by_id=actor.id,
+            status="queued",
+            column_ids=list(payload.column_ids),
+            expected_column_ids=list(payload.expected_column_ids),
+            check_juxtapose=payload.check_juxtapose,
+            check_crawl=payload.check_crawl,
+            include_ok=payload.include_ok,
+        )
+        db.add(run)
+        await db.commit()
+        await db.refresh(run)
+
+    seed_link_check.delay(run.id)
+    return run
+
+
+async def _create_translation_run(
+    db: AsyncSession,
+    table_id: int,
+    actor: User,
+    cfg: "TranslationCheckConfig",
+) -> LinkCheckRun:
+    """Build a queued translation-mode run.
+
+    The three column roles are validated; the bulk textareas are parsed into
+    normalized lists stored in ``translation_config``. ``column_ids`` is the
+    translated column (the scanned output); ``expected_column_ids`` is left
+    empty here — the seed materializes the computed expected-links column and
+    sets it before juxtaposing, so AI-fix / revert read it like any other run.
+    The run is flagged ``check_juxtapose`` so the run page shows the right
+    counters/filters and offers the AI fix."""
+    from app.services.translation_links import parse_domains, parse_exceptions
+
+    role_cols = [
+        cfg.original_column_id,
+        cfg.translated_column_id,
+        cfg.lang_column_id,
+    ]
+    await _verify_columns_in_table(
+        db, table_id, role_cols + list(cfg.internal_domain_column_ids)
+    )
+    stored = {
+        "original_column_id": cfg.original_column_id,
+        "translated_column_id": cfg.translated_column_id,
+        "lang_column_id": cfg.lang_column_id,
+        "internal_domain_column_ids": list(cfg.internal_domain_column_ids),
+        "product_domains": parse_domains(cfg.product_domain),
+        "exceptions": parse_exceptions(cfg.exceptions),
+        "internal_treatment": cfg.internal_treatment,
+        "external_treatment": cfg.external_treatment,
+    }
     run = LinkCheckRun(
         table_id=table_id,
         created_by_id=actor.id,
         status="queued",
-        column_ids=list(payload.column_ids),
-        expected_column_ids=list(payload.expected_column_ids),
-        check_juxtapose=payload.check_juxtapose,
-        check_crawl=payload.check_crawl,
-        include_ok=payload.include_ok,
+        column_ids=[cfg.translated_column_id],
+        expected_column_ids=[],
+        check_juxtapose=True,
+        check_crawl=False,
+        include_ok=False,
+        translation_config=stored,
     )
     db.add(run)
     await db.commit()
     await db.refresh(run)
-    seed_link_check.delay(run.id)
     return run
 
 
@@ -3152,6 +3213,7 @@ async def get_link_check_run(
         created_at=run.created_at,
         started_at=run.started_at,
         finished_at=run.finished_at,
+        translation_config=run.translation_config,
         created_by_name=await _resolve_creator_name(db, run.created_by_id),
         page=page,
         page_size=page_size,
@@ -3162,6 +3224,112 @@ async def get_link_check_run(
         status_404=s_404,
         status_5xx=s_5xx,
         items=[LinkViolationRead.model_validate(v) for v in rows],
+    )
+
+
+@router.get(
+    "/link-check-runs/{run_id}/translation-table",
+    response_model=TranslationTableResponse,
+)
+async def get_translation_table(
+    run_id: int,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=200),
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TranslationTableResponse:
+    """The translation raw-table view: per row, the 4-column link breakdown
+    (original / expected / translation / mismatches), computed on demand from
+    the source columns + the run's translation_config. Nothing is materialized
+    into the bulk table. 400 if the run isn't a translation run."""
+    from app.services.translation_links import compute_row_breakdown, parse_domains
+
+    run = await _get_link_check_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="read")
+    cfg = run.translation_config
+    if not cfg:
+        raise HTTPException(status_code=400, detail="Not a translation run.")
+
+    orig_col = int(cfg["original_column_id"])
+    trans_col = int(cfg["translated_column_id"])
+    lang_col = int(cfg["lang_column_id"])
+    domain_cols = [int(c) for c in cfg.get("internal_domain_column_ids", [])]
+    product_domains = cfg.get("product_domains", []) or []
+    exceptions = cfg.get("exceptions", []) or []
+    internal_t = cfg.get("internal_treatment", "skip")
+    external_t = cfg.get("external_treatment", "skip")
+
+    # "Has any links" can only be known after extraction, so we compute every
+    # row's breakdown, drop the empty rows, then paginate the filtered set.
+    # (Translation tables are bounded — same all-rows scan the seed does.)
+    all_rows = (
+        await db.execute(
+            select(BulkTableRow.id, BulkTableRow.position)
+            .where(BulkTableRow.table_id == run.table_id)
+            .order_by(BulkTableRow.position)
+        )
+    ).all()
+
+    by_row: dict[int, dict[int, str | None]] = defaultdict(dict)
+    if all_rows:
+        cells = (
+            (
+                await db.execute(
+                    select(BulkTableCell)
+                    .join(BulkTableRow, BulkTableRow.id == BulkTableCell.row_id)
+                    .where(
+                        BulkTableRow.table_id == run.table_id,
+                        BulkTableCell.column_id.in_(
+                            [orig_col, trans_col, lang_col, *domain_cols]
+                        ),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for c in cells:
+            by_row[c.row_id][c.column_id] = c.value
+
+    filtered: list[TranslationTableRow] = []
+    for rid, pos in all_rows:
+        vals = by_row.get(rid, {})
+        internal_domains: list[str] = []
+        for dc in domain_cols:
+            internal_domains += parse_domains(vals.get(dc))
+        bd = compute_row_breakdown(
+            vals.get(orig_col),
+            vals.get(trans_col),
+            (vals.get(lang_col) or "").strip(),
+            internal_domains=internal_domains,
+            product_domains=product_domains,
+            exceptions=exceptions,
+            internal_treatment=internal_t,
+            external_treatment=external_t,
+        )
+        # Hide rows with no links anywhere.
+        if not (
+            bd["original"] or bd["expected"] or bd["translation"] or bd["mismatches"]
+        ):
+            continue
+        filtered.append(
+            TranslationTableRow(
+                row_id=rid,
+                row_position=pos,
+                original=bd["original"],
+                expected=bd["expected"],
+                translation=bd["translation"],
+                mismatches=bd["mismatches"],
+            )
+        )
+
+    total = len(filtered)
+    start = (page - 1) * page_size
+    return TranslationTableResponse(
+        page=page,
+        page_size=page_size,
+        total_rows=total,
+        items=filtered[start : start + page_size],
     )
 
 
@@ -3245,7 +3413,9 @@ async def start_link_fix(
         raise HTTPException(
             status_code=400, detail="The check run must finish before fixing."
         )
-    if not source.expected_column_ids:
+    # Translation runs have no expected column — the worker recomputes the
+    # localized expected links from the run's translation_config.
+    if not source.expected_column_ids and not source.translation_config:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -3381,6 +3551,7 @@ async def start_link_fix(
         target_column_id=target_column_id,
         column_ids=list(source.column_ids or []),
         expected_column_ids=list(source.expected_column_ids or []),
+        prompt=(payload.prompt.strip() or None) if payload.prompt else None,
         total=len(grouped),
         started_at=datetime.now(timezone.utc),
         last_progress_at=datetime.now(timezone.utc),
@@ -3411,6 +3582,40 @@ async def start_link_fix(
 
     await db.refresh(run)
     return run
+
+
+@router.get(
+    "/tables/{table_id}/link-fix/default-prompt",
+    response_model=LinkFixDefaultPrompt,
+)
+async def link_fix_default_prompt(
+    table_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LinkFixDefaultPrompt:
+    """The prompt the fix modal should default to: the most recent fix job's
+    prompt for this table (so "reuse the previously-used prompt" just works),
+    falling back to the global Brain ``fix_links`` prompt the first time."""
+    await _get_table_or_404(db, table_id, actor, level="read")
+    last = (
+        await db.execute(
+            select(LinkFixRun.prompt)
+            .where(
+                LinkFixRun.table_id == table_id,
+                LinkFixRun.prompt.isnot(None),
+            )
+            .order_by(LinkFixRun.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if last and last.strip():
+        return LinkFixDefaultPrompt(prompt=last)
+
+    from app.services.brain import load_brain
+
+    brain = await load_brain(db)
+    prompt = (brain.get("fix_links") or {}).get("prompt") or ""
+    return LinkFixDefaultPrompt(prompt=prompt)
 
 
 @router.get(

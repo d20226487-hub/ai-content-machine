@@ -369,12 +369,15 @@ async def fix_links_text(
     content: str,
     expected_links: list[str],
     violations: list[dict],
+    system_override: str | None = None,
 ) -> tuple[str, str, str]:
-    """Run the configured fix-links prompt against ``content``.
+    """Run the fix-links prompt against ``content``.
 
-    Returns ``(fixed_text, provider_used_code, model_used)``. Raises
-    ``ProviderNotConfigured`` when no provider is enabled, or
-    ``ProviderError`` for any LLM-side failure (the caller surfaces it)."""
+    ``system_override`` (a per-job prompt) takes precedence over the global
+    Brain ``fix_links`` prompt when non-empty; the provider/model still come
+    from the Brain config. Returns ``(fixed_text, provider_used_code,
+    model_used)``. Raises ``ProviderNotConfigured`` when no provider is
+    enabled, or ``ProviderError`` for any LLM-side failure."""
     cfg = (await load_brain(db))["fix_links"]
     code = cfg.get("provider_code") or await first_enabled_provider_code(db)
     if not code:
@@ -387,7 +390,11 @@ async def fix_links_text(
     if not model:
         raise ProviderError(f"No model configured for provider '{code}'")
 
-    system = cfg.get("prompt") or DEFAULT_FIX_LINKS_PROMPT
+    system = (
+        system_override.strip()
+        if system_override and system_override.strip()
+        else (cfg.get("prompt") or DEFAULT_FIX_LINKS_PROMPT)
+    )
     user_msg = build_fix_user_message(
         content=content, expected_links=expected_links, violations=violations
     )

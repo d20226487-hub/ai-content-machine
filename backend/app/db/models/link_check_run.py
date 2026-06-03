@@ -63,6 +63,22 @@ class LinkCheckRun(Base):
     # run sets this so it re-scans only the rows that were touched.
     row_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
+    # Translation-links mode (3rd mode, migration 0044). NULL = a classic
+    # crawl/juxtapose run. Non-NULL = a translation run whose EXPECTED links
+    # are computed (localized) rather than read from a column. Shape:
+    #   {
+    #     "original_column_id": int, "translated_column_id": int,
+    #     "lang_column_id": int,
+    #     "internal_domains": [str], "product_patterns": [str],
+    #     "internal_treatment": "skip"|"localize",
+    #     "external_treatment": "skip"|"localize",
+    #     "exceptions": [{"lang": str, "page": str}],
+    #   }
+    # The seed materializes an "Expected links" output column from this and
+    # then runs the normal juxtapose, so AI-fix / revert / re-verify all work
+    # unchanged.
+    translation_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
     # Crawl progress: total unique links to fetch, and how many done.
     total_links: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     crawled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

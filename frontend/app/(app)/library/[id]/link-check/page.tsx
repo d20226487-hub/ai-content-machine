@@ -14,8 +14,9 @@ import {
   renameLinkCheckRun,
   startLinkCheck,
   type LinkCheckRun,
+  type LinkTreatment,
 } from "@/lib/linkCheck";
-import type { BulkTable } from "@/lib/types";
+import type { BulkColumn, BulkTable } from "@/lib/types";
 
 export default function LinkCheckPage({
   params,
@@ -39,6 +40,17 @@ export default function LinkCheckPage({
   const [error, setError] = useState<string | null>(null);
   const [runs, setRuns] = useState<LinkCheckRun[]>([]);
 
+  // 3rd mode — translation links. Exclusive of crawl/juxtapose.
+  const [checkTranslation, setCheckTranslation] = useState(false);
+  const [tOriginal, setTOriginal] = useState<number | null>(null);
+  const [tTranslated, setTTranslated] = useState<number | null>(null);
+  const [tLang, setTLang] = useState<number | null>(null);
+  const [tDomainCols, setTDomainCols] = useState<Set<number>>(new Set());
+  const [tProductDomain, setTProductDomain] = useState("");
+  const [tExceptions, setTExceptions] = useState("");
+  const [tInternal, setTInternal] = useState<LinkTreatment>("skip");
+  const [tExternal, setTExternal] = useState<LinkTreatment>("skip");
+
   useEffect(() => {
     if (!Number.isFinite(tableId)) return;
     // This page only needs the table name + columns (both returned in full
@@ -55,10 +67,19 @@ export default function LinkCheckPage({
   useEffect(() => loadRuns(), [loadRuns]);
 
   const columns = table?.columns ?? [];
-  const canRun =
-    columnIds.size > 0 &&
-    (checkJuxtapose || checkCrawl) &&
-    (!checkJuxtapose || expectedColumnIds.size > 0);
+  const tRoleIds = [tOriginal, tTranslated, tLang].filter(
+    (x): x is number => x != null,
+  );
+  const canRunTranslation =
+    tOriginal != null &&
+    tTranslated != null &&
+    tLang != null &&
+    new Set(tRoleIds).size === 3;
+  const canRun = checkTranslation
+    ? canRunTranslation
+    : columnIds.size > 0 &&
+      (checkJuxtapose || checkCrawl) &&
+      (!checkJuxtapose || expectedColumnIds.size > 0);
 
   function toggleSet(
     setter: React.Dispatch<React.SetStateAction<Set<number>>>,
@@ -77,13 +98,31 @@ export default function LinkCheckPage({
     setBusy(true);
     setError(null);
     try {
-      const r = await startLinkCheck(tableId, {
-        column_ids: Array.from(columnIds),
-        expected_column_ids: checkJuxtapose ? Array.from(expectedColumnIds) : [],
-        check_juxtapose: checkJuxtapose,
-        check_crawl: checkCrawl,
-        include_ok: checkCrawl ? includeOk : false,
-      });
+      const r = await startLinkCheck(
+        tableId,
+        checkTranslation
+          ? {
+              translation: {
+                original_column_id: tOriginal!,
+                translated_column_id: tTranslated!,
+                lang_column_id: tLang!,
+                internal_domain_column_ids: Array.from(tDomainCols),
+                product_domain: tProductDomain,
+                exceptions: tExceptions,
+                internal_treatment: tInternal,
+                external_treatment: tExternal,
+              },
+            }
+          : {
+              column_ids: Array.from(columnIds),
+              expected_column_ids: checkJuxtapose
+                ? Array.from(expectedColumnIds)
+                : [],
+              check_juxtapose: checkJuxtapose,
+              check_crawl: checkCrawl,
+              include_ok: checkCrawl ? includeOk : false,
+            },
+      );
       window.location.href = `/library/${tableId}/link-check/runs/${r.id}`;
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
@@ -112,88 +151,179 @@ export default function LinkCheckPage({
       )}
 
       <section className="mt-5 rounded-lg border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
-        {/* columns to scan */}
-        <div>
-          <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-            {t("linkCheck.columnsLabel")}
-          </span>
-          <div className="mt-1.5 flex flex-wrap gap-1.5">
-            {columns.map((c) => {
-              const on = columnIds.has(c.id);
-              return (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => toggleSet(setColumnIds, c.id)}
-                  className={
-                    "rounded-full px-2.5 py-1 text-xs ring-1 ring-inset " +
-                    (on
-                      ? "bg-blue-600 text-white ring-blue-600"
-                      : "text-neutral-600 ring-neutral-300 hover:bg-neutral-50 dark:text-neutral-400 dark:ring-neutral-700 dark:hover:bg-neutral-800")
-                  }
-                >
-                  {c.name}
-                </button>
-              );
-            })}
+        {/* columns to scan — only for the crawl / juxtapose methods */}
+        {!checkTranslation && (
+          <div>
+            <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+              {t("linkCheck.columnsLabel")}
+            </span>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {columns.map((c) => {
+                const on = columnIds.has(c.id);
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => toggleSet(setColumnIds, c.id)}
+                    className={
+                      "rounded-full px-2.5 py-1 text-xs ring-1 ring-inset " +
+                      (on
+                        ? "bg-blue-600 text-white ring-blue-600"
+                        : "text-neutral-600 ring-neutral-300 hover:bg-neutral-50 dark:text-neutral-400 dark:ring-neutral-700 dark:hover:bg-neutral-800")
+                    }
+                  >
+                    {c.name}
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* which checks */}
+        {/* methods */}
         <div className="mt-4 grid gap-2">
           <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
             {t("linkCheck.checksLabel")}
           </span>
-          <Toggle
-            checked={checkCrawl}
-            onChange={setCheckCrawl}
-            label={t("linkCheck.optCrawl")}
-            hint={t("linkCheck.optCrawlHint")}
-          />
-          {checkCrawl && (
-            <div className="ml-6">
+          {!checkTranslation && (
+            <>
               <Toggle
-                checked={includeOk}
-                onChange={setIncludeOk}
-                label={t("linkCheck.optIncludeOk")}
-                hint={t("linkCheck.optIncludeOkHint")}
+                checked={checkCrawl}
+                onChange={setCheckCrawl}
+                label={t("linkCheck.optCrawl")}
+                hint={t("linkCheck.optCrawlHint")}
+              />
+              {checkCrawl && (
+                <div className="ml-6">
+                  <Toggle
+                    checked={includeOk}
+                    onChange={setIncludeOk}
+                    label={t("linkCheck.optIncludeOk")}
+                    hint={t("linkCheck.optIncludeOkHint")}
+                  />
+                </div>
+              )}
+              <Toggle
+                checked={checkJuxtapose}
+                onChange={setCheckJuxtapose}
+                label={t("linkCheck.optJuxtapose")}
+                hint={t("linkCheck.optJuxtaposeHint")}
+              />
+              {checkJuxtapose && (
+                <div className="ml-6 mt-1">
+                  <span className="text-xs text-neutral-600 dark:text-neutral-400">
+                    {t("linkCheck.expectedLabel")}
+                  </span>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {columns.map((c) => {
+                      const on = expectedColumnIds.has(c.id);
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => toggleSet(setExpectedColumnIds, c.id)}
+                          className={
+                            "rounded-full px-2.5 py-1 text-xs ring-1 ring-inset " +
+                            (on
+                              ? "bg-violet-600 text-white ring-violet-600"
+                              : "text-neutral-600 ring-neutral-300 hover:bg-neutral-50 dark:text-neutral-400 dark:ring-neutral-700 dark:hover:bg-neutral-800")
+                          }
+                        >
+                          {c.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+          {/* 3rd method — translation links, listed last (exclusive) */}
+          <Toggle
+            checked={checkTranslation}
+            onChange={setCheckTranslation}
+            label={t("linkCheck.optTranslation")}
+            hint={t("linkCheck.optTranslationHint")}
+          />
+        </div>
+
+        {checkTranslation && (
+          <div className="mt-4 grid gap-4 border-t border-neutral-100 pt-4 dark:border-neutral-800">
+            <RolePicker
+              label={t("linkCheck.tOriginal")}
+              hint={t("linkCheck.tOriginalHint")}
+              columns={columns}
+              value={tOriginal}
+              onChange={setTOriginal}
+              accent="blue"
+            />
+            <RolePicker
+              label={t("linkCheck.tTranslated")}
+              hint={t("linkCheck.tTranslatedHint")}
+              columns={columns}
+              value={tTranslated}
+              onChange={setTTranslated}
+              accent="green"
+            />
+            <RolePicker
+              label={t("linkCheck.tLang")}
+              hint={t("linkCheck.tLangHint")}
+              columns={columns}
+              value={tLang}
+              onChange={setTLang}
+              accent="amber"
+            />
+
+            <MultiColumnPicker
+              label={t("linkCheck.tDomainCols")}
+              hint={t("linkCheck.tDomainColsHint")}
+              columns={columns}
+              value={tDomainCols}
+              onToggle={(id) => toggleSet(setTDomainCols, id)}
+            />
+
+            <label className="block">
+              <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                {t("linkCheck.tProductDomain")}
+              </span>
+              <span className="block text-xs text-neutral-400 dark:text-neutral-500">
+                {t("linkCheck.tProductDomainHint")}
+              </span>
+              <input
+                type="text"
+                value={tProductDomain}
+                onChange={(e) => setTProductDomain(e.target.value)}
+                placeholder="shop.example.com"
+                className="mt-1 block w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+              />
+            </label>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <TreatmentSelect
+                label={t("linkCheck.tInternalTreatment")}
+                value={tInternal}
+                onChange={setTInternal}
+                t={t}
+              />
+              <TreatmentSelect
+                label={t("linkCheck.tExternalTreatment")}
+                value={tExternal}
+                onChange={setTExternal}
+                t={t}
               />
             </div>
-          )}
-          <Toggle
-            checked={checkJuxtapose}
-            onChange={setCheckJuxtapose}
-            label={t("linkCheck.optJuxtapose")}
-            hint={t("linkCheck.optJuxtaposeHint")}
-          />
-          {checkJuxtapose && (
-            <div className="ml-6 mt-1">
-              <span className="text-xs text-neutral-600 dark:text-neutral-400">
-                {t("linkCheck.expectedLabel")}
-              </span>
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {columns.map((c) => {
-                  const on = expectedColumnIds.has(c.id);
-                  return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => toggleSet(setExpectedColumnIds, c.id)}
-                      className={
-                        "rounded-full px-2.5 py-1 text-xs ring-1 ring-inset " +
-                        (on
-                          ? "bg-violet-600 text-white ring-violet-600"
-                          : "text-neutral-600 ring-neutral-300 hover:bg-neutral-50 dark:text-neutral-400 dark:ring-neutral-700 dark:hover:bg-neutral-800")
-                      }
-                    >
-                      {c.name}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
+
+            <TextAreaField
+              label={t("linkCheck.tExceptions")}
+              hint={t("linkCheck.tExceptionsHint")}
+              value={tExceptions}
+              onChange={setTExceptions}
+              placeholder={
+                "es, /product/widget, /products/gadget\nde, https://example.com/x"
+              }
+            />
+          </div>
+        )}
 
         <div className="mt-4">
           <button
@@ -219,14 +349,28 @@ export default function LinkCheckPage({
             {t("linkCheck.historyHeading")}
           </h2>
           <ul className="mt-2 divide-y divide-neutral-100 rounded-lg border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
-            {runs.map((r) => (
+            {runs.map((r) => {
+              const mode = r.translation_config
+                ? t("linkCheckRun.translationMode")
+                : [
+                    r.check_crawl && t("linkCheckRun.modeCrawl"),
+                    r.check_juxtapose && t("linkCheckRun.modeJuxtapose"),
+                  ]
+                    .filter(Boolean)
+                    .join(" + ");
+              const label = r.name
+                ? r.name
+                : mode
+                  ? t("linkCheck.runLabelWithMode", { id: r.id, mode })
+                  : t("linkCheck.runLabel", { id: r.id });
+              return (
               <li key={r.id}>
                 <Link
                   href={`/library/${tableId}/link-check/runs/${r.id}`}
                   className="flex items-center justify-between gap-3 px-3 py-2 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-900"
                 >
                   <span className="min-w-0 truncate text-neutral-700 dark:text-neutral-300">
-                    {r.name || t("linkCheck.runLabel", { id: r.id })}
+                    {label}
                     <span className="ml-2 text-xs text-neutral-400">
                       {new Date(r.created_at).toLocaleString()}
                     </span>
@@ -259,11 +403,178 @@ export default function LinkCheckPage({
                   </span>
                 </Link>
               </li>
-            ))}
+              );
+            })}
           </ul>
         </section>
       )}
     </main>
+  );
+}
+
+/** Single-select column picker for a translation role (Original/Translated/Lang). */
+function RolePicker({
+  label,
+  hint,
+  columns,
+  value,
+  onChange,
+  accent,
+}: {
+  label: string;
+  hint?: string;
+  columns: BulkColumn[];
+  value: number | null;
+  onChange: (v: number | null) => void;
+  accent: "blue" | "green" | "amber";
+}) {
+  const onCls =
+    accent === "blue"
+      ? "bg-blue-600 text-white ring-blue-600"
+      : accent === "green"
+        ? "bg-green-600 text-white ring-green-600"
+        : "bg-amber-500 text-white ring-amber-500";
+  return (
+    <div>
+      <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+        {label}
+      </span>
+      {hint && (
+        <span className="block text-xs text-neutral-400 dark:text-neutral-500">
+          {hint}
+        </span>
+      )}
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        {columns.map((c) => {
+          const on = value === c.id;
+          return (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => onChange(on ? null : c.id)}
+              className={
+                "rounded-full px-2.5 py-1 text-xs ring-1 ring-inset " +
+                (on
+                  ? onCls
+                  : "text-neutral-600 ring-neutral-300 hover:bg-neutral-50 dark:text-neutral-400 dark:ring-neutral-700 dark:hover:bg-neutral-800")
+              }
+            >
+              {c.name}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Multi-select column picker (e.g. the internal-domain columns). */
+function MultiColumnPicker({
+  label,
+  hint,
+  columns,
+  value,
+  onToggle,
+}: {
+  label: string;
+  hint?: string;
+  columns: BulkColumn[];
+  value: Set<number>;
+  onToggle: (id: number) => void;
+}) {
+  return (
+    <div>
+      <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+        {label}
+      </span>
+      {hint && (
+        <span className="block text-xs text-neutral-400 dark:text-neutral-500">
+          {hint}
+        </span>
+      )}
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        {columns.map((c) => {
+          const on = value.has(c.id);
+          return (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => onToggle(c.id)}
+              className={
+                "rounded-full px-2.5 py-1 text-xs ring-1 ring-inset " +
+                (on
+                  ? "bg-teal-600 text-white ring-teal-600"
+                  : "text-neutral-600 ring-neutral-300 hover:bg-neutral-50 dark:text-neutral-400 dark:ring-neutral-700 dark:hover:bg-neutral-800")
+              }
+            >
+              {c.name}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function TreatmentSelect({
+  label,
+  value,
+  onChange,
+  t,
+}: {
+  label: string;
+  value: LinkTreatment;
+  onChange: (v: LinkTreatment) => void;
+  t: ReturnType<typeof useT>["t"];
+}) {
+  return (
+    <label className="block">
+      <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+        {label}
+      </span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as LinkTreatment)}
+        className="mt-1 block w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+      >
+        <option value="skip">{t("linkCheck.treatSkip")}</option>
+        <option value="localize">{t("linkCheck.treatLocalize")}</option>
+      </select>
+    </label>
+  );
+}
+
+function TextAreaField({
+  label,
+  hint,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  hint?: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <label className="block">
+      <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+        {label}
+      </span>
+      {hint && (
+        <span className="block text-xs text-neutral-400 dark:text-neutral-500">
+          {hint}
+        </span>
+      )}
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        rows={3}
+        className="mt-1 block w-full rounded-md border border-neutral-300 px-2 py-1.5 font-mono text-xs dark:border-neutral-700 dark:bg-neutral-900"
+      />
+    </label>
   );
 }
 

@@ -216,6 +216,29 @@ export default function LinkCheckRunPage({
 
   const isActive = run?.status === "queued" || run?.status === "running";
 
+  // Translation runs reuse the juxtapose machinery but the omitted/hallucinated
+  // problems mean "missing localized link" / "wrong (non-localized) link" —
+  // relabel them so the page reads in the tool's own terms.
+  const isTranslation = !!run?.translation_config;
+  const omittedLabel = t(
+    isTranslation ? "linkCheckRun.tOmitted" : "linkCheckRun.omitted",
+  );
+  const hallucinatedLabel = t(
+    isTranslation ? "linkCheckRun.tHallucinated" : "linkCheckRun.hallucinated",
+  );
+
+  // Mode shown in the run title so runs are self-describing.
+  const modeLabel = !run
+    ? ""
+    : isTranslation
+      ? t("linkCheckRun.translationMode")
+      : [
+          run.check_crawl && t("linkCheckRun.modeCrawl"),
+          run.check_juxtapose && t("linkCheckRun.modeJuxtapose"),
+        ]
+          .filter(Boolean)
+          .join(" + ");
+
   function toggleRow(rowId: number) {
     setSelectedRows((cur) => {
       const next = new Set(cur);
@@ -225,7 +248,11 @@ export default function LinkCheckRunPage({
     });
   }
 
-  async function startFix(rowIds: number[] | null, target: FixTargetChoice) {
+  async function startFix(
+    rowIds: number[] | null,
+    target: FixTargetChoice,
+    prompt: string,
+  ) {
     if (!run || startingFix) return;
     setStartingFix(true);
     setFixError(null);
@@ -241,6 +268,8 @@ export default function LinkCheckRunPage({
         // Where corrected output goes.
         target_column_id: target.kind === "existing" ? target.columnId : null,
         new_column_name: target.kind === "new" ? target.name : null,
+        // Per-job correction prompt (defaulted from the previous job).
+        prompt: prompt || null,
       });
       router.push(`/library/${tableId}/link-fix/runs/${fix.id}`);
     } catch (e) {
@@ -259,12 +288,17 @@ export default function LinkCheckRunPage({
   const canFix =
     !!run &&
     !isActive &&
-    run.expected_column_ids.length > 0 &&
+    (run.expected_column_ids.length > 0 || isTranslation) &&
     fixableCount > 0;
   // Without expected columns there's nothing to fix typos against — surface
-  // why the fix buttons aren't offered.
+  // why the fix buttons aren't offered. Translation runs recompute expected
+  // links server-side, so they're never blocked for this reason.
   const fixBlockedNoExpected =
-    !!run && !isActive && run.expected_column_ids.length === 0 && fixableCount > 0;
+    !!run &&
+    !isActive &&
+    run.expected_column_ids.length === 0 &&
+    !isTranslation &&
+    fixableCount > 0;
   // A filter is narrowing the shown violations — the fix only touches those.
   const filterActive =
     filterProblem !== "" ||
@@ -300,7 +334,12 @@ export default function LinkCheckRunPage({
           <header className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
-                {t("linkCheckRun.title", { id: run.id })}
+                {modeLabel
+                  ? t("linkCheckRun.titleWithMode", {
+                      id: run.id,
+                      mode: modeLabel,
+                    })
+                  : t("linkCheckRun.title", { id: run.id })}
               </h1>
               <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
                 {t("linkCheckRun.meta", {
@@ -363,8 +402,8 @@ export default function LinkCheckRunPage({
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
             {run.check_juxtapose && (
               <>
-                <Counter label={t("linkCheckRun.omitted")} value={run.omitted_count} accent="amber" />
-                <Counter label={t("linkCheckRun.hallucinated")} value={run.hallucinated_count} accent="violet" />
+                <Counter label={omittedLabel} value={run.omitted_count} accent="amber" />
+                <Counter label={hallucinatedLabel} value={run.hallucinated_count} accent="violet" />
               </>
             )}
             {run.check_crawl && (
@@ -376,6 +415,17 @@ export default function LinkCheckRunPage({
               </>
             )}
           </div>
+
+          {isTranslation && (
+            <div className="mt-3">
+              <Link
+                href={`/library/${tableId}/link-check/runs/${rid}/table`}
+                className="inline-flex items-center gap-1 text-sm font-medium text-blue-600 hover:underline dark:text-blue-400"
+              >
+                {t("linkCheckRun.viewRawTable")} →
+              </Link>
+            </div>
+          )}
 
           {run.error && (
             <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">
@@ -442,9 +492,11 @@ export default function LinkCheckRunPage({
                   className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs dark:border-neutral-700 dark:bg-neutral-900"
                 >
                   <option value="">{t("linkCheckRun.filterAllProblems")}</option>
-                  <option value="broken">{t("linkCheckRun.broken")}</option>
-                  <option value="omitted">{t("linkCheckRun.omitted")}</option>
-                  <option value="hallucinated">{t("linkCheckRun.hallucinated")}</option>
+                  {!isTranslation && (
+                    <option value="broken">{t("linkCheckRun.broken")}</option>
+                  )}
+                  <option value="omitted">{omittedLabel}</option>
+                  <option value="hallucinated">{hallucinatedLabel}</option>
                   {run.include_ok && (
                     <option value="ok">{t("linkCheckRun.ok")}</option>
                   )}
@@ -560,7 +612,7 @@ export default function LinkCheckRunPage({
                         </td>
                         <td className="px-3 py-2">
                           <span className="inline-flex items-center gap-1.5">
-                            <ProblemBadge v={v} />
+                            <ProblemBadge v={v} isTranslation={isTranslation} />
                             {solved && (
                               <span
                                 className="text-green-600 no-underline dark:text-green-400"
@@ -667,13 +719,16 @@ export default function LinkCheckRunPage({
 
       {fixScope && (
         <LinkFixModal
+          tableId={tableId}
           columns={columns}
           count={
             fixScope.rowIds ? fixScope.rowIds.length : (run?.total_violations ?? 0)
           }
           busy={startingFix}
           onClose={() => setFixScope(null)}
-          onConfirm={(target) => void startFix(fixScope.rowIds, target)}
+          onConfirm={(target, prompt) =>
+            void startFix(fixScope.rowIds, target, prompt)
+          }
         />
       )}
 
@@ -706,15 +761,23 @@ const BADGE_SKY =
 /** Badge for one violation. Juxtapose problems keep their semantic label;
  * crawl problems (broken/ok) are classified by HTTP status — only a 404 is
  * "битые", with whole 5xx / 3xx / 2xx classes otherwise. */
-function ProblemBadge({ v }: { v: LinkViolation }) {
+function ProblemBadge({
+  v,
+  isTranslation,
+}: {
+  v: LinkViolation;
+  isTranslation?: boolean;
+}) {
   const { t } = useT();
   let label: string;
   let cls: string;
   if (v.problem === "omitted") {
-    label = t("linkCheckRun.omitted");
+    label = t(isTranslation ? "linkCheckRun.tOmitted" : "linkCheckRun.omitted");
     cls = BADGE_AMBER;
   } else if (v.problem === "hallucinated") {
-    label = t("linkCheckRun.hallucinated");
+    label = t(
+      isTranslation ? "linkCheckRun.tHallucinated" : "linkCheckRun.hallucinated",
+    );
     cls = BADGE_VIOLET;
   } else {
     // crawl-origin: broken | ok → classify by status code.

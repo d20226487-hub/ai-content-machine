@@ -23,6 +23,8 @@ export interface LinkFixRequest {
    *  create one. Both omitted = overwrite the scanned column. */
   target_column_id?: number | null;
   new_column_name?: string | null;
+  /** Per-job correction prompt (system override). Empty = Brain default. */
+  prompt?: string | null;
 }
 
 export interface LinkFixRun {
@@ -32,6 +34,7 @@ export interface LinkFixRun {
   source_run_id: number | null;
   recheck_run_id: number | null;
   target_column_id: number | null;
+  prompt: string | null;
   status: LinkFixStatus;
   column_ids: number[];
   expected_column_ids: number[];
@@ -104,6 +107,16 @@ export function startLinkFix(
     method: "POST",
     body: req,
   });
+}
+
+/** The prompt the fix modal should default to: the previously-used job prompt
+ *  for this table, else the global Brain fix-links default. */
+export function getLinkFixDefaultPrompt(
+  tableId: number,
+): Promise<{ prompt: string }> {
+  return api<{ prompt: string }>(
+    `/library/tables/${tableId}/link-fix/default-prompt`,
+  );
 }
 
 export function listLinkFixRuns(
