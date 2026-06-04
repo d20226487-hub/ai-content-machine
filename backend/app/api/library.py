@@ -34,6 +34,7 @@ from app.db.models import (
     BulkTableRow,
     FindReplaceRun,
     LinkCheckCrawlTarget,
+    LinkCheckDismissal,
     LinkCheckRun,
     LinkCheckViolation,
     LinkFixCell,
@@ -57,6 +58,7 @@ from app.schemas.bulk import (
     ColumnValuesResponse,
     CsvImportRequest,
     DiffSegment,
+    DismissRequest,
     FindReplaceRunDetail,
     FindReplaceRunRead,
     FindRequest,
@@ -91,9 +93,11 @@ from app.schemas.bulk import (
     TableCreate,
     TableFixedCell,
     UnifiedSegment,
+    AlignedRow,
     TableListItem,
     TableListResponse,
     TranslationCheckConfig,
+    TranslationLinkTag,
     TranslationTableResponse,
     TranslationTableRow,
     TableRead,
@@ -3235,13 +3239,23 @@ async def get_translation_table(
     run_id: int,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=200),
+    view: Literal["active", "all", "dismissed"] = Query(default="active"),
+    link_type: Literal["all", "product", "internal", "external"] = Query(
+        default="all"
+    ),
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TranslationTableResponse:
-    """The translation raw-table view: per row, the 4-column link breakdown
-    (original / expected / translation / mismatches), computed on demand from
-    the source columns + the run's translation_config. Nothing is materialized
-    into the bulk table. 400 if the run isn't a translation run."""
+    """The translation raw-table view: per row, the link breakdown (original /
+    expected / translation-tagged / mismatches), computed on demand from the
+    source columns + the run's translation_config. Nothing is materialized into
+    the bulk table.
+
+    ``view``: ``active`` (default) = rows with a non-dismissed wrong/made-up
+    link, mismatches = active errors; ``dismissed`` = rows with dismissed
+    errors, mismatches = the dismissed ones (for restoring); ``all`` = every
+    row with links, mismatches = all errors (dismissed flagged). 400 if the
+    run isn't a translation run."""
     from app.services.translation_links import compute_row_breakdown, parse_domains
 
     run = await _get_link_check_run_or_404(db, run_id)
@@ -3258,6 +3272,18 @@ async def get_translation_table(
     exceptions = cfg.get("exceptions", []) or []
     internal_t = cfg.get("internal_treatment", "skip")
     external_t = cfg.get("external_treatment", "skip")
+
+    # Dismissed (row_id, link) pairs for this run.
+    dismissed: set[tuple[int, str]] = {
+        (r, l)
+        for (r, l) in (
+            await db.execute(
+                select(LinkCheckDismissal.row_id, LinkCheckDismissal.link).where(
+                    LinkCheckDismissal.run_id == run_id
+                )
+            )
+        ).all()
+    }
 
     # "Has any links" can only be known after extraction, so we compute every
     # row's breakdown, drop the empty rows, then paginate the filtered set.
@@ -3297,29 +3323,77 @@ async def get_translation_table(
         internal_domains: list[str] = []
         for dc in domain_cols:
             internal_domains += parse_domains(vals.get(dc))
+        lang_val = (vals.get(lang_col) or "").strip()
         bd = compute_row_breakdown(
             vals.get(orig_col),
             vals.get(trans_col),
-            (vals.get(lang_col) or "").strip(),
+            lang_val,
             internal_domains=internal_domains,
             product_domains=product_domains,
             exceptions=exceptions,
             internal_treatment=internal_t,
             external_treatment=external_t,
         )
-        # Hide rows with no links anywhere.
-        if not (
-            bd["original"] or bd["expected"] or bd["translation"] or bd["mismatches"]
-        ):
+
+        translation = [
+            TranslationLinkTag(
+                url=t["url"], kind=t["kind"], dismissed=(rid, t["url"]) in dismissed
+            )
+            for t in bd["translation"]
+        ]
+
+        # Build the aligned rows, applying the view filter to the WRONG side.
+        # active: keep only lines whose wrong is a live error; dismissed: only
+        # dismissed wrongs; all: every line (dismissed wrongs flagged).
+        aligned: list[AlignedRow] = []
+        active_n = 0
+        dismissed_n = 0
+        for a in bd["aligned"]:
+            if link_type != "all" and a["link_type"] != link_type:
+                continue
+            w = a["wrong"]
+            d = bool(w) and (rid, w["url"]) in dismissed
+            if w:
+                if d:
+                    dismissed_n += 1
+                else:
+                    active_n += 1
+            if view == "active":
+                if not (w and not d):
+                    continue
+                wrong_tag = TranslationLinkTag(url=w["url"], kind=w["kind"], dismissed=False)
+            elif view == "dismissed":
+                if not (w and d):
+                    continue
+                wrong_tag = TranslationLinkTag(url=w["url"], kind=w["kind"], dismissed=True)
+            else:  # all
+                wrong_tag = (
+                    TranslationLinkTag(url=w["url"], kind=w["kind"], dismissed=d)
+                    if w
+                    else None
+                )
+                if a["expected"] is None and wrong_tag is None:
+                    continue
+            aligned.append(AlignedRow(expected=a["expected"], wrong=wrong_tag))
+
+        if view == "active":
+            if active_n == 0:
+                continue
+        elif view == "dismissed":
+            if dismissed_n == 0:
+                continue
+        elif not (bd["original"] or translation or aligned):
             continue
+
         filtered.append(
             TranslationTableRow(
                 row_id=rid,
                 row_position=pos,
+                lang=lang_val,
                 original=bd["original"],
-                expected=bd["expected"],
-                translation=bd["translation"],
-                mismatches=bd["mismatches"],
+                translation=translation,
+                aligned=aligned,
+                has_discrepancy=active_n > 0,
             )
         )
 
@@ -3331,6 +3405,66 @@ async def get_translation_table(
         total_rows=total,
         items=filtered[start : start + page_size],
     )
+
+
+@router.post(
+    "/link-check-runs/{run_id}/translation-table/dismiss", status_code=204
+)
+async def dismiss_translation_errors(
+    run_id: int,
+    payload: DismissRequest,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Bulk-dismiss reviewed translation errors (per row+link). Idempotent."""
+    run = await _get_link_check_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    if not run.translation_config:
+        raise HTTPException(status_code=400, detail="Not a translation run.")
+    rows = [
+        {
+            "run_id": run_id,
+            "row_id": it.row_id,
+            "link": it.link,
+            "created_by_id": actor.id,
+        }
+        for it in payload.items
+        if it.link.strip()
+    ]
+    if rows:
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        await db.execute(
+            pg_insert(LinkCheckDismissal)
+            .values(rows)
+            .on_conflict_do_nothing(constraint="uq_lc_dismissal_run_row_link")
+        )
+        await db.commit()
+    return Response(status_code=204)
+
+
+@router.post(
+    "/link-check-runs/{run_id}/translation-table/restore", status_code=204
+)
+async def restore_translation_errors(
+    run_id: int,
+    payload: DismissRequest,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Un-dismiss previously dismissed errors (per row+link)."""
+    run = await _get_link_check_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    for it in payload.items:
+        await db.execute(
+            delete(LinkCheckDismissal).where(
+                LinkCheckDismissal.run_id == run_id,
+                LinkCheckDismissal.row_id == it.row_id,
+                LinkCheckDismissal.link == it.link,
+            )
+        )
+    await db.commit()
+    return Response(status_code=204)
 
 
 @router.post("/link-check-runs/{run_id}/cancel", response_model=LinkCheckRunRead)

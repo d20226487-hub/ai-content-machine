@@ -29,7 +29,7 @@ import re
 from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
 
-from app.services.link_check import extract_output_links, juxtapose
+from app.services.link_check import extract_output_links, normalize_link
 
 LinkType = Literal["product", "internal", "external"]
 Treatment = Literal["skip", "localize"]
@@ -281,6 +281,17 @@ def compute_expected_links(
     return out
 
 
+def _strip_first_seg(nlink: str) -> str:
+    """Drop a normalized link's first path segment (its would-be language
+    prefix): ``host/xx/a/b`` → ``host/a/b``; ``host/xx`` → ``host``."""
+    parts = nlink.split("/", 2)
+    if len(parts) < 2:
+        return nlink
+    if len(parts) == 2:
+        return parts[0]
+    return parts[0] + "/" + parts[2]
+
+
 def compute_row_breakdown(
     original_text: str | None,
     translated_text: str | None,
@@ -292,24 +303,92 @@ def compute_row_breakdown(
     internal_treatment: Treatment = "skip",
     external_treatment: Treatment = "skip",
 ) -> dict:
-    """The 4-column raw-table breakdown for one row (computed on demand):
-    ``original`` links, the ``expected`` localized links, the ``translation``'s
-    actual links, and ``mismatches`` (translation links not in expected)."""
-    original = extract_output_links(original_text)
-    translation = extract_output_links(translated_text)
-    expected = compute_expected_links(
-        original_text,
-        lang,
-        internal_domains=internal_domains,
-        product_domains=product_domains,
-        exceptions=exceptions,
-        internal_treatment=internal_treatment,
-        external_treatment=external_treatment,
+    """The raw-table breakdown for one row (computed on demand).
+
+    Returns: ``original`` links; ``translation`` links each tagged
+    ok/discrepancy/invented; and ``aligned`` — one entry per expected link
+    paired with the WRONG translation link it should have been (``wrong`` is
+    None when the translation got it right or simply omitted it), plus a
+    trailing entry per invented (made-up) translation link with
+    ``expected=None``. The pairing lets the UI align each red link on the same
+    row as its expected link."""
+    lang = (lang or "").strip()
+    internal_domains = [normalize_domain(d) for d in internal_domains]
+    product_domains = [normalize_domain(d) for d in product_domains]
+    default_host = (
+        internal_domains[0]
+        if internal_domains
+        else (product_domains[0] if product_domains else "")
     )
-    _omitted, mismatches = juxtapose(translation, expected)
+
+    # Original links + their expected counterpart + link type (keep the
+    # original→expected map so each wrong translation link can be paired with
+    # its expected one, and carry the type for the link-type filter).
+    original: list[str] = []
+    seen_o: set[str] = set()
+    pairs: list[tuple[str, str, str]] = []  # (original_norm, expected_url, type)
+    seen_e: set[str] = set()
+    for raw in extract_output_links(original_text):
+        absu = _ensure_scheme(raw, default_host)
+        if absu not in seen_o:
+            seen_o.add(absu)
+            original.append(absu)
+        if not lang:
+            continue
+        ltype = classify_link(absu, internal_domains, product_domains)
+        e = expected_link_for(
+            absu,
+            lang,
+            ltype,
+            internal_treatment=internal_treatment,
+            external_treatment=external_treatment,
+            exceptions=exceptions,
+        )
+        if e not in seen_e:
+            seen_e.add(e)
+            pairs.append((normalize_link(absu), e, ltype))
+
+    expected_norm = {normalize_link(e) for (_o, e, _t) in pairs}
+    orig_norm_set = {o for (o, _e, _t) in pairs}
+
+    translation = extract_output_links(translated_text)
+    translation_norm = {normalize_link(t) for t in translation}
+
+    tagged_trans: list[dict] = []
+    wrong_by_orig: dict[str, dict] = {}  # original_norm → first wrong link
+    invented: list[dict] = []
+    for t in translation:
+        nt = normalize_link(t)
+        if nt in expected_norm:
+            tagged_trans.append({"url": t, "kind": "ok"})
+        elif nt in orig_norm_set or _strip_first_seg(nt) in orig_norm_set:
+            tag = {"url": t, "kind": "discrepancy"}
+            tagged_trans.append(tag)
+            o = nt if nt in orig_norm_set else _strip_first_seg(nt)
+            wrong_by_orig.setdefault(o, tag)
+        else:
+            tag = {"url": t, "kind": "invented"}
+            tagged_trans.append(tag)
+            invented.append(tag)
+
+    # One aligned entry per expected link (its wrong counterpart if any), then
+    # the invented links (no expected).
+    aligned: list[dict] = []
+    for (o, e, ltype) in pairs:
+        wrong = None if normalize_link(e) in translation_norm else wrong_by_orig.get(o)
+        aligned.append({"expected": e, "wrong": wrong, "link_type": ltype})
+    for inv in invented:
+        # Made-up links still fall into one of the 3 types by their own host.
+        aligned.append(
+            {
+                "expected": None,
+                "wrong": inv,
+                "link_type": classify_link(inv["url"], internal_domains, product_domains),
+            }
+        )
+
     return {
         "original": original,
-        "expected": expected,
-        "translation": translation,
-        "mismatches": mismatches,
+        "translation": tagged_trans,
+        "aligned": aligned,
     }

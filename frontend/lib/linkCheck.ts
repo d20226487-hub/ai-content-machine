@@ -144,13 +144,36 @@ export function getLinkCheckRun(
   );
 }
 
+/** How a translation link compares to the expected links. */
+export type TranslationLinkKind = "ok" | "discrepancy" | "invented";
+
+export interface TranslationLinkTag {
+  url: string;
+  kind: TranslationLinkKind;
+  /** The user bulk-dismissed this error. */
+  dismissed: boolean;
+}
+
+/** Link type of the original behind an aligned row (drives the type filter).
+ *  Made-up links are bucketed into one of these by their own host. */
+export type LinkTypeCategory = "product" | "internal" | "external";
+
+/** An expected link paired with the wrong translation link it should have
+ *  been (wrong null = correct/omitted; expected null = invented link). */
+export interface AlignedRow {
+  expected: string | null;
+  wrong: TranslationLinkTag | null;
+  link_type: LinkTypeCategory;
+}
+
 export interface TranslationTableRow {
   row_id: number;
   row_position: number;
+  lang: string;
   original: string[];
-  expected: string[];
-  translation: string[];
-  mismatches: string[];
+  translation: TranslationLinkTag[];
+  aligned: AlignedRow[];
+  has_discrepancy: boolean;
 }
 
 export interface TranslationTableResponse {
@@ -160,19 +183,56 @@ export interface TranslationTableResponse {
   items: TranslationTableRow[];
 }
 
-/** The 4-column raw breakdown for a translation run, paginated by row
- *  (computed on demand — nothing is materialized into the bulk table). */
+/** active = rows with non-dismissed errors; dismissed = rows with dismissed
+ *  errors (to restore); all = every row with links. */
+export type TranslationTableView = "active" | "all" | "dismissed";
+
+/** Link-type filter. "all" = no filter. */
+export type LinkTypeFilter = "all" | LinkTypeCategory;
+
+/** The raw breakdown for a translation run, paginated by row (computed on
+ *  demand — nothing is materialized into the bulk table). */
 export function getTranslationTable(
   runId: number,
   page = 1,
   pageSize = 25,
+  view: TranslationTableView = "active",
+  linkType: LinkTypeFilter = "all",
 ): Promise<TranslationTableResponse> {
   const sp = new URLSearchParams({
     page: String(page),
     page_size: String(pageSize),
+    view,
+    link_type: linkType,
   });
   return api<TranslationTableResponse>(
     `/library/link-check-runs/${runId}/translation-table?${sp.toString()}`,
+  );
+}
+
+/** A dismissable error: which row + which link. */
+export interface DismissItem {
+  row_id: number;
+  link: string;
+}
+
+export function dismissTranslationErrors(
+  runId: number,
+  items: DismissItem[],
+): Promise<void> {
+  return api<void>(
+    `/library/link-check-runs/${runId}/translation-table/dismiss`,
+    { method: "POST", body: { items } },
+  );
+}
+
+export function restoreTranslationErrors(
+  runId: number,
+  items: DismissItem[],
+): Promise<void> {
+  return api<void>(
+    `/library/link-check-runs/${runId}/translation-table/restore`,
+    { method: "POST", body: { items } },
   );
 }
 

@@ -17,6 +17,7 @@ from app.db.models.generation import Generation
 from app.db.models.language_sync import LanguageSyncResult, LanguageSyncRun
 from app.db.models.link_check_run import (
     LinkCheckCrawlTarget,
+    LinkCheckDismissal,
     LinkCheckRun,
     LinkCheckViolation,
 )
@@ -54,6 +55,7 @@ __all__ = [
     "LanguageSyncResult",
     "LanguageSyncRun",
     "LinkCheckCrawlTarget",
+    "LinkCheckDismissal",
     "LinkCheckRun",
     "LinkCheckViolation",
     "LinkFixCell",

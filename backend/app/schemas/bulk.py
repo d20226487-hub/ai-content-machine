@@ -740,16 +740,52 @@ class LinkCheckRunDetail(LinkCheckRunRead):
     items: list[LinkViolationRead]
 
 
+class TranslationLinkTag(BaseModel):
+    """A translation link tagged by how it compares to the expected links:
+    ok (matches), discrepancy (wrong but relates to an original link), or
+    invented (made-up, no basis in the original). ``dismissed`` = the user
+    bulk-dismissed this error from the active view."""
+
+    url: str
+    kind: Literal["ok", "discrepancy", "invented"]
+    dismissed: bool = False
+
+
+class DismissItem(BaseModel):
+    row_id: int
+    link: str
+
+
+class DismissRequest(BaseModel):
+    """Bulk dismiss/restore of translation-table errors (per row+link)."""
+
+    items: list[DismissItem] = Field(default_factory=list)
+
+
+class AlignedRow(BaseModel):
+    """An expected link paired with the WRONG translation link it should have
+    been (``wrong`` None = correct/omitted). For invented links ``expected`` is
+    None. ``link_type`` (product/internal/external, or invented) drives the
+    link-type filter. Drives the side-by-side expected↔discrepancy alignment."""
+
+    expected: str | None = None
+    wrong: TranslationLinkTag | None = None
+    link_type: Literal["product", "internal", "external"] = "external"
+
+
 class TranslationTableRow(BaseModel):
-    """One row of the translation raw-table view: the 4-column link breakdown,
-    computed on demand (not stored)."""
+    """One row of the translation raw-table view: the link breakdown, computed
+    on demand (not stored). ``translation`` links are tagged; ``aligned`` pairs
+    each expected link with its wrong counterpart; ``has_discrepancy`` drives
+    the discrepancy filter."""
 
     row_id: int
     row_position: int
+    lang: str = ""
     original: list[str]
-    expected: list[str]
-    translation: list[str]
-    mismatches: list[str]
+    translation: list[TranslationLinkTag]
+    aligned: list[AlignedRow]
+    has_discrepancy: bool
 
 
 class TranslationTableResponse(BaseModel):

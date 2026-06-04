@@ -169,3 +169,34 @@ class LinkCheckCrawlTarget(Base):
     status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     detail_code: Mapped[str | None] = mapped_column(String(24), nullable=True)
     occurrences: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+
+
+class LinkCheckDismissal(Base):
+    """A translation-table error the user dismissed — a (run, row, link) tuple.
+
+    The raw-table view recomputes on demand and hides dismissed errors from the
+    active discrepancy filter; they stay restorable under the dismissed view.
+    See migration 0046.
+    """
+
+    __tablename__ = "link_check_dismissals"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id", "row_id", "link", name="uq_lc_dismissal_run_row_link"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("link_check_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    row_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    link: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
