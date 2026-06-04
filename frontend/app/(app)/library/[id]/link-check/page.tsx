@@ -210,37 +210,8 @@ export default function LinkCheckPage({
       )}
 
       <section className="mt-5 rounded-lg border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
-        {/* columns to scan — only for the crawl / juxtapose methods */}
-        {!checkTranslation && (
-          <div>
-            <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-              {t("linkCheck.columnsLabel")}
-            </span>
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
-              {columns.map((c) => {
-                const on = columnIds.has(c.id);
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => toggleSet(setColumnIds, c.id)}
-                    className={
-                      "rounded-full px-2.5 py-1 text-xs ring-1 ring-inset " +
-                      (on
-                        ? "bg-blue-600 text-white ring-blue-600"
-                        : "text-neutral-600 ring-neutral-300 hover:bg-neutral-50 dark:text-neutral-400 dark:ring-neutral-700 dark:hover:bg-neutral-800")
-                    }
-                  >
-                    {c.name}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* methods */}
-        <div className="mt-4 grid gap-2">
+        {/* methods — the entry point: pick which check(s) to run */}
+        <div className="grid gap-2">
           <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
             {t("linkCheck.checksLabel")}
           </span>
@@ -252,49 +223,12 @@ export default function LinkCheckPage({
                 label={t("linkCheck.optCrawl")}
                 hint={t("linkCheck.optCrawlHint")}
               />
-              {checkCrawl && (
-                <div className="ml-6">
-                  <Toggle
-                    checked={includeOk}
-                    onChange={setIncludeOk}
-                    label={t("linkCheck.optIncludeOk")}
-                    hint={t("linkCheck.optIncludeOkHint")}
-                  />
-                </div>
-              )}
               <Toggle
                 checked={checkJuxtapose}
                 onChange={setCheckJuxtapose}
                 label={t("linkCheck.optJuxtapose")}
                 hint={t("linkCheck.optJuxtaposeHint")}
               />
-              {checkJuxtapose && (
-                <div className="ml-6 mt-1">
-                  <span className="text-xs text-neutral-600 dark:text-neutral-400">
-                    {t("linkCheck.expectedLabel")}
-                  </span>
-                  <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    {columns.map((c) => {
-                      const on = expectedColumnIds.has(c.id);
-                      return (
-                        <button
-                          key={c.id}
-                          type="button"
-                          onClick={() => toggleSet(setExpectedColumnIds, c.id)}
-                          className={
-                            "rounded-full px-2.5 py-1 text-xs ring-1 ring-inset " +
-                            (on
-                              ? "bg-violet-600 text-white ring-violet-600"
-                              : "text-neutral-600 ring-neutral-300 hover:bg-neutral-50 dark:text-neutral-400 dark:ring-neutral-700 dark:hover:bg-neutral-800")
-                          }
-                        >
-                          {c.name}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
             </>
           )}
           {/* 3rd method — translation links, listed last (exclusive) */}
@@ -306,39 +240,108 @@ export default function LinkCheckPage({
           />
         </div>
 
-        {/* Optional link-type classification for crawl/juxtapose results. */}
-        {!checkTranslation && (
-          <div className="mt-4 grid gap-3 border-t border-neutral-100 pt-4 dark:border-neutral-800">
+        {/* crawl / juxtapose configuration — revealed once a method is picked */}
+        {!checkTranslation && (checkCrawl || checkJuxtapose) && (
+          <div className="mt-4 grid gap-4 border-t border-neutral-100 pt-4 dark:border-neutral-800">
+            {/* columns to scan for links */}
             <div>
               <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-                {t("linkCheck.linkTypesLabel")}
+                {t("linkCheck.columnsLabel")}
               </span>
-              <span className="block text-xs text-neutral-400 dark:text-neutral-500">
-                {t("linkCheck.linkTypesHint")}
-              </span>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {columns.map((c) => {
+                  const on = columnIds.has(c.id);
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => toggleSet(setColumnIds, c.id)}
+                      className={
+                        "rounded-full px-2.5 py-1 text-xs ring-1 ring-inset " +
+                        (on
+                          ? "bg-blue-600 text-white ring-blue-600"
+                          : "text-neutral-600 ring-neutral-300 hover:bg-neutral-50 dark:text-neutral-400 dark:ring-neutral-700 dark:hover:bg-neutral-800")
+                      }
+                    >
+                      {c.name}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-            <MultiColumnPicker
-              label={t("linkCheck.tDomainCols")}
-              hint={t("linkCheck.tDomainColsHint")}
-              columns={columns}
-              value={cDomainCols}
-              onToggle={(id) => toggleSet(setCDomainCols, id)}
-            />
-            <label className="block">
-              <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-                {t("linkCheck.tProductDomain")}
-              </span>
-              <span className="block text-xs text-neutral-400 dark:text-neutral-500">
-                {t("linkCheck.tProductDomainHint")}
-              </span>
-              <input
-                type="text"
-                value={cProductDomain}
-                onChange={(e) => setCProductDomain(e.target.value)}
-                placeholder="shop.example.com"
-                className="mt-1 block w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+
+            {/* crawl-only: also record healthy links */}
+            {checkCrawl && (
+              <Toggle
+                checked={includeOk}
+                onChange={setIncludeOk}
+                label={t("linkCheck.optIncludeOk")}
+                hint={t("linkCheck.optIncludeOkHint")}
               />
-            </label>
+            )}
+
+            {/* juxtapose-only: expected-link columns to compare against */}
+            {checkJuxtapose && (
+              <div>
+                <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                  {t("linkCheck.expectedLabel")}
+                </span>
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {columns.map((c) => {
+                    const on = expectedColumnIds.has(c.id);
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => toggleSet(setExpectedColumnIds, c.id)}
+                        className={
+                          "rounded-full px-2.5 py-1 text-xs ring-1 ring-inset " +
+                          (on
+                            ? "bg-violet-600 text-white ring-violet-600"
+                            : "text-neutral-600 ring-neutral-300 hover:bg-neutral-50 dark:text-neutral-400 dark:ring-neutral-700 dark:hover:bg-neutral-800")
+                        }
+                      >
+                        {c.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* optional link-type classification */}
+            <div className="grid gap-3 border-t border-neutral-100 pt-4 dark:border-neutral-800">
+              <div>
+                <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                  {t("linkCheck.linkTypesLabel")}
+                </span>
+                <span className="block text-xs text-neutral-400 dark:text-neutral-500">
+                  {t("linkCheck.linkTypesHint")}
+                </span>
+              </div>
+              <MultiColumnPicker
+                label={t("linkCheck.tDomainCols")}
+                hint={t("linkCheck.tDomainColsHint")}
+                columns={columns}
+                value={cDomainCols}
+                onToggle={(id) => toggleSet(setCDomainCols, id)}
+              />
+              <label className="block">
+                <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                  {t("linkCheck.tProductDomain")}
+                </span>
+                <span className="block text-xs text-neutral-400 dark:text-neutral-500">
+                  {t("linkCheck.tProductDomainHint")}
+                </span>
+                <input
+                  type="text"
+                  value={cProductDomain}
+                  onChange={(e) => setCProductDomain(e.target.value)}
+                  placeholder="shop.example.com"
+                  className="mt-1 block w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+                />
+              </label>
+            </div>
           </div>
         )}
 
