@@ -117,6 +117,20 @@ def crawlable_url(u: str) -> str:
     return s
 
 
+def _dedup_by_norm(urls: list[str]) -> list[str]:
+    """Keep the first occurrence of each normalized URL — so a link repeated in
+    the content yields one row, not several."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for u in urls:
+        n = normalize_link(u)
+        if n in seen:
+            continue
+        seen.add(n)
+        out.append(u)
+    return out
+
+
 def juxtapose(
     output_links: list[str], expected_links: list[str]
 ) -> tuple[list[str], list[str]]:
@@ -124,12 +138,17 @@ def juxtapose(
 
     omitted      — expected links whose normalized form isn't among outputs.
     hallucinated — output links whose normalized form isn't among expected.
-    Returns the ORIGINAL link strings (not normalized) for display.
+    Returns the ORIGINAL link strings (not normalized) for display, deduped by
+    normalized form so a duplicated link doesn't produce duplicate violations.
     """
     out_norm = {normalize_link(u) for u in output_links}
     exp_norm = {normalize_link(u) for u in expected_links}
-    omitted = [u for u in expected_links if normalize_link(u) not in out_norm]
-    hallucinated = [u for u in output_links if normalize_link(u) not in exp_norm]
+    omitted = _dedup_by_norm(
+        [u for u in expected_links if normalize_link(u) not in out_norm]
+    )
+    hallucinated = _dedup_by_norm(
+        [u for u in output_links if normalize_link(u) not in exp_norm]
+    )
     return omitted, hallucinated
 
 

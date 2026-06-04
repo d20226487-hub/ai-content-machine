@@ -10,11 +10,13 @@ import { useT } from "@/lib/i18n-context";
 import { getTable } from "@/lib/library";
 import {
   deleteLinkCheckRun,
+  getLinkCheckRun,
   listLinkCheckRuns,
   renameLinkCheckRun,
   startLinkCheck,
   type LinkCheckRun,
   type LinkTreatment,
+  type StoredTranslationConfig,
 } from "@/lib/linkCheck";
 import type { BulkColumn, BulkTable } from "@/lib/types";
 
@@ -36,6 +38,10 @@ export default function LinkCheckPage({
   const [expectedColumnIds, setExpectedColumnIds] = useState<Set<number>>(
     new Set(),
   );
+  // Optional link-type classification for crawl/juxtapose (product/internal/
+  // external) — internal domains come per-row from the chosen column(s).
+  const [cProductDomain, setCProductDomain] = useState("");
+  const [cDomainCols, setCDomainCols] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runs, setRuns] = useState<LinkCheckRun[]>([]);
@@ -48,8 +54,46 @@ export default function LinkCheckPage({
   const [tDomainCols, setTDomainCols] = useState<Set<number>>(new Set());
   const [tProductDomain, setTProductDomain] = useState("");
   const [tExceptions, setTExceptions] = useState("");
+  const [tDefaultLangs, setTDefaultLangs] = useState("");
   const [tInternal, setTInternal] = useState<LinkTreatment>("skip");
   const [tExternal, setTExternal] = useState<LinkTreatment>("skip");
+  // When arriving via ?rerun=<runId>, the source run we copied criteria from.
+  const [rerunFrom, setRerunFrom] = useState<number | null>(null);
+
+  // Prefill the translation form from an existing run's criteria so the user
+  // can tweak and run again. Reads the query param client-side (no Suspense).
+  useEffect(() => {
+    const v = new URLSearchParams(window.location.search).get("rerun");
+    const sourceId = v ? Number(v) : NaN;
+    if (!Number.isFinite(sourceId)) return;
+    getLinkCheckRun(sourceId)
+      .then((src) => {
+        const cfg = src.translation_config as StoredTranslationConfig | null;
+        if (!cfg) return; // only translation runs are rerunnable here
+        setCheckTranslation(true);
+        setCheckJuxtapose(false);
+        setCheckCrawl(false);
+        setTOriginal(cfg.original_column_id ?? null);
+        setTTranslated(cfg.translated_column_id ?? null);
+        setTLang(cfg.lang_column_id ?? null);
+        setTDomainCols(new Set(cfg.internal_domain_column_ids ?? []));
+        setTProductDomain((cfg.product_domains ?? []).join(", "));
+        setTExceptions(
+          (cfg.exceptions ?? [])
+            .map((e) => `${e.lang}, ${e.page}`)
+            .join("\n"),
+        );
+        setTDefaultLangs(
+          Object.entries(cfg.product_default_langs ?? {})
+            .map(([d, l]) => `${d}, ${l}`)
+            .join("\n"),
+        );
+        setTInternal(cfg.internal_treatment ?? "skip");
+        setTExternal(cfg.external_treatment ?? "skip");
+        setRerunFrom(sourceId);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!Number.isFinite(tableId)) return;
@@ -109,6 +153,7 @@ export default function LinkCheckPage({
                 internal_domain_column_ids: Array.from(tDomainCols),
                 product_domain: tProductDomain,
                 exceptions: tExceptions,
+                product_default_langs: tDefaultLangs,
                 internal_treatment: tInternal,
                 external_treatment: tExternal,
               },
@@ -121,6 +166,8 @@ export default function LinkCheckPage({
               check_juxtapose: checkJuxtapose,
               check_crawl: checkCrawl,
               include_ok: checkCrawl ? includeOk : false,
+              product_domain: cProductDomain,
+              internal_domain_column_ids: Array.from(cDomainCols),
             },
       );
       window.location.href = `/library/${tableId}/link-check/runs/${r.id}`;
@@ -148,6 +195,18 @@ export default function LinkCheckPage({
         <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
           {t("linkCheck.onTable", { name: table.name })}
         </p>
+      )}
+
+      {rerunFrom != null && (
+        <div className="mt-4 flex items-center justify-between gap-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-200">
+          <span>{t("linkCheck.rerunBanner", { id: rerunFrom })}</span>
+          <Link
+            href={`/library/${tableId}/link-check/runs/${rerunFrom}/table`}
+            className="shrink-0 underline hover:no-underline"
+          >
+            {t("linkCheck.rerunViewSource")}
+          </Link>
+        </div>
       )}
 
       <section className="mt-5 rounded-lg border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
@@ -247,6 +306,42 @@ export default function LinkCheckPage({
           />
         </div>
 
+        {/* Optional link-type classification for crawl/juxtapose results. */}
+        {!checkTranslation && (
+          <div className="mt-4 grid gap-3 border-t border-neutral-100 pt-4 dark:border-neutral-800">
+            <div>
+              <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                {t("linkCheck.linkTypesLabel")}
+              </span>
+              <span className="block text-xs text-neutral-400 dark:text-neutral-500">
+                {t("linkCheck.linkTypesHint")}
+              </span>
+            </div>
+            <MultiColumnPicker
+              label={t("linkCheck.tDomainCols")}
+              hint={t("linkCheck.tDomainColsHint")}
+              columns={columns}
+              value={cDomainCols}
+              onToggle={(id) => toggleSet(setCDomainCols, id)}
+            />
+            <label className="block">
+              <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                {t("linkCheck.tProductDomain")}
+              </span>
+              <span className="block text-xs text-neutral-400 dark:text-neutral-500">
+                {t("linkCheck.tProductDomainHint")}
+              </span>
+              <input
+                type="text"
+                value={cProductDomain}
+                onChange={(e) => setCProductDomain(e.target.value)}
+                placeholder="shop.example.com"
+                className="mt-1 block w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+              />
+            </label>
+          </div>
+        )}
+
         {checkTranslation && (
           <div className="mt-4 grid gap-4 border-t border-neutral-100 pt-4 dark:border-neutral-800">
             <RolePicker
@@ -321,6 +416,14 @@ export default function LinkCheckPage({
               placeholder={
                 "es, /product/widget, /products/gadget\nde, https://example.com/x"
               }
+            />
+
+            <TextAreaField
+              label={t("linkCheck.tDefaultLangs")}
+              hint={t("linkCheck.tDefaultLangsHint")}
+              value={tDefaultLangs}
+              onChange={setTDefaultLangs}
+              placeholder={"dexsport.io, en\nexample.com, de"}
             />
           </div>
         )}

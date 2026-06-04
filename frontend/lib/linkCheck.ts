@@ -27,8 +27,25 @@ export interface TranslationCheckConfig {
   product_domain: string;
   /** One "language, page" per line; the page keeps its root URL. */
   exceptions: string;
+  /** One "domain, lang" per line — the language a product site serves at its
+   *  root (no subfolder), so the default language isn't given a /<lang>/ path. */
+  product_default_langs: string;
   internal_treatment: LinkTreatment;
   external_treatment: LinkTreatment;
+}
+
+/** The parsed translation config as STORED on a run (lists/maps, not the raw
+ *  textareas). Used to prefill the setup form when rerunning with tweaks. */
+export interface StoredTranslationConfig {
+  original_column_id: number;
+  translated_column_id: number;
+  lang_column_id: number;
+  internal_domain_column_ids?: number[];
+  product_domains?: string[];
+  exceptions?: { lang: string; page: string }[];
+  product_default_langs?: Record<string, string>;
+  internal_treatment?: LinkTreatment;
+  external_treatment?: LinkTreatment;
 }
 
 export interface LinkCheckRequest {
@@ -40,6 +57,11 @@ export interface LinkCheckRequest {
   check_crawl?: boolean;
   /** Also record healthy links as rows (full per-link inventory). */
   include_ok?: boolean;
+  /** Optional link-type classification (product / internal / external) for the
+   *  findings. product_domain is comma/space/newline-separated; internal
+   *  domains come per-row from the chosen column(s). */
+  product_domain?: string;
+  internal_domain_column_ids?: number[];
   /** When set, runs the translation-links mode instead of the checks above. */
   translation?: TranslationCheckConfig;
 }
@@ -67,6 +89,9 @@ export interface LinkCheckRun {
   finished_at: string | null;
   /** Non-null only for translation-mode runs. */
   translation_config?: Record<string, unknown> | null;
+  /** Non-null when the crawl/juxtapose run classified links by type — the run
+   *  page shows the product/internal/external filter when it's set. */
+  classify_config?: Record<string, unknown> | null;
 }
 
 export interface LinkViolation {
@@ -78,6 +103,7 @@ export interface LinkViolation {
   link: string;
   detail_code: string | null;
   status_code: number | null;
+  link_type?: LinkTypeCategory | null;
   /** null = untouched; set by the in-place re-verify after an AI fix. */
   resolution: LinkResolution | null;
 }
@@ -104,6 +130,8 @@ export interface LinkViolationFilters {
   q_negate?: boolean;
   /** solved | unsolved | untouched */
   resolution?: LinkResolution | "untouched" | "";
+  /** product | internal | external */
+  link_type?: LinkTypeFilter | "";
 }
 
 export function startLinkCheck(
@@ -139,6 +167,7 @@ export function getLinkCheckRun(
     if (filters.q_negate) sp.set("q_negate", "true");
   }
   if (filters.resolution) sp.set("resolution", filters.resolution);
+  if (filters.link_type) sp.set("link_type", filters.link_type);
   return api<LinkCheckRunDetail>(
     `/library/link-check-runs/${runId}?${sp.toString()}`,
   );
@@ -147,16 +176,23 @@ export function getLinkCheckRun(
 /** How a translation link compares to the expected links. */
 export type TranslationLinkKind = "ok" | "discrepancy" | "invented";
 
+/** Link type of the original behind an aligned row (drives the type filter).
+ *  Made-up links are bucketed into one of these by their own host. */
+export type LinkTypeCategory = "product" | "internal" | "external";
+
 export interface TranslationLinkTag {
   url: string;
   kind: TranslationLinkKind;
   /** The user bulk-dismissed this error. */
   dismissed: boolean;
+  /** The link this one SHOULD have been (set only for a discrepancy paired to
+   *  an expected link). Used to underline just the drifting part. */
+  expected?: string | null;
+  /** The original (source) link this discrepancy was paired to — shown aligned
+   *  beside it in the discrepancy-only view. */
+  original?: string | null;
+  link_type?: LinkTypeCategory | null;
 }
-
-/** Link type of the original behind an aligned row (drives the type filter).
- *  Made-up links are bucketed into one of these by their own host. */
-export type LinkTypeCategory = "product" | "internal" | "external";
 
 /** An expected link paired with the wrong translation link it should have
  *  been (wrong null = correct/omitted; expected null = invented link). */
@@ -232,6 +268,25 @@ export function restoreTranslationErrors(
 ): Promise<void> {
   return api<void>(
     `/library/link-check-runs/${runId}/translation-table/restore`,
+    { method: "POST", body: { items } },
+  );
+}
+
+export interface TranslationReplaceResult {
+  replaced: number;
+  stripped: number;
+  skipped: number;
+  rows_changed: number;
+}
+
+/** Replace each selected wrong translation link with its expected link,
+ *  in-place in the translated-content cell. */
+export function replaceTranslationLinks(
+  runId: number,
+  items: DismissItem[],
+): Promise<TranslationReplaceResult> {
+  return api<TranslationReplaceResult>(
+    `/library/link-check-runs/${runId}/translation-table/replace`,
     { method: "POST", body: { items } },
   );
 }

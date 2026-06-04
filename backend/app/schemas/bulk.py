@@ -622,6 +622,10 @@ class TranslationCheckConfig(BaseModel):
     product_domain: str = ""
     # One "language, page" per line; the page keeps its root URL (no subfolder).
     exceptions: str = ""
+    # One "domain, lang" per line: the language that domain serves at its ROOT
+    # (no subfolder). When a product link's target language is the site default,
+    # the expected link stays at the root instead of getting a /<lang>/ prefix.
+    product_default_langs: str = ""
     internal_treatment: Literal["skip", "localize"] = "skip"
     external_treatment: Literal["skip", "localize"] = "skip"
 
@@ -656,6 +660,12 @@ class LinkCheckRequest(BaseModel):
     check_juxtapose: bool = False
     check_crawl: bool = False
     include_ok: bool = False
+    # Optional link-type classification (product / internal / external) for the
+    # crawl/juxtapose findings — mirrors translation mode. ``product_domain`` is
+    # comma/space/newline-separated; internal domains come per-row from the
+    # chosen column(s). When neither is set, no link-type filter is offered.
+    product_domain: str = ""
+    internal_domain_column_ids: list[int] = Field(default_factory=list)
     translation: TranslationCheckConfig | None = None
 
     @model_validator(mode="after")
@@ -702,6 +712,9 @@ class LinkCheckRunRead(BaseModel):
     # Present (non-NULL) only for translation-mode runs; the frontend uses it
     # to label the run and surface the computed-expected-links column.
     translation_config: dict | None = None
+    # Present (non-NULL) when the crawl/juxtapose run classified links by type;
+    # the frontend shows the product/internal/external filter when it's set.
+    classify_config: dict | None = None
 
 
 # Resolution stamp from the in-place AI re-verify (None = untouched).
@@ -719,6 +732,8 @@ class LinkViolationRead(BaseModel):
     link: str
     detail_code: str | None = None
     status_code: int | None = None
+    # product | internal | external (None when the run didn't classify).
+    link_type: Literal["product", "internal", "external"] | None = None
     # None = untouched; set by the in-place re-verify after an AI fix.
     resolution: LinkResolution | None = None
 
@@ -744,11 +759,22 @@ class TranslationLinkTag(BaseModel):
     """A translation link tagged by how it compares to the expected links:
     ok (matches), discrepancy (wrong but relates to an original link), or
     invented (made-up, no basis in the original). ``dismissed`` = the user
-    bulk-dismissed this error from the active view."""
+    bulk-dismissed this error from the active view.
+
+    ``expected`` is the link this one SHOULD have been (only set for a
+    discrepancy that pairs to an expected link); the raw table uses it to
+    underline just the drifting part when the host matches. ``link_type``
+    labels the link in the folded translation column."""
 
     url: str
     kind: Literal["ok", "discrepancy", "invented"]
     dismissed: bool = False
+    expected: str | None = None
+    # The original (source) link this discrepancy was paired to, so the raw
+    # table can show it aligned beside the wrong translation link. None for an
+    # invented link or a "no good match" leftover.
+    original: str | None = None
+    link_type: Literal["product", "internal", "external"] | None = None
 
 
 class DismissItem(BaseModel):
@@ -760,6 +786,20 @@ class DismissRequest(BaseModel):
     """Bulk dismiss/restore of translation-table errors (per row+link)."""
 
     items: list[DismissItem] = Field(default_factory=list)
+
+
+class TranslationReplaceResult(BaseModel):
+    """Outcome of fixing wrong translation links.
+
+    ``replaced`` = links swapped for their expected link; ``stripped`` = links
+    that shouldn't exist (no expected) whose ``<a>`` wrapper was removed, keeping
+    the anchor text; ``skipped`` = selected links not found in the cell;
+    ``rows_changed`` = distinct translation cells written."""
+
+    replaced: int
+    stripped: int = 0
+    skipped: int
+    rows_changed: int
 
 
 class AlignedRow(BaseModel):

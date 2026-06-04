@@ -79,6 +79,14 @@ class LinkCheckRun(Base):
     # unchanged.
     translation_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # Link-type classification for a crawl/juxtapose run (migration 0047). NULL
+    # = not requested (no link-type filter). Shape:
+    #   {"product_domains": [str], "internal_domain_column_ids": [int]}
+    # A link is product if its host matches a product domain, internal if it
+    # matches the row's internal domain column(s), else external — same buckets
+    # as translation mode. Computed at seed time into ``violation.link_type``.
+    classify_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
     # Crawl progress: total unique links to fetch, and how many done.
     total_links: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     crawled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -128,6 +136,9 @@ class LinkCheckViolation(Base):
     # 'omitted' | 'hallucinated' | 'broken' | 'ok'
     problem: Mapped[str] = mapped_column(String(16), nullable=False)
     link: Mapped[str] = mapped_column(Text, nullable=False)
+    # 'product' | 'internal' | 'external' — set when the run has classify_config
+    # (migration 0047); NULL otherwise. Drives the run page's link-type filter.
+    link_type: Mapped[str | None] = mapped_column(String(12), nullable=True)
     # Stable code rendered + localized on the frontend:
     # 'expected_missing' | 'not_in_expected' | 'http_error' | 'timeout'
     # | 'unreachable' | 'blocked' | 'ok' | 'redirect'

@@ -9,6 +9,7 @@ import { LinkCheckStatusChip } from "@/components/LinkCheckStatusChip";
 import { LinkFixModal, type FixTargetChoice } from "@/components/LinkFixModal";
 import { Pagination } from "@/components/Pagination";
 import { ToolBreadcrumb } from "@/components/ToolBreadcrumb";
+import { TranslationTableView } from "@/components/TranslationTableView";
 import { ApiError } from "@/lib/api";
 import { useT } from "@/lib/i18n-context";
 import { getTable, upsertCells } from "@/lib/library";
@@ -19,6 +20,7 @@ import {
   type LinkCheckRunDetail,
   type LinkProblem,
   type LinkResolution,
+  type LinkTypeFilter,
   type LinkViolation,
 } from "@/lib/linkCheck";
 import {
@@ -62,6 +64,7 @@ export default function LinkCheckRunPage({
   const [cellValues, setCellValues] = useState<Map<string, string>>(new Map());
   const [editing, setEditing] = useState<LinkViolation | null>(null);
   const [filterProblem, setFilterProblem] = useState<LinkProblem | "">("");
+  const [filterLinkType, setFilterLinkType] = useState<LinkTypeFilter | "">("");
   const [filterStatus, setFilterStatus] = useState<number | "">("");
   const [filterResolution, setFilterResolution] = useState<
     LinkResolution | "untouched" | ""
@@ -80,13 +83,14 @@ export default function LinkCheckRunPage({
   // Any filter change resets to page 1.
   useEffect(() => {
     setPage(1);
-  }, [filterProblem, filterStatus, filterResolution, q, qNegate]);
+  }, [filterProblem, filterLinkType, filterStatus, filterResolution, q, qNegate]);
 
   const tick = useCallback(
     async (p: number, isStale?: () => boolean) => {
       try {
         const r = await getLinkCheckRun(rid, p, PAGE_SIZE, {
           problem: filterProblem || undefined,
+          link_type: filterLinkType || undefined,
           status_code: filterStatus === "" ? undefined : filterStatus,
           resolution: filterResolution || undefined,
           q: q || undefined,
@@ -106,7 +110,7 @@ export default function LinkCheckRunPage({
         stoppedRef.current = true;
       }
     },
-    [rid, filterProblem, filterStatus, filterResolution, q, qNegate],
+    [rid, filterProblem, filterLinkType, filterStatus, filterResolution, q, qNegate],
   );
 
   // Poll while active; refetch immediately on page or filter change.
@@ -333,14 +337,17 @@ export default function LinkCheckRunPage({
         <>
           <header className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
-                {modeLabel
-                  ? t("linkCheckRun.titleWithMode", {
-                      id: run.id,
-                      mode: modeLabel,
-                    })
-                  : t("linkCheckRun.title", { id: run.id })}
-              </h1>
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
+                  {modeLabel
+                    ? t("linkCheckRun.titleWithMode", {
+                        id: run.id,
+                        mode: modeLabel,
+                      })
+                    : t("linkCheckRun.title", { id: run.id })}
+                </h1>
+                <LinkCheckStatusChip status={run.status} />
+              </div>
               <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
                 {t("linkCheckRun.meta", {
                   by: run.created_by_name ?? "—",
@@ -349,7 +356,14 @@ export default function LinkCheckRunPage({
               </p>
             </div>
             <div className="flex items-center gap-2">
-              <LinkCheckStatusChip status={run.status} />
+              {isTranslation && (
+                <Link
+                  href={`/library/${tableId}/link-check?rerun=${rid}`}
+                  className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                >
+                  {t("linkCheckRun.rerunWithChanges")}
+                </Link>
+              )}
               {isActive && run.check_crawl && (
                 <button
                   type="button"
@@ -415,6 +429,11 @@ export default function LinkCheckRunPage({
               </>
             )}
           </div>
+          {run.check_crawl && (
+            <p className="mt-2 text-xs text-neutral-600 dark:text-neutral-300">
+              {t("linkCheckRun.statusCountsHint")}
+            </p>
+          )}
 
           {isTranslation && (
             <div className="mt-3">
@@ -440,8 +459,10 @@ export default function LinkCheckRunPage({
           )}
 
           {/* AI fix actions — only when the run finished with fixable problems
-              and an expected-links column gave us the context to fix against. */}
-          {canFix && (
+              and an expected-links column gave us the context to fix against.
+              Translation runs fix per-selection from the overview's bulk bar
+              instead, so this "Fix all" bar is hidden for them. */}
+          {canFix && !isTranslation && (
             <div className="mt-4 flex flex-wrap items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-sm dark:border-violet-900/40 dark:bg-violet-950/20">
               <span className="text-violet-800 dark:text-violet-200">
                 {selectedRows.size > 0
@@ -479,8 +500,23 @@ export default function LinkCheckRunPage({
             </p>
           )}
 
+          {/* Translation runs replace the materialized violations table with
+              the raw translation-links table, filtered to just the problem
+              links. Crawl/juxtapose runs keep the violations table below. */}
+          {isTranslation && !isActive && (
+            <div className="mt-5">
+              <TranslationTableView
+                runId={rid}
+                discrepancyLinksOnly
+                onFixRows={
+                  canFix ? (rowIds) => setFixScope({ rowIds }) : undefined
+                }
+              />
+            </div>
+          )}
+
           {/* filter bar — shown once the run produced any rows */}
-          {!isActive && producedRows(run) && (
+          {!isTranslation && !isActive && producedRows(run) && (
             <div className="mt-5 flex flex-wrap items-center gap-2">
               {/* The problem filter only makes sense when juxtapose ran — a
                   crawl-only (status-codes) run has just broken/ok, which the
@@ -500,6 +536,21 @@ export default function LinkCheckRunPage({
                   {run.include_ok && (
                     <option value="ok">{t("linkCheckRun.ok")}</option>
                   )}
+                </select>
+              )}
+              {/* Link-type filter — only when the run classified links. */}
+              {run.classify_config && (
+                <select
+                  value={filterLinkType}
+                  onChange={(e) =>
+                    setFilterLinkType(e.target.value as LinkTypeFilter | "")
+                  }
+                  className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs dark:border-neutral-700 dark:bg-neutral-900"
+                >
+                  <option value="">{t("linkCheckRun.rawTypeAll")}</option>
+                  <option value="product">{t("linkCheckRun.rawTypeProduct")}</option>
+                  <option value="internal">{t("linkCheckRun.rawTypeInternal")}</option>
+                  <option value="external">{t("linkCheckRun.rawTypeExternal")}</option>
                 </select>
               )}
               {hasResolution && (
@@ -552,8 +603,9 @@ export default function LinkCheckRunPage({
             </div>
           )}
 
-          {/* violations */}
-          {run.total_violations === 0 ? (
+          {/* violations (crawl / juxtapose runs only) */}
+          {!isTranslation &&
+            (run.total_violations === 0 ? (
             !isActive &&
             (anyFilterActive(filterProblem, filterStatus, filterResolution, q) ? (
               <p className="mt-4 rounded-md bg-neutral-50 px-4 py-3 text-sm text-neutral-600 dark:bg-neutral-900 dark:text-neutral-400">
@@ -657,7 +709,7 @@ export default function LinkCheckRunPage({
                 onPage={setPage}
               />
             </>
-          )}
+            ))}
 
           {/* Correction runs launched from this check run (kept at the
               bottom, below the violations). */}

@@ -1709,6 +1709,15 @@ export const en = {
   "linkCheck.tExceptions": "Product exceptions (language, page…)",
   "linkCheck.tExceptionsHint":
     "One line per language: the language code, then one or more pages (full URL, path, or slug), comma-separated. Those pages keep their root URL — no language subfolder.",
+  "linkCheck.linkTypesLabel": "Link types (optional)",
+  "linkCheck.linkTypesHint":
+    "Classify each checked link as product / internal / external so you can filter the results by type. Leave empty to skip.",
+  "linkCheck.tDefaultLangs": "Product default languages (domain, language)",
+  "linkCheck.tDefaultLangsHint":
+    "One line per product site: the domain, then the language it serves at its root. When a link's target language is the site default, the expected link stays at the root — no language subfolder is added.",
+  "linkCheck.rerunBanner":
+    "Rerunning from check #{id}. Adjust the criteria below and run again — a new check is created; the original is unchanged.",
+  "linkCheck.rerunViewSource": "View original",
   "linkCheck.checkBtn": "Check links",
   "linkCheck.historyHeading": "Check history",
   "linkCheck.runLabel": "Run #{id} — Link Checker",
@@ -1742,6 +1751,7 @@ export const en = {
   "linkCheckRun.modeJuxtapose": "Expected links",
   "linkCheckRun.titleWithMode": "Link check · {mode} #{id}",
   "linkCheckRun.viewRawTable": "View raw table",
+  "linkCheckRun.rerunWithChanges": "Rerun with changes",
   "linkCheckRun.rawTableTitle": "Raw table",
   "linkCheckRun.rawTableSubtitle":
     "Per-row link breakdown — computed on demand, not added to the bulk table. Only rows that contain links are shown.",
@@ -1760,9 +1770,17 @@ export const en = {
   "linkCheckRun.selectAll": "Select all on this page",
   "linkCheckRun.dismissSelected": "Dismiss ({n})",
   "linkCheckRun.restoreSelected": "Restore ({n})",
+  "linkCheckRun.replaceSelected": "Replace ({n})",
+  "linkCheckRun.fixSelectedAi": "Fix with AI ({n})",
+  "linkCheckRun.confirmReplace":
+    "Replace the wrong translation link(s) with the expected link in {n} selected item(s)? This edits the translated content.",
+  "linkCheckRun.replaceResult":
+    "Replaced {replaced}, removed {stripped}, skipped {skipped}.",
   "linkCheckRun.rawLegendOk": "Matches expected",
   "linkCheckRun.rawLegendDiscrepancy": "Discrepancy",
   "linkCheckRun.rawLegendInvented": "Made-up",
+  "linkCheckRun.rawLegendUnderline": "Same domain — path differs",
+  "linkCheckRun.rawExpectedTooltip": "Expected: {url}",
   "linkCheckRun.rawTypeAll": "All link types",
   "linkCheckRun.rawTypeProduct": "Product",
   "linkCheckRun.rawTypeInternal": "Internal",
@@ -1771,6 +1789,8 @@ export const en = {
   "linkCheckRun.status5xx": "5xx",
   "linkCheckRun.status3xx": "3xx",
   "linkCheckRun.status2xx": "200",
+  "linkCheckRun.statusCountsHint":
+    "Counts are per unique link; the table below lists every occurrence (a link can appear in several cells).",
   "linkCheckRun.errorBadge": "Error",
   "linkCheckRun.noViolations": "No link problems found.",
   "linkCheckRun.colRow": "Row",

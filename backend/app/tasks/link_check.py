@@ -50,7 +50,11 @@ from app.services.link_check import (
     make_crawl_client,
     normalize_link,
 )
-from app.services.translation_links import compute_expected_links, parse_domains
+from app.services.translation_links import (
+    classify_link,
+    compute_expected_links,
+    parse_domains,
+)
 from app.tasks.celery_app import celery_app
 
 # Namespace for the per-run finalize advisory lock (2-int form).
@@ -144,7 +148,18 @@ async def _seed(db: AsyncSession, run_id: int) -> None:
         cid for cid in (run.expected_column_ids or []) if cid in valid_ids
     ]
 
-    target_ids = set(selected) | set(expected_cols)
+    # Optional link-type classification (product / internal / external) — the
+    # per-row internal domains come from the chosen column(s).
+    classify = dict(run.classify_config or {})
+    product_domains = classify.get("product_domains", []) or []
+    domain_cols = [
+        int(c)
+        for c in classify.get("internal_domain_column_ids", [])
+        if int(c) in valid_ids
+    ]
+    classify_on = bool(product_domains or domain_cols)
+
+    target_ids = set(selected) | set(expected_cols) | set(domain_cols)
     # Optional row scope (NULL = all rows). The AI fix's auto re-check sets
     # this so only the touched rows are re-scanned.
     scope_ids = run.row_ids if isinstance(run.row_ids, list) else None
@@ -189,6 +204,14 @@ async def _seed(db: AsyncSession, run_id: int) -> None:
 
     for rid, pos in row_pos.items():
         colvals = by_row.get(rid, {})
+        # Per-row internal domains → a classifier for this row's links.
+        if classify_on:
+            internal_domains: list[str] = []
+            for dc in domain_cols:
+                internal_domains += parse_domains(colvals.get(dc))
+            lt = lambda u, _d=internal_domains: classify_link(u, _d, product_domains)
+        else:
+            lt = lambda u: None
         per_col: dict[int, list[str]] = {}
         union: list[str] = []
         for cid in selected:
@@ -204,6 +227,7 @@ async def _seed(db: AsyncSession, run_id: int) -> None:
                             "column_id": cid,
                             "column_name": col_names.get(cid, "—"),
                             "link": l,
+                            "link_type": lt(l),
                         }
                     )
 
@@ -220,14 +244,14 @@ async def _seed(db: AsyncSession, run_id: int) -> None:
                 if n not in union_norm and n not in seen_omit:
                     seen_omit.add(n)
                     violations.append(
-                        _violation(rid, pos, attr_col, col_names, "omitted", e, "expected_missing")
+                        _violation(rid, pos, attr_col, col_names, "omitted", e, "expected_missing", link_type=lt(e))
                     )
                     omitted_n += 1
             for cid in selected:
                 for l in per_col[cid]:
                     if normalize_link(l) not in exp_norm:
                         violations.append(
-                            _violation(rid, pos, cid, col_names, "hallucinated", l, "not_in_expected")
+                            _violation(rid, pos, cid, col_names, "hallucinated", l, "not_in_expected", link_type=lt(l))
                         )
                         halluc_n += 1
 
@@ -295,7 +319,15 @@ async def _seed(db: AsyncSession, run_id: int) -> None:
 
 
 def _violation(
-    row_id, pos, col_id, col_names, problem, link, detail_code, status_code=None
+    row_id,
+    pos,
+    col_id,
+    col_names,
+    problem,
+    link,
+    detail_code,
+    status_code=None,
+    link_type=None,
 ) -> LinkCheckViolation:
     return LinkCheckViolation(
         row_id=row_id,
@@ -306,6 +338,7 @@ def _violation(
         link=link,
         detail_code=detail_code,
         status_code=status_code,
+        link_type=link_type,
     )
 
 
@@ -329,6 +362,7 @@ async def _seed_translation(db: AsyncSession, run: LinkCheckRun) -> None:
     domain_cols = [int(c) for c in cfg.get("internal_domain_column_ids", [])]
     product_domains = cfg.get("product_domains", []) or []
     exceptions = cfg.get("exceptions", []) or []
+    default_langs = cfg.get("product_default_langs", {}) or {}
     internal_t = cfg.get("internal_treatment", "skip")
     external_t = cfg.get("external_treatment", "skip")
 
@@ -407,6 +441,7 @@ async def _seed_translation(db: AsyncSession, run: LinkCheckRun) -> None:
                 exceptions=exceptions,
                 internal_treatment=internal_t,
                 external_treatment=external_t,
+                default_langs=default_langs,
             )
             if lang
             else []
@@ -523,6 +558,7 @@ def _occ_violation(run_id: int, occ: dict, problem: str, st) -> LinkCheckViolati
         link=occ["link"],
         detail_code=st.detail_code,
         status_code=st.status_code,
+        link_type=occ.get("link_type"),
     )
 
 

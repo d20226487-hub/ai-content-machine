@@ -98,6 +98,7 @@ from app.schemas.bulk import (
     TableListResponse,
     TranslationCheckConfig,
     TranslationLinkTag,
+    TranslationReplaceResult,
     TranslationTableResponse,
     TranslationTableRow,
     TableRead,
@@ -2996,6 +2997,21 @@ async def start_link_check(
         await _verify_columns_in_table(db, table_id, payload.column_ids)
         if payload.expected_column_ids:
             await _verify_columns_in_table(db, table_id, payload.expected_column_ids)
+        # Optional link-type classification (product / internal / external).
+        from app.services.translation_links import parse_domains
+
+        product_domains = parse_domains(payload.product_domain)
+        domain_col_ids = list(payload.internal_domain_column_ids)
+        if domain_col_ids:
+            await _verify_columns_in_table(db, table_id, domain_col_ids)
+        classify_config = (
+            {
+                "product_domains": product_domains,
+                "internal_domain_column_ids": domain_col_ids,
+            }
+            if (product_domains or domain_col_ids)
+            else None
+        )
         run = LinkCheckRun(
             table_id=table_id,
             created_by_id=actor.id,
@@ -3005,6 +3021,7 @@ async def start_link_check(
             check_juxtapose=payload.check_juxtapose,
             check_crawl=payload.check_crawl,
             include_ok=payload.include_ok,
+            classify_config=classify_config,
         )
         db.add(run)
         await db.commit()
@@ -3029,7 +3046,11 @@ async def _create_translation_run(
     sets it before juxtaposing, so AI-fix / revert read it like any other run.
     The run is flagged ``check_juxtapose`` so the run page shows the right
     counters/filters and offers the AI fix."""
-    from app.services.translation_links import parse_domains, parse_exceptions
+    from app.services.translation_links import (
+        parse_default_langs,
+        parse_domains,
+        parse_exceptions,
+    )
 
     role_cols = [
         cfg.original_column_id,
@@ -3046,6 +3067,7 @@ async def _create_translation_run(
         "internal_domain_column_ids": list(cfg.internal_domain_column_ids),
         "product_domains": parse_domains(cfg.product_domain),
         "exceptions": parse_exceptions(cfg.exceptions),
+        "product_default_langs": parse_default_langs(cfg.product_default_langs),
         "internal_treatment": cfg.internal_treatment,
         "external_treatment": cfg.external_treatment,
     }
@@ -3103,6 +3125,7 @@ async def get_link_check_run(
     q: str | None = Query(default=None),
     q_negate: bool = Query(default=False),
     resolution: str | None = Query(default=None),
+    link_type: str | None = Query(default=None),
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LinkCheckRunDetail:
@@ -3118,6 +3141,8 @@ async def get_link_check_run(
     base = select(LinkCheckViolation).where(LinkCheckViolation.run_id == run_id)
     if problem in ("omitted", "hallucinated", "broken", "ok"):
         base = base.where(LinkCheckViolation.problem == problem)
+    if link_type in ("product", "internal", "external"):
+        base = base.where(LinkCheckViolation.link_type == link_type)
     if status_code is not None:
         base = base.where(LinkCheckViolation.status_code == status_code)
     # Resolution from the in-place AI re-verify: untouched = never fixed.
@@ -3218,6 +3243,7 @@ async def get_link_check_run(
         started_at=run.started_at,
         finished_at=run.finished_at,
         translation_config=run.translation_config,
+        classify_config=run.classify_config,
         created_by_name=await _resolve_creator_name(db, run.created_by_id),
         page=page,
         page_size=page_size,
@@ -3270,6 +3296,7 @@ async def get_translation_table(
     domain_cols = [int(c) for c in cfg.get("internal_domain_column_ids", [])]
     product_domains = cfg.get("product_domains", []) or []
     exceptions = cfg.get("exceptions", []) or []
+    default_langs = cfg.get("product_default_langs", {}) or {}
     internal_t = cfg.get("internal_treatment", "skip")
     external_t = cfg.get("external_treatment", "skip")
 
@@ -3333,11 +3360,17 @@ async def get_translation_table(
             exceptions=exceptions,
             internal_treatment=internal_t,
             external_treatment=external_t,
+            default_langs=default_langs,
         )
 
         translation = [
             TranslationLinkTag(
-                url=t["url"], kind=t["kind"], dismissed=(rid, t["url"]) in dismissed
+                url=t["url"],
+                kind=t["kind"],
+                dismissed=(rid, t["url"]) in dismissed,
+                expected=t.get("expected"),
+                original=t.get("original"),
+                link_type=t.get("link_type"),
             )
             for t in bd["translation"]
         ]
@@ -3465,6 +3498,142 @@ async def restore_translation_errors(
         )
     await db.commit()
     return Response(status_code=204)
+
+
+@router.post(
+    "/link-check-runs/{run_id}/translation-table/replace",
+    response_model=TranslationReplaceResult,
+)
+async def replace_translation_links(
+    run_id: int,
+    payload: DismissRequest,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TranslationReplaceResult:
+    """Replace each selected WRONG translation link with the expected link,
+    in-place in the translated-content cell. The expected link is recomputed
+    server-side (never trusted from the client), so only a genuine discrepancy
+    that pairs to an expected link is swapped; invented / "no good match" links
+    are skipped. The cell status is preserved and any cached translation is
+    cleared, mirroring the find/replace path."""
+    from app.services.translation_links import (
+        compute_row_breakdown,
+        parse_domains,
+        replace_link_in_text,
+        strip_link_in_text,
+    )
+
+    run = await _get_link_check_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    cfg = run.translation_config
+    if not cfg:
+        raise HTTPException(status_code=400, detail="Not a translation run.")
+
+    orig_col = int(cfg["original_column_id"])
+    trans_col = int(cfg["translated_column_id"])
+    lang_col = int(cfg["lang_column_id"])
+    domain_cols = [int(c) for c in cfg.get("internal_domain_column_ids", [])]
+    product_domains = cfg.get("product_domains", []) or []
+    exceptions = cfg.get("exceptions", []) or []
+    default_langs = cfg.get("product_default_langs", {}) or {}
+    internal_t = cfg.get("internal_treatment", "skip")
+    external_t = cfg.get("external_treatment", "skip")
+
+    # Selected wrong links grouped by row.
+    want: dict[int, set[str]] = defaultdict(set)
+    for it in payload.items:
+        if it.link.strip():
+            want[it.row_id].add(it.link)
+    if not want:
+        return TranslationReplaceResult(replaced=0, skipped=0, rows_changed=0)
+
+    row_ids = list(want.keys())
+    cells = (
+        (
+            await db.execute(
+                select(BulkTableCell)
+                .join(BulkTableRow, BulkTableRow.id == BulkTableCell.row_id)
+                .where(
+                    BulkTableRow.table_id == run.table_id,
+                    BulkTableCell.row_id.in_(row_ids),
+                    BulkTableCell.column_id.in_(
+                        [orig_col, trans_col, lang_col, *domain_cols]
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    cell_by_row: dict[int, dict[int, BulkTableCell]] = defaultdict(dict)
+    for c in cells:
+        cell_by_row[c.row_id][c.column_id] = c
+
+    replaced = 0
+    stripped = 0
+    skipped = 0
+    rows_changed = 0
+    for rid, links in want.items():
+        row_cells = cell_by_row.get(rid, {})
+        vals = {cid: c.value for cid, c in row_cells.items()}
+        internal_domains: list[str] = []
+        for dc in domain_cols:
+            internal_domains += parse_domains(vals.get(dc))
+        bd = compute_row_breakdown(
+            vals.get(orig_col),
+            vals.get(trans_col),
+            (vals.get(lang_col) or "").strip(),
+            internal_domains=internal_domains,
+            product_domains=product_domains,
+            exceptions=exceptions,
+            internal_treatment=internal_t,
+            external_treatment=external_t,
+            default_langs=default_langs,
+        )
+        # Every wrong link on this row → its tag (so we know its expected, if any).
+        tag_by_url = {
+            t["url"]: t for t in bd["translation"] if t["kind"] != "ok"
+        }
+        cell = row_cells.get(trans_col)
+        if cell is None or not cell.value:
+            skipped += len(links)
+            continue
+        new_value = cell.value
+        for link in links:
+            tag = tag_by_url.get(link)
+            if tag is None:
+                skipped += 1  # no longer a problem link on this row
+                continue
+            expected = tag.get("expected")
+            if expected:
+                # A real discrepancy → swap it for the link it should have been.
+                new_value, n = replace_link_in_text(new_value, link, expected)
+                if n > 0:
+                    replaced += 1
+                else:
+                    skipped += 1
+            else:
+                # No expected (invented / "no good match") → the link shouldn't
+                # be there: drop the <a> wrapper, keep the anchor text.
+                new_value, n = strip_link_in_text(new_value, link)
+                if n > 0:
+                    stripped += 1
+                else:
+                    skipped += 1
+        if new_value != cell.value:
+            cell.value = new_value
+            # A targeted link fix isn't a regeneration — keep the status, but
+            # drop any cached translation (it no longer matches the source).
+            if cell.translations is not None:
+                cell.translations = None
+            rows_changed += 1
+
+    if rows_changed:
+        await _bump_table_updated(db, run.table_id)
+        await db.commit()
+    return TranslationReplaceResult(
+        replaced=replaced, stripped=stripped, skipped=skipped, rows_changed=rows_changed
+    )
 
 
 @router.post("/link-check-runs/{run_id}/cancel", response_model=LinkCheckRunRead)

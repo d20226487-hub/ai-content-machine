@@ -1774,6 +1774,15 @@ export const ru: Record<keyof typeof en, string> = {
   "linkCheck.tExceptions": "Исключения продуктов (язык, страница…)",
   "linkCheck.tExceptionsHint":
     "Одна строка на язык: код языка, затем одна или несколько страниц (полный URL, путь или слаг) через запятую. Эти страницы сохраняют корневой URL — без подпапки языка.",
+  "linkCheck.linkTypesLabel": "Типы ссылок (необязательно)",
+  "linkCheck.linkTypesHint":
+    "Классифицировать каждую проверяемую ссылку как продуктовую / внутреннюю / внешнюю, чтобы фильтровать результаты по типу. Оставьте пустым, чтобы пропустить.",
+  "linkCheck.tDefaultLangs": "Языки по умолчанию для продуктов (домен, язык)",
+  "linkCheck.tDefaultLangsHint":
+    "Одна строка на продуктовый сайт: домен, затем язык, который он отдаёт в корне. Если целевой язык ссылки совпадает с языком сайта по умолчанию, ожидаемая ссылка остаётся в корне — подпапка языка не добавляется.",
+  "linkCheck.rerunBanner":
+    "Повторный запуск на основе проверки #{id}. Измените критерии ниже и запустите снова — будет создана новая проверка, исходная не изменится.",
+  "linkCheck.rerunViewSource": "Открыть исходную",
   "linkCheck.checkBtn": "Проверить ссылки",
   "linkCheck.historyHeading": "История проверок",
   "linkCheck.runLabel": "Запуск #{id} — Проверка ссылок",
@@ -1807,6 +1816,7 @@ export const ru: Record<keyof typeof en, string> = {
   "linkCheckRun.modeJuxtapose": "Ожидаемые ссылки",
   "linkCheckRun.titleWithMode": "Проверка ссылок · {mode} #{id}",
   "linkCheckRun.viewRawTable": "Открыть сырую таблицу",
+  "linkCheckRun.rerunWithChanges": "Перезапустить с изменениями",
   "linkCheckRun.rawTableTitle": "Сырая таблица",
   "linkCheckRun.rawTableSubtitle":
     "Разбивка ссылок по строкам — вычисляется по запросу, в массовую таблицу не добавляется. Показаны только строки со ссылками.",
@@ -1825,9 +1835,17 @@ export const ru: Record<keyof typeof en, string> = {
   "linkCheckRun.selectAll": "Выбрать все на этой странице",
   "linkCheckRun.dismissSelected": "Отклонить ({n})",
   "linkCheckRun.restoreSelected": "Восстановить ({n})",
+  "linkCheckRun.replaceSelected": "Заменить ({n})",
+  "linkCheckRun.fixSelectedAi": "Исправить с ИИ ({n})",
+  "linkCheckRun.confirmReplace":
+    "Заменить неверные ссылки перевода на ожидаемые в выбранных элементах ({n})? Это изменит переведённый контент.",
+  "linkCheckRun.replaceResult":
+    "Заменено: {replaced}, удалено: {stripped}, пропущено: {skipped}.",
   "linkCheckRun.rawLegendOk": "Совпадает с ожидаемой",
   "linkCheckRun.rawLegendDiscrepancy": "Несоответствие",
   "linkCheckRun.rawLegendInvented": "Выдуманная",
+  "linkCheckRun.rawLegendUnderline": "Тот же домен — путь отличается",
+  "linkCheckRun.rawExpectedTooltip": "Ожидалось: {url}",
   "linkCheckRun.rawTypeAll": "Все типы ссылок",
   "linkCheckRun.rawTypeProduct": "Продуктовые",
   "linkCheckRun.rawTypeInternal": "Внутренние",
@@ -1836,6 +1854,8 @@ export const ru: Record<keyof typeof en, string> = {
   "linkCheckRun.status5xx": "5xx",
   "linkCheckRun.status3xx": "3xx",
   "linkCheckRun.status2xx": "200",
+  "linkCheckRun.statusCountsHint":
+    "Счётчики — по уникальным ссылкам; в таблице ниже показано каждое вхождение (ссылка может встречаться в нескольких ячейках).",
   "linkCheckRun.errorBadge": "Ошибка",
   "linkCheckRun.noViolations": "Проблем со ссылками не найдено.",
   "linkCheckRun.colRow": "Строка",

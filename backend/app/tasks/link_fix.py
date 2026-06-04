@@ -89,6 +89,7 @@ async def _expected_links_for_row(
             exceptions=cfg.get("exceptions", []),
             internal_treatment=cfg.get("internal_treatment", "skip"),
             external_treatment=cfg.get("external_treatment", "skip"),
+            default_langs=cfg.get("product_default_langs", {}) or {},
         )
 
     exp_cols = [int(c) for c in (run.expected_column_ids or [])]
