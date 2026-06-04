@@ -14,9 +14,22 @@ export interface FixLinksPromptConfig {
   model: string | null;
 }
 
+export interface GdocsMetaPromptConfig {
+  // Prompt only — the Google-Docs import job picks its provider/model on the
+  // upload modal, so there's nothing else to configure here.
+  prompt: string;
+}
+
+export interface GdocsPairingPromptConfig {
+  // Prompt only — maps each imported Doc to its Structure entry (slug source).
+  prompt: string;
+}
+
 export interface BrainPrompts {
   translate: TranslatePromptConfig;
   fix_links: FixLinksPromptConfig;
+  gdocs_meta: GdocsMetaPromptConfig;
+  gdocs_pairing: GdocsPairingPromptConfig;
 }
 
 export function getBrainPrompts(): Promise<BrainPrompts> {
@@ -36,6 +49,24 @@ export function updateFixLinksConfig(
   payload: FixLinksPromptConfig,
 ): Promise<FixLinksPromptConfig> {
   return api<FixLinksPromptConfig>("/brain/prompts/fix-links", {
+    method: "PUT",
+    body: payload,
+  });
+}
+
+export function updateGdocsMetaConfig(
+  payload: GdocsMetaPromptConfig,
+): Promise<GdocsMetaPromptConfig> {
+  return api<GdocsMetaPromptConfig>("/brain/prompts/gdocs-meta", {
+    method: "PUT",
+    body: payload,
+  });
+}
+
+export function updateGdocsPairingConfig(
+  payload: GdocsPairingPromptConfig,
+): Promise<GdocsPairingPromptConfig> {
+  return api<GdocsPairingPromptConfig>("/brain/prompts/gdocs-pairing", {
     method: "PUT",
     body: payload,
   });

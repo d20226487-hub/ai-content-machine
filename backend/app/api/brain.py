@@ -27,6 +27,8 @@ from app.services.brain import (
     now_iso,
     resolve_target_language,
     save_fix_links_config,
+    save_gdocs_meta_config,
+    save_gdocs_pairing_config,
     save_translate_config,
     translate_text,
 )
@@ -51,9 +53,22 @@ class FixLinksPromptRead(BaseModel):
     model: str | None = None
 
 
+class GdocsMetaPromptRead(BaseModel):
+    # Prompt only — the Google-Docs import job picks its provider/model on the
+    # upload modal, so there is nothing to configure here besides the prompt.
+    prompt: str
+
+
+class GdocsPairingPromptRead(BaseModel):
+    # Prompt only — maps each imported Doc to its Structure entry (slug source).
+    prompt: str
+
+
 class BrainPromptsRead(BaseModel):
     translate: TranslatePromptRead
     fix_links: FixLinksPromptRead
+    gdocs_meta: GdocsMetaPromptRead
+    gdocs_pairing: GdocsPairingPromptRead
 
 
 class TranslatePromptUpdate(BaseModel):
@@ -69,6 +84,14 @@ class FixLinksPromptUpdate(BaseModel):
     prompt: str = Field(min_length=1, max_length=10_000)
     provider_code: str | None = None
     model: str | None = None
+
+
+class GdocsMetaPromptUpdate(BaseModel):
+    prompt: str = Field(min_length=1, max_length=10_000)
+
+
+class GdocsPairingPromptUpdate(BaseModel):
+    prompt: str = Field(min_length=1, max_length=10_000)
 
 
 @router.get("/prompts", response_model=BrainPromptsRead)
@@ -108,6 +131,30 @@ async def update_fix_links(
         actor_id=actor.id,
     )
     return FixLinksPromptRead.model_validate(out)
+
+
+@router.put("/prompts/gdocs-meta", response_model=GdocsMetaPromptRead)
+async def update_gdocs_meta(
+    payload: GdocsMetaPromptUpdate,
+    actor: User = Depends(require_role("admin")),
+    db: AsyncSession = Depends(get_db),
+) -> GdocsMetaPromptRead:
+    out = await save_gdocs_meta_config(
+        db, prompt=payload.prompt, actor_id=actor.id
+    )
+    return GdocsMetaPromptRead.model_validate(out)
+
+
+@router.put("/prompts/gdocs-pairing", response_model=GdocsPairingPromptRead)
+async def update_gdocs_pairing(
+    payload: GdocsPairingPromptUpdate,
+    actor: User = Depends(require_role("admin")),
+    db: AsyncSession = Depends(get_db),
+) -> GdocsPairingPromptRead:
+    out = await save_gdocs_pairing_config(
+        db, prompt=payload.prompt, actor_id=actor.id
+    )
+    return GdocsPairingPromptRead.model_validate(out)
 
 
 class TranslateTextRequest(BaseModel):

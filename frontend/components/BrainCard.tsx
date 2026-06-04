@@ -7,8 +7,12 @@ import { ApiError } from "@/lib/api";
 import {
   getBrainPrompts,
   updateFixLinksConfig,
+  updateGdocsMetaConfig,
+  updateGdocsPairingConfig,
   updateTranslateConfig,
   type FixLinksPromptConfig,
+  type GdocsMetaPromptConfig,
+  type GdocsPairingPromptConfig,
   type TranslatePromptConfig,
 } from "@/lib/brain";
 import { listEnabledProviders } from "@/lib/generate";
@@ -26,6 +30,9 @@ export function BrainCard() {
   const { t } = useT();
   const [translate, setTranslate] = useState<TranslatePromptConfig | null>(null);
   const [fixLinks, setFixLinks] = useState<FixLinksPromptConfig | null>(null);
+  const [gdocsMeta, setGdocsMeta] = useState<GdocsMetaPromptConfig | null>(null);
+  const [gdocsPairing, setGdocsPairing] =
+    useState<GdocsPairingPromptConfig | null>(null);
   const [providers, setProviders] = useState<EnabledProvider[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -34,6 +41,8 @@ export function BrainCard() {
       .then(([brain, provs]) => {
         setTranslate(brain.translate);
         setFixLinks(brain.fix_links);
+        setGdocsMeta(brain.gdocs_meta);
+        setGdocsPairing(brain.gdocs_pairing);
         setProviders(provs);
       })
       .catch((err) =>
@@ -49,7 +58,7 @@ export function BrainCard() {
     );
   }
 
-  if (!translate || !fixLinks) {
+  if (!translate || !fixLinks || !gdocsMeta || !gdocsPairing) {
     return (
       <p className="text-sm text-neutral-500 dark:text-neutral-400">
         {t("common.loading")}
@@ -125,6 +134,45 @@ export function BrainCard() {
           }).then(setFixLinks)
         }
       />
+
+      {/* Google-Docs import meta extraction — prompt only (provider/model are
+          chosen per import on the upload modal). */}
+      <PromptSection
+        title={t("brain.gdocsMetaTitle")}
+        subtitle={t("brain.gdocsMetaSubtitle")}
+        prompt={gdocsMeta.prompt}
+        onPromptChange={(p) => setGdocsMeta({ ...gdocsMeta, prompt: p })}
+        providerCode={null}
+        model={null}
+        onProviderChange={() => {}}
+        onModelChange={() => {}}
+        providers={providers}
+        showProvider={false}
+        onSave={() =>
+          updateGdocsMetaConfig({ prompt: gdocsMeta.prompt.trim() }).then(
+            setGdocsMeta,
+          )
+        }
+      />
+
+      {/* Google-Docs import doc→structure pairing — prompt only. */}
+      <PromptSection
+        title={t("brain.gdocsPairingTitle")}
+        subtitle={t("brain.gdocsPairingSubtitle")}
+        prompt={gdocsPairing.prompt}
+        onPromptChange={(p) => setGdocsPairing({ ...gdocsPairing, prompt: p })}
+        providerCode={null}
+        model={null}
+        onProviderChange={() => {}}
+        onModelChange={() => {}}
+        providers={providers}
+        showProvider={false}
+        onSave={() =>
+          updateGdocsPairingConfig({ prompt: gdocsPairing.prompt.trim() }).then(
+            setGdocsPairing,
+          )
+        }
+      />
     </div>
   );
 }
@@ -140,6 +188,7 @@ function PromptSection<T>({
   onModelChange,
   providers,
   extra,
+  showProvider = true,
   onSave,
 }: {
   title: string;
@@ -152,6 +201,8 @@ function PromptSection<T>({
   onModelChange: (m: string | null) => void;
   providers: EnabledProvider[];
   extra?: React.ReactNode;
+  /** Hide the provider/model picker (e.g. gdocs-meta picks them per import). */
+  showProvider?: boolean;
   onSave: () => Promise<T>;
 }) {
   const { t } = useT();
@@ -209,22 +260,24 @@ function PromptSection<T>({
 
         {extra}
 
-        <div>
-          <p className="mb-1 text-sm font-medium text-neutral-700 dark:text-neutral-300">
-            {t("brain.providerLabel")}
-          </p>
-          <ProviderModelPicker
-            providers={providers}
-            providerCode={providerCode}
-            model={model}
-            onProviderChange={onProviderChange}
-            onModelChange={onModelChange}
-            allowDefault
-          />
-          <p className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
-            {t("brain.providerHint")}
-          </p>
-        </div>
+        {showProvider && (
+          <div>
+            <p className="mb-1 text-sm font-medium text-neutral-700 dark:text-neutral-300">
+              {t("brain.providerLabel")}
+            </p>
+            <ProviderModelPicker
+              providers={providers}
+              providerCode={providerCode}
+              model={model}
+              onProviderChange={onProviderChange}
+              onModelChange={onModelChange}
+              allowDefault
+            />
+            <p className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
+              {t("brain.providerHint")}
+            </p>
+          </div>
+        )}
       </div>
 
       {saveError && (

@@ -10,11 +10,22 @@ endpoint short-circuits the owner filter for manager/admin.
 """
 import csv
 import io
+import json
 import uuid
 from collections import defaultdict
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +44,7 @@ from app.db.models import (
     BulkTableFolder,
     BulkTableRow,
     FindReplaceRun,
+    GdocsImportRun,
     LinkCheckCrawlTarget,
     LinkCheckDismissal,
     LinkCheckRun,
@@ -66,6 +78,7 @@ from app.schemas.bulk import (
     FolderCreate,
     FolderRead,
     FolderUpdate,
+    GdocsImportRunRead,
     GeneratePreviewResponse,
     GenerateRequest,
     GenerateResponse,
@@ -106,6 +119,7 @@ from app.schemas.bulk import (
     TrashBulkIds,
 )
 from app.services.bulk_csv import build_table_csv
+from app.services.provider_cache import get_enabled_providers
 from app.services.find_replace import (
     InvalidPattern,
     apply_replace,
@@ -122,6 +136,7 @@ from app.services.structure_format import (
     apply_operations_traced as sf_apply_traced,
 )
 from app.tasks.bulk_generation import generate_bulk_cell
+from app.tasks.gdocs_import import run_gdocs_import
 from app.tasks.link_check import resume_link_check, seed_link_check
 from app.tasks.link_fix import fix_cell as fix_cell_task, resume_link_fix
 from app.tasks.structure_format import resume_sf, run_sf
@@ -294,6 +309,8 @@ async def _table_to_read(db: AsyncSession, table: BulkTable) -> TableRead:
             "updated_at": table.updated_at,
             "autotool_enabled": table.autotool_enabled,
             "autotool_token": table.autotool_token,
+            "gdocs_structure": table.gdocs_structure,
+            "gdocs_slug_audit": table.gdocs_slug_audit,
             "columns": [ColumnRead.model_validate(c) for c in table.columns],
             "rows": [RowRead.model_validate(r) for r in table.rows],
             "cells": [
@@ -382,6 +399,8 @@ async def _table_to_read_paginated(
             "updated_at": table.updated_at,
             "autotool_enabled": table.autotool_enabled,
             "autotool_token": table.autotool_token,
+            "gdocs_structure": table.gdocs_structure,
+            "gdocs_slug_audit": table.gdocs_slug_audit,
             "columns": [ColumnRead.model_validate(c) for c in columns],
             "rows": [RowRead.model_validate(r) for r in rows],
             "cells": [
@@ -1725,6 +1744,183 @@ async def import_csv(
     await db.commit()
     fresh = await _get_owned_table_or_404(db, t.id, actor, full=True)
     return await _table_to_read(db, fresh)
+
+
+# ---------- Google-Docs import ----------
+
+_MAX_GDOCS_UPLOAD = 80 * 1024 * 1024  # 80 MB — Doc HTML adds up
+
+
+async def _get_gdocs_run_or_404(
+    db: AsyncSession, run_id: int
+) -> GdocsImportRun:
+    run = await db.get(GdocsImportRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Import run not found")
+    return run
+
+
+@router.post(
+    "/import/gdocs",
+    response_model=GdocsImportRunRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def import_gdocs(
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    folder_id: int | None = Form(None),
+    provider_code: str | None = Form(None),
+    model: str | None = Form(None),
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> GdocsImportRun:
+    """Upload an Apps-Script JSON export and queue a background import (202).
+
+    The job cleans every linked Doc, extracts meta, pairs each Structure page
+    to a Doc, and builds a Custom-CMS-shaped bulk table (single/multi by
+    distinct domain count). ``provider_code``/``model`` optionally pin which AI
+    runs the meta + pairing steps; left blank, the job uses the first-enabled
+    provider and its default model. Poll ``GET /library/import/gdocs-runs/{id}``.
+    """
+    table_name = (name or "").strip()
+    if not table_name:
+        raise HTTPException(status_code=400, detail="A table name is required.")
+
+    # Resolve the optional AI override up-front so a bad pick fails the upload
+    # (clear 400) instead of the background job (a silent 'failed' run later).
+    provider_code = (provider_code or "").strip() or None
+    model = (model or "").strip() or None
+    if model and not provider_code:
+        raise HTTPException(
+            status_code=400, detail="Pick a provider before choosing a model."
+        )
+    if provider_code:
+        snapshot = await get_enabled_providers(db)
+        chosen = next((p for p in snapshot if p.code == provider_code), None)
+        if chosen is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Provider '{provider_code}' is not enabled.",
+            )
+        if not chosen.has_api_key:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Provider '{provider_code}' has no API key configured.",
+            )
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+    if len(raw) > _MAX_GDOCS_UPLOAD:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File too large (max {_MAX_GDOCS_UPLOAD // (1024 * 1024)} MB).",
+        )
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise HTTPException(
+            status_code=400, detail="The file is not valid JSON."
+        )
+    if not isinstance(payload, dict) or not isinstance(payload.get("rows"), list):
+        raise HTTPException(
+            status_code=400,
+            detail="Unexpected file shape — expected the Apps Script JSON "
+            "with a 'rows' array.",
+        )
+    if not isinstance(payload.get("docs"), dict):
+        payload["docs"] = {}
+
+    if folder_id is not None:
+        folder = await db.get(BulkTableFolder, folder_id)
+        if folder is None:
+            raise HTTPException(status_code=404, detail="Folder not found")
+
+    run = GdocsImportRun(
+        status="queued",
+        table_name=table_name,
+        target_folder_id=folder_id,
+        provider_code=provider_code,
+        model=model,
+        payload=payload,
+        created_by_id=actor.id,
+    )
+    db.add(run)
+    await db.commit()
+    await db.refresh(run)
+    run_gdocs_import.delay(run.id)
+    return run
+
+
+@router.get("/import/gdocs-runs", response_model=list[GdocsImportRunRead])
+async def list_gdocs_runs(
+    limit: int = Query(default=50, ge=1, le=200),
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[GdocsImportRun]:
+    """Import history, newest first (all users — this is an internal tool)."""
+    runs = (
+        (
+            await db.execute(
+                select(GdocsImportRun)
+                .order_by(GdocsImportRun.created_at.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return list(runs)
+
+
+@router.get("/import/gdocs-runs/{run_id}", response_model=GdocsImportRunRead)
+async def get_gdocs_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> GdocsImportRun:
+    """Run state + progress counters + warnings. The progress page polls this
+    every ~2s while active, then stops on a terminal status."""
+    return await _get_gdocs_run_or_404(db, run_id)
+
+
+@router.post(
+    "/import/gdocs-runs/{run_id}/cancel", response_model=GdocsImportRunRead
+)
+async def cancel_gdocs_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> GdocsImportRun:
+    """Request cancellation; the worker observes it between chunks."""
+    run = await _get_gdocs_run_or_404(db, run_id)
+    if run.status in ("queued", "running"):
+        run.status = "cancelled"
+        await db.commit()
+        await db.refresh(run)
+    return run
+
+
+@router.delete(
+    "/import/gdocs-runs/{run_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_gdocs_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Delete an import run from history. Only terminal runs can be removed —
+    an active run must be cancelled first (deleting the row mid-job would
+    orphan the worker, which writes to it). This removes only the history
+    record; the bulk table the run built (if any) is independent and kept."""
+    run = await _get_gdocs_run_or_404(db, run_id)
+    if run.status in ("queued", "running"):
+        raise HTTPException(
+            status_code=409,
+            detail="Cancel the import before deleting it.",
+        )
+    await db.delete(run)
+    await db.commit()
 
 
 # ---------- AI generation ----------

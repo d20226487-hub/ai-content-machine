@@ -242,6 +242,12 @@ export const ru: Record<keyof typeof en, string> = {
   "brain.fixLinksTitle": "Промпт исправления ссылок",
   "brain.fixLinksSubtitle":
     "Используется кнопкой «Исправить ИИ» в проверке ссылок. Имея список ожидаемых ссылок и найденные проблемы, модель вставляет недостающие ссылки, исправляет опечатки и удаляет выдуманные — меняя только ссылки и ничего больше.",
+  "brain.gdocsMetaTitle": "Промпт извлечения мета из Google Docs",
+  "brain.gdocsMetaSubtitle":
+    "Используется импортом из Google Docs для извлечения SEO-заголовка и мета-описания из начала каждого документа, когда метки распознать однозначно не удаётся. Провайдер и модель выбираются при каждом импорте в окне загрузки.",
+  "brain.gdocsPairingTitle": "Промпт сопоставления страниц Google Docs",
+  "brain.gdocsPairingSubtitle":
+    "Используется импортом из Google Docs, чтобы сопоставить каждый документ со страницей из колонки «Структура» (слаг берётся из структуры). Опирается на заголовок и содержимое документа, так как ссылки-якоря бывают неверными. Провайдер и модель выбираются при каждом импорте в окне загрузки.",
   "translate.button": "Перевести",
   "translate.original": "Оригинал",
   "translate.translation": "Перевод",
@@ -527,6 +533,7 @@ export const ru: Record<keyof typeof en, string> = {
     "Таблицы в этой папке. Сохраняются автоматически по мере правок.",
   "library.newFolder": "+ Новая папка",
   "library.importCsv": "Импорт CSV",
+  "library.importGdocs": "Импорт из Google Docs",
   "library.newTable": "+ Новая таблица",
   "library.searchPlaceholder": "Поиск таблиц…",
   "library.searchInFolderPlaceholder": "Поиск в «{folder}»…",
@@ -1935,4 +1942,86 @@ export const ru: Record<keyof typeof en, string> = {
   "linkFixRun.state.done": "Исправлено",
   "linkFixRun.state.failed": "Ошибка",
   "linkFixRun.state.skipped": "Пропущено",
+
+  // ---------- Импорт из Google Docs ----------
+  "gdocsImport.title": "Импорт из Google Docs",
+  "gdocsImport.subtitle":
+    "Превратите Google-таблицу со страницами и связанными Google-документами в таблицу для Custom CMS. Загрузите JSON, который формирует вспомогательный скрипт — одно- или мультисайт определяется по доменам в таблице.",
+  "gdocsImport.helpToggle": "Как получить JSON-файл?",
+  "gdocsImport.step1":
+    "Откройте свою Google-таблицу, затем Расширения → Apps Script.",
+  "gdocsImport.step2":
+    "Вставьте Code.gs, задайте SHEET_URL вверху и сохраните. Манифест appsscript.json ниже — необязательный: Apps Script сам определяет нужные разрешения из кода, а манифест лишь фиксирует среду V8 и ограничивает доступ к таблицам режимом «только чтение».",
+  "gdocsImport.step3":
+    "Запустите функцию `run` один раз и выдайте запрошенные разрешения — скрипт работает от вашего имени, поэтому видит документы с ограниченным доступом.",
+  "gdocsImport.step4":
+    "Он запишет JSON-файл на ваш Диск (ссылка появится в логе). Скачайте этот файл.",
+  "gdocsImport.step5": "Загрузите JSON здесь.",
+  "gdocsImport.downloadCode": "Скачать Code.gs",
+  "gdocsImport.downloadManifest": "Скачать appsscript.json (необязательно)",
+  "gdocsImport.tableName": "Название таблицы",
+  "gdocsImport.tableNamePlaceholder": "напр. Июньская партия статей",
+  "gdocsImport.jsonFile": "JSON-файл Apps Script",
+  "gdocsImport.folder": "Папка",
+  "gdocsImport.noFolder": "Без папки",
+  "gdocsImport.aiHeading": "AI-модель",
+  "gdocsImport.aiHelp":
+    "Используется для извлечения мета-данных и сопоставления страниц с документами. Оставьте по умолчанию, чтобы использовать первого включённого провайдера рабочего пространства.",
+  "gdocsImport.start": "Начать импорт",
+  "gdocsImport.starting": "Запуск…",
+  "gdocsImport.recentHeading": "Недавние импорты",
+
+  // ---------- Панель структуры сайта (импорт из Google Docs) ----------
+  "gdocsStructure.heading": "Структура сайта (из импорта Google Docs)",
+  "gdocsStructure.summary": "сайтов: {sites} · запланировано страниц: {pages}",
+  "gdocsStructure.help":
+    "Полный список запланированных страниц по каждому сайту из колонки «Структура» — включая страницы, для которых ещё нет документа (поэтому их нет в строках выше). Скопируйте список сайта, чтобы передать его ИИ.",
+  "gdocsStructure.copy": "Копировать",
+  "gdocsStructure.copied": "Скопировано",
+  "gdocsStructure.noDomain": "(без домена)",
+
+  // ---------- Панель аудита слагов от ИИ (Google Docs) ----------
+  "gdocsSlugAudit.heading": "Сопоставление слагов ИИ (из импорта Google Docs)",
+  "gdocsSlugAudit.summary":
+    "строк: {total} · изменено: {changed} · без точного слага: {unmatched}",
+  "gdocsSlugAudit.help":
+    "Что ИИ сделал со слагом каждой строки при импорте: исходный якорь ссылки (До) → итоговый слаг из колонки «Структура» (После). Жёлтый — ИИ изменил его относительно якоря; красный — не удалось сопоставить со страницей структуры (no-exact-slug). Отражает момент импорта, без учёта последующих ручных правок.",
+  "gdocsSlugAudit.colDomain": "Домен",
+  "gdocsSlugAudit.colLang": "Язык",
+  "gdocsSlugAudit.colSeoTitle": "SEO-заголовок",
+  "gdocsSlugAudit.colBefore": "До (якорь)",
+  "gdocsSlugAudit.colAfter": "После (слаг)",
+
+  // ---------- Импорт из Google Docs (страница прогресса) ----------
+  "gdocsRun.title": "Импорт #{id}",
+  "gdocsRun.meta": "Запущен {when}",
+  "gdocsRun.mode.single": "односайтовый",
+  "gdocsRun.mode.multi": "мультисайтовый",
+  "gdocsRun.aiUsed": "AI: {provider} · {model}",
+  "gdocsRun.cancel": "Отменить",
+  "gdocsRun.cancelConfirm":
+    "Отменить импорт? Уже обработанные документы сохранятся.",
+  "gdocsRun.delete": "Удалить",
+  "gdocsRun.deleteConfirm":
+    "Удалить этот импорт из истории? Созданная таблица (если есть) сохранится.",
+  "gdocsRun.docsHeading": "Документы очищены + извлечены мета-данные",
+  "gdocsRun.colDocsTotal": "Всего",
+  "gdocsRun.colDocsDone": "Готово",
+  "gdocsRun.colDocsFailed": "Ошибки",
+  "gdocsRun.pagesHeading": "Страницы сопоставлены с документами",
+  "gdocsRun.colPagesTotal": "Всего",
+  "gdocsRun.colPagesMatched": "Сопоставлено",
+  "gdocsRun.colPagesUnmatched": "Без пары",
+  "gdocsRun.coverageSummary":
+    "Покрытие: {rows} строк из {links} привязанных документ(ов) на {planned} запланированных страниц структуры.",
+  "gdocsRun.coverageLow":
+    "Контент получают только привязанные страницы — у {missing} запланированных страниц(ы) ещё нет документа. Если ожидали больше, проверьте, что документ каждой страницы привязан ссылкой к её записи в структуре.",
+  "gdocsRun.builtSummary": "Создано строк: {rows} ({mode}).",
+  "gdocsRun.openTable": "Открыть таблицу →",
+  "gdocsRun.warningsHeading": "Предупреждения ({count})",
+  "gdocsRun.statusQueued": "В очереди",
+  "gdocsRun.statusRunning": "Выполняется",
+  "gdocsRun.statusDone": "Готово",
+  "gdocsRun.statusCancelled": "Отменён",
+  "gdocsRun.statusFailed": "Ошибка",
 };

@@ -29,6 +29,7 @@ celery_app = Celery(
         "app.tasks.link_check",
         "app.tasks.link_fix",
         "app.tasks.structure_format",
+        "app.tasks.gdocs_import",
         "app.tasks.publish_bulk",
         "app.tasks.publish_single",
         "app.tasks.backup",
@@ -67,6 +68,14 @@ celery_app.conf.update(
         # last few minutes, so active runs are never disturbed.
         "link-check-watchdog": {
             "task": "linkcheck.watchdog",
+            "schedule": 120.0,
+        },
+        # Fail Google-Docs imports whose worker died mid-run (or never picked
+        # up the job), so the progress page resolves instead of polling a
+        # 'running' row forever. Only touches runs with no progress for
+        # STUCK_MINUTES; a single monolithic task, so it fails (not resumes).
+        "gdocs-import-watchdog": {
+            "task": "gdocs_import.watchdog",
             "schedule": 120.0,
         },
     },

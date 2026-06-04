@@ -13,6 +13,8 @@ import {
 } from "@/components/BulkTableGrid";
 import { BulkTableTools } from "@/components/BulkTableTools";
 import { ErrorPanel } from "@/components/ErrorPanel";
+import { GdocsSlugAuditPanel } from "@/components/GdocsSlugAuditPanel";
+import { GdocsStructurePanel } from "@/components/GdocsStructurePanel";
 import { useT } from "@/lib/i18n-context";
 import {
   deleteTable,
@@ -280,6 +282,17 @@ export default function LibraryTablePage() {
       </div>
 
       <BulkTableTools tableId={table.id} />
+
+      {table.gdocs_structure && table.gdocs_structure.length > 0 && (
+        <GdocsStructurePanel sites={table.gdocs_structure} />
+      )}
+
+      {table.gdocs_slug_audit && table.gdocs_slug_audit.length > 0 && (
+        <GdocsSlugAuditPanel
+          rows={table.gdocs_slug_audit}
+          multiSite={(table.gdocs_structure?.length ?? 0) > 1}
+        />
+      )}
     </main>
   );
 }

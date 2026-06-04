@@ -76,6 +76,20 @@ class BulkTable(Base, TimestampMixin):
         String(36), nullable=True, unique=True, index=True
     )
 
+    # ----- Google-Docs import provenance -----
+    # For tables built by the Google-Docs importer: the planned page list per
+    # site, shape [{"domain": str, "language": str, "structure": [str, ...]}].
+    # Drives the "Site structure" reference panel below the grid (and is there
+    # for the operator to supply to AI). NULL for tables not built that way.
+    # See migration 0050.
+    gdocs_structure: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
+    # Per-row slug audit for Google-Docs imports: what the AI pairing did to
+    # each row's slug — shape [{"row","domain","language","seo_title","anchor"
+    # (raw "before"),"slug" (final "after"),"changed","unmatched"}]. Drives the
+    # "AI slug mapping" panel. NULL for non-imported tables. See migration 0051.
+    gdocs_slug_audit: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
     columns: Mapped[list["BulkTableColumn"]] = relationship(
         back_populates="table",
         cascade="all, delete-orphan",

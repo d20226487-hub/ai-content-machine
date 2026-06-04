@@ -234,6 +234,12 @@ export const en = {
   "brain.fixLinksTitle": "Fix links prompt",
   "brain.fixLinksSubtitle":
     "Powers the Link Checker's “Fix with AI” pass. Given the expected links and the flagged problems, the model integrates missing links, fixes typo'd ones, and removes hallucinated ones — editing only the links, nothing else.",
+  "brain.gdocsMetaTitle": "Google-Docs meta extraction prompt",
+  "brain.gdocsMetaSubtitle":
+    "Used by the Google-Docs importer to pull the SEO title + meta description from the top of each Doc when the labels aren't clear enough to read deterministically. The provider/model are chosen per import on the upload modal.",
+  "brain.gdocsPairingTitle": "Google-Docs page pairing prompt",
+  "brain.gdocsPairingSubtitle":
+    "Used by the Google-Docs importer to map each Doc to the Structure page it belongs to (the slug comes from Structure). It reads the Doc's title + content because the link anchors can be wrong. The provider/model are chosen per import on the upload modal.",
   "translate.button": "Translate",
   "translate.original": "Original",
   "translate.translation": "Translation",
@@ -508,6 +514,7 @@ export const en = {
   "library.subtitleFolder": "Tables in this folder. Auto-saved as you edit.",
   "library.newFolder": "+ New folder",
   "library.importCsv": "Import CSV",
+  "library.importGdocs": "Import from Google Docs",
   "library.newTable": "+ New table",
   "library.searchPlaceholder": "Search tables…",
   "library.searchInFolderPlaceholder": "Search in \"{folder}\"…",
@@ -1870,4 +1877,85 @@ export const en = {
   "linkFixRun.state.done": "Fixed",
   "linkFixRun.state.failed": "Failed",
   "linkFixRun.state.skipped": "Skipped",
+
+  // ---------- Google-Docs import ----------
+  "gdocsImport.title": "Import from Google Docs",
+  "gdocsImport.subtitle":
+    "Turn a Google Sheet of pages + linked Google Docs into a Custom-CMS table. Upload the JSON the helper script produces — single- or multi-site is detected from the domains in the sheet.",
+  "gdocsImport.helpToggle": "How do I get the JSON file?",
+  "gdocsImport.step1":
+    "Open your Google Sheet, then Extensions → Apps Script.",
+  "gdocsImport.step2":
+    "Paste in Code.gs, set SHEET_URL at the top, and Save. The appsscript.json manifest below is optional — Apps Script auto-detects the permissions from the code; the manifest just pins the V8 runtime and narrows Sheets access to read-only.",
+  "gdocsImport.step3":
+    "Run the `run` function once and grant the permissions it asks for — it runs as you, so it can read the org-restricted Docs.",
+  "gdocsImport.step4":
+    "It writes a JSON file to your Drive (the link is logged). Download that file.",
+  "gdocsImport.step5": "Upload the JSON here.",
+  "gdocsImport.downloadCode": "Download Code.gs",
+  "gdocsImport.downloadManifest": "Download appsscript.json (optional)",
+  "gdocsImport.tableName": "Table name",
+  "gdocsImport.tableNamePlaceholder": "e.g. June blog batch",
+  "gdocsImport.jsonFile": "Apps Script JSON file",
+  "gdocsImport.folder": "Folder",
+  "gdocsImport.noFolder": "No folder",
+  "gdocsImport.aiHeading": "AI model",
+  "gdocsImport.aiHelp":
+    "Used to extract meta and pair pages to Docs. Leave on the default to use the workspace's first-enabled provider.",
+  "gdocsImport.start": "Start import",
+  "gdocsImport.starting": "Starting…",
+  "gdocsImport.recentHeading": "Recent imports",
+
+  // ---------- Google-Docs site-structure reference panel ----------
+  "gdocsStructure.heading": "Site structure (from Google Docs import)",
+  "gdocsStructure.summary": "{sites} site(s) · {pages} planned pages",
+  "gdocsStructure.help":
+    "The full planned page list per site from the sheet's Structure column — including pages that don't have a written Doc yet (so they aren't rows above). Copy a site's list to supply it to AI.",
+  "gdocsStructure.copy": "Copy",
+  "gdocsStructure.copied": "Copied",
+  "gdocsStructure.noDomain": "(no domain)",
+
+  // ---------- Google-Docs AI slug audit panel ----------
+  "gdocsSlugAudit.heading": "AI slug mapping (from Google Docs import)",
+  "gdocsSlugAudit.summary":
+    "{total} rows · {changed} changed · {unmatched} no-exact-slug",
+  "gdocsSlugAudit.help":
+    "What the AI pairing did to each row's slug at import time: the raw link anchor (Before) → the final slug taken from Structure (After). Amber = the AI changed it from the anchor; red = it couldn't be matched to a Structure page (no-exact-slug). Reflects the import, not later manual edits.",
+  "gdocsSlugAudit.colDomain": "Domain",
+  "gdocsSlugAudit.colLang": "Lang",
+  "gdocsSlugAudit.colSeoTitle": "SEO title",
+  "gdocsSlugAudit.colBefore": "Before (anchor)",
+  "gdocsSlugAudit.colAfter": "After (slug)",
+
+  // ---------- Google-Docs import run (progress page) ----------
+  "gdocsRun.title": "Import #{id}",
+  "gdocsRun.meta": "Started {when}",
+  "gdocsRun.mode.single": "single-site",
+  "gdocsRun.mode.multi": "multi-site",
+  "gdocsRun.aiUsed": "AI: {provider} · {model}",
+  "gdocsRun.cancel": "Cancel",
+  "gdocsRun.cancelConfirm": "Cancel this import? Docs already processed are kept.",
+  "gdocsRun.delete": "Delete",
+  "gdocsRun.deleteConfirm":
+    "Delete this import from history? The table it built (if any) is kept.",
+  "gdocsRun.docsHeading": "Documents cleaned + meta extracted",
+  "gdocsRun.colDocsTotal": "Total",
+  "gdocsRun.colDocsDone": "Done",
+  "gdocsRun.colDocsFailed": "Failed",
+  "gdocsRun.pagesHeading": "Pages paired to documents",
+  "gdocsRun.colPagesTotal": "Total",
+  "gdocsRun.colPagesMatched": "Matched",
+  "gdocsRun.colPagesUnmatched": "Unmatched",
+  "gdocsRun.coverageSummary":
+    "Coverage: {rows} rows from {links} linked Doc(s) across {planned} planned Structure page(s).",
+  "gdocsRun.coverageLow":
+    "Only the linked pages get content — {missing} planned page(s) have no Doc yet. If you expected more, check that each page's Doc is hyperlinked onto its Structure entry.",
+  "gdocsRun.builtSummary": "Built {rows} rows ({mode}).",
+  "gdocsRun.openTable": "Open table →",
+  "gdocsRun.warningsHeading": "Warnings ({count})",
+  "gdocsRun.statusQueued": "Queued",
+  "gdocsRun.statusRunning": "Running",
+  "gdocsRun.statusDone": "Done",
+  "gdocsRun.statusCancelled": "Cancelled",
+  "gdocsRun.statusFailed": "Failed",
 } as const;

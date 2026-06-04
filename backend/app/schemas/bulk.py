@@ -140,6 +140,11 @@ class TableRead(BaseModel):
     # public CSV and the token that forms its URL (null when disabled).
     autotool_enabled: bool = False
     autotool_token: str | None = None
+    # Per-site planned page list for Google-Docs-imported tables (drives the
+    # "Site structure" reference panel). None for tables not built that way.
+    gdocs_structure: list[dict] | None = None
+    # Per-row AI slug mapping (anchor → final slug) for review. None otherwise.
+    gdocs_slug_audit: list[dict] | None = None
     columns: list[ColumnRead] = []
     rows: list[RowRead] = []
     cells: list[CellRead] = []
@@ -944,3 +949,42 @@ class TableFixedCell(BaseModel):
     row_id: int
     column_id: int
     segments: list[UnifiedSegment]
+
+
+# ----- Google-Docs importer (added in migration 0048) -----
+
+GdocsImportStatus = Literal["queued", "running", "cancelled", "done", "failed"]
+
+
+class GdocsImportRunRead(BaseModel):
+    """Summary of a Google-Docs import run — drives the history list + the
+    progress page polling. ``payload`` is intentionally NOT exposed (it carries
+    the full Doc HTML and can be multi-MB)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    status: GdocsImportStatus
+    table_name: str
+    target_folder_id: int | None = None
+    mode: str | None = None
+    # Per-import AI override (NULL = first-enabled provider + its default model).
+    provider_code: str | None = None
+    model: str | None = None
+    result_table_id: int | None = None
+    total_docs: int
+    docs_done: int
+    docs_failed: int
+    total_pages: int
+    pages_matched: int
+    pages_unmatched: int
+    # Planned Structure entries across all sites (coverage denominator).
+    total_structure_pages: int = 0
+    rows_built: int
+    warnings: list[str] = []
+    error: str | None = None
+    created_by_id: int | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    last_progress_at: datetime | None = None

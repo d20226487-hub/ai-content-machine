@@ -85,6 +85,24 @@ DEFAULT_FIX_LINKS_PROMPT = (
     "no preamble, no explanation, no quotes, no markdown fences."
 )
 
+# The gdocs-meta prompt powers the Google-Docs importer's meta extraction
+# (seo_title + seo_description from the top of each Doc). Unlike translate /
+# fix_links, the provider/model are NOT configured here — they're chosen per
+# import on the upload modal — so this entry carries only the prompt.
+DEFAULT_GDOCS_META_PROMPT = (
+    "You extract SEO metadata from the top of an article. The article begins "
+    "with a meta/SEO title and a meta description (the labels may vary or be "
+    "absent). Return ONLY a JSON object with keys \"seo_title\" and "
+    "\"seo_description\" containing the plain-text values (no labels, no "
+    "quotes, no HTML). If a value is genuinely absent, use an empty string. No "
+    "prose, no code fences."
+)
+
+# The gdocs-pairing prompt maps each imported Doc to its Structure entry (the
+# slug source of truth). Default lives in gdocs_ai; imported here so the two
+# stay in sync. Like gdocs_meta, provider/model come from the import modal.
+from app.services.gdocs_ai import PAIR_STRUCT_SYSTEM_PROMPT as DEFAULT_GDOCS_PAIRING_PROMPT
+
 DEFAULT_BRAIN_PROMPTS: dict[str, dict[str, Any]] = {
     "translate": {
         "prompt": DEFAULT_TRANSLATE_PROMPT,
@@ -96,6 +114,15 @@ DEFAULT_BRAIN_PROMPTS: dict[str, dict[str, Any]] = {
         "prompt": DEFAULT_FIX_LINKS_PROMPT,
         "provider_code": None,  # falls back to first-enabled provider
         "model": None,  # falls back to provider's default_model
+    },
+    "gdocs_meta": {
+        "prompt": DEFAULT_GDOCS_META_PROMPT,
+        # No provider/model — the import job uses the provider/model picked on
+        # the upload modal (or the first-enabled fallback).
+    },
+    "gdocs_pairing": {
+        "prompt": DEFAULT_GDOCS_PAIRING_PROMPT,
+        # Provider/model also come from the import modal.
     },
 }
 
@@ -235,6 +262,71 @@ async def save_translate_config(
     await db.commit()
     invalidate_setting(BRAIN_KEY)
     return _merge_defaults(current)["translate"]
+
+
+async def save_gdocs_meta_config(
+    db: AsyncSession,
+    *,
+    prompt: str,
+    actor_id: int | None,
+) -> dict[str, Any]:
+    """Idempotent update of just the `gdocs_meta` slice (prompt only). Other
+    brain keys are preserved."""
+    raw = await get_setting(db, BRAIN_KEY)
+    current = raw if isinstance(raw, dict) else {}
+    current = dict(current)  # copy — `get_setting` may return cached ref
+    current["gdocs_meta"] = {"prompt": prompt.strip()}
+
+    stmt = (
+        pg_insert(AppSetting)
+        .values(key=BRAIN_KEY, value=current, updated_by_id=actor_id)
+        .on_conflict_do_update(
+            index_elements=["key"],
+            set_={"value": current, "updated_by_id": actor_id},
+        )
+    )
+    await db.execute(stmt)
+    await db.commit()
+    invalidate_setting(BRAIN_KEY)
+    return _merge_defaults(current)["gdocs_meta"]
+
+
+async def gdocs_meta_prompt(db: AsyncSession) -> str:
+    """The effective gdocs-meta system prompt (DB override or shipped default)."""
+    cfg = (await load_brain(db))["gdocs_meta"]
+    return (cfg.get("prompt") or DEFAULT_GDOCS_META_PROMPT).strip()
+
+
+async def save_gdocs_pairing_config(
+    db: AsyncSession,
+    *,
+    prompt: str,
+    actor_id: int | None,
+) -> dict[str, Any]:
+    """Idempotent update of just the `gdocs_pairing` slice (prompt only)."""
+    raw = await get_setting(db, BRAIN_KEY)
+    current = raw if isinstance(raw, dict) else {}
+    current = dict(current)
+    current["gdocs_pairing"] = {"prompt": prompt.strip()}
+
+    stmt = (
+        pg_insert(AppSetting)
+        .values(key=BRAIN_KEY, value=current, updated_by_id=actor_id)
+        .on_conflict_do_update(
+            index_elements=["key"],
+            set_={"value": current, "updated_by_id": actor_id},
+        )
+    )
+    await db.execute(stmt)
+    await db.commit()
+    invalidate_setting(BRAIN_KEY)
+    return _merge_defaults(current)["gdocs_pairing"]
+
+
+async def gdocs_pairing_prompt(db: AsyncSession) -> str:
+    """The effective gdocs-pairing system prompt (DB override or default)."""
+    cfg = (await load_brain(db))["gdocs_pairing"]
+    return (cfg.get("prompt") or DEFAULT_GDOCS_PAIRING_PROMPT).strip()
 
 
 async def translate_text(

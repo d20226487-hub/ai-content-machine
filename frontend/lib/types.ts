@@ -231,6 +231,25 @@ export interface BulkTableListItem {
   deleted_at?: string | null;
 }
 
+/** One site's planned page list, from a Google-Docs import (table.gdocs_structure). */
+export interface GdocsSiteStructure {
+  domain: string;
+  language: string;
+  structure: string[];
+}
+
+/** One row's AI slug mapping (table.gdocs_slug_audit) — anchor → final slug. */
+export interface GdocsSlugAudit {
+  row: number;
+  domain: string;
+  language: string;
+  seo_title: string;
+  anchor: string; // raw link anchor the writer attached ("before")
+  slug: string; // final slug taken from Structure ("after")
+  changed: boolean; // AI/structure slug differs from the anchor's own slug
+  unmatched: boolean; // no Structure pairing → no-exact-slug
+}
+
 export interface BulkTable {
   id: number;
   name: string;
@@ -246,6 +265,11 @@ export interface BulkTable {
    *  public CSV, and the token forming its URL (null when disabled). */
   autotool_enabled: boolean;
   autotool_token: string | null;
+  /** Per-site planned page list for Google-Docs-imported tables (drives the
+   *  "Site structure" reference panel). Null for tables not built that way. */
+  gdocs_structure: GdocsSiteStructure[] | null;
+  /** Per-row AI slug mapping (anchor → final slug) for review. Null otherwise. */
+  gdocs_slug_audit: GdocsSlugAudit[] | null;
   columns: BulkColumn[];
   rows: BulkRow[];
   cells: BulkCell[];

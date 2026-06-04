@@ -5,10 +5,12 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ErrorPanel } from "@/components/ErrorPanel";
+import { GdocsImportModal } from "@/components/GdocsImportModal";
 import { ImportCsvModal } from "@/components/ImportCsvModal";
 import { UserChip } from "@/components/UserChip";
 import { MoveToFolderModal } from "@/components/folders/MoveToFolderModal";
 import { ApiError } from "@/lib/api";
+import type { GdocsImportRun } from "@/lib/gdocsImport";
 import { useT } from "@/lib/i18n-context";
 import {
   bulkMoveTables,
@@ -76,6 +78,7 @@ export default function LibraryPage() {
   const [searchDraft, setSearchDraft] = useState(q);
   const [debouncedSearch, setDebouncedSearch] = useState(q);
   const [showImport, setShowImport] = useState(false);
+  const [showGdocsImport, setShowGdocsImport] = useState(false);
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState("");
   // Bulk-select: cross-page persistent selection (same model used by
@@ -303,6 +306,11 @@ export default function LibraryPage() {
     router.push(`/library/${table.id}`);
   }
 
+  function onGdocsQueued(run: GdocsImportRun) {
+    setShowGdocsImport(false);
+    router.push(`/library/import/gdocs/${run.id}`);
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
@@ -342,6 +350,12 @@ export default function LibraryPage() {
             className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
           >
             {t("library.importCsv")}
+          </button>
+          <button
+            onClick={() => setShowGdocsImport(true)}
+            className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+          >
+            {t("library.importGdocs")}
           </button>
           <button
             onClick={onCreateTable}
@@ -639,6 +653,15 @@ export default function LibraryPage() {
         <ImportCsvModal
           onClose={() => setShowImport(false)}
           onImported={onImported}
+        />
+      )}
+
+      {showGdocsImport && (
+        <GdocsImportModal
+          folders={folders}
+          defaultFolderId={folder}
+          onClose={() => setShowGdocsImport(false)}
+          onQueued={onGdocsQueued}
         />
       )}
 
