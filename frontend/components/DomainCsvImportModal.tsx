@@ -6,22 +6,23 @@ import { Modal } from "@/components/Modal";
 import { useT } from "@/lib/i18n-context";
 import { importDomainsCsv, type CsvImportResult } from "@/lib/domains";
 
-const SAMPLE_CSV = `name,base_url,cms_type,auth_type,credentials,languages,multilingual_plugin
-Site A,https://site-a.example.com,wordpress,wp_app_password,user:appPwd,en,none
-Site B,https://site-b.example.com,wordpress,wp_app_password,user:appPwd,"en,de,fr",polylang
-Site C,https://site-c.example.com,custom,bearer,abc123token,en,none`;
-
-function downloadSampleCsv() {
-  const blob = new Blob([SAMPLE_CSV], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "domains_sample.csv";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
+// Ready-made templates, one per CMS × single/multi-language shape. "Single
+// site" = one language (multilingual_plugin=none); "multi site" = a
+// multilingual install (polylang/wpml for WordPress, several languages for
+// Custom CMS). Custom-CMS files carry the extra custom_config columns.
+const SAMPLES: {
+  file: string;
+  labelKey:
+    | "domainCsv.sampleWpSingle"
+    | "domainCsv.sampleWpMulti"
+    | "domainCsv.sampleCustomSingle"
+    | "domainCsv.sampleCustomMulti";
+}[] = [
+  { file: "wordpress-single-site.csv", labelKey: "domainCsv.sampleWpSingle" },
+  { file: "wordpress-multi-site.csv", labelKey: "domainCsv.sampleWpMulti" },
+  { file: "custom-cms-single-site.csv", labelKey: "domainCsv.sampleCustomSingle" },
+  { file: "custom-cms-multi-site.csv", labelKey: "domainCsv.sampleCustomMulti" },
+];
 
 export function DomainCsvImportModal({
   onClose,
@@ -35,6 +36,7 @@ export function DomainCsvImportModal({
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<CsvImportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [sampleOpen, setSampleOpen] = useState(false);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -65,31 +67,50 @@ export function DomainCsvImportModal({
 
         <div className="text-xs text-neutral-600 dark:text-neutral-400">
           <p className="mb-1">{t("domainCsv.requiredColumns")}</p>
-          <code className="font-mono">
+          <code className="block font-mono">
             name, base_url, cms_type, auth_type, credentials, languages, multilingual_plugin
+          </code>
+          <p className="mt-1.5 mb-1">{t("domainCsv.customColumns")}</p>
+          <code className="block font-mono">
+            endpoint_path, body_template, response_id_path, response_url_path
           </code>
         </div>
 
-        <details className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs dark:border-neutral-800 dark:bg-neutral-950">
-          <summary className="cursor-pointer font-medium text-neutral-700 dark:text-neutral-300">
-            {t("domainCsv.sample")}
-          </summary>
-          <div className="mt-2 flex items-center justify-between gap-2">
-            <span className="text-neutral-500 dark:text-neutral-400">
-              {t("domainCsv.sampleStart")}
-            </span>
-            <button
-              type="button"
-              onClick={downloadSampleCsv}
-              className="rounded-md border border-neutral-300 bg-white px-2 py-0.5 font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800"
-            >
-              {t("domainCsv.downloadSample")}
-            </button>
+        <div className="rounded-md border border-dashed border-neutral-300 bg-neutral-50 px-3 py-2 text-xs dark:border-neutral-700 dark:bg-neutral-900/40">
+          <div className="flex items-start justify-between gap-3">
+            <p className="flex-1 text-neutral-600 dark:text-neutral-400">
+              {t("domainCsv.sampleHint")}
+            </p>
+            <div className="relative shrink-0">
+              <button
+                type="button"
+                onClick={() => setSampleOpen((v) => !v)}
+                className="inline-flex items-center gap-1 rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800"
+              >
+                {t("domainCsv.downloadSample")}
+                <span aria-hidden>▾</span>
+              </button>
+              {sampleOpen && (
+                <div
+                  className="absolute right-0 z-10 mt-1 w-60 overflow-hidden rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-900"
+                  onMouseLeave={() => setSampleOpen(false)}
+                >
+                  {SAMPLES.map((s) => (
+                    <a
+                      key={s.file}
+                      href={`/samples/domains/${s.file}`}
+                      download
+                      onClick={() => setSampleOpen(false)}
+                      className="block px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                    >
+                      {t(s.labelKey)}
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-          <pre className="mt-2 whitespace-pre-wrap font-mono text-neutral-700 dark:text-neutral-300">
-{SAMPLE_CSV}
-          </pre>
-        </details>
+        </div>
 
         <input
           ref={fileRef}

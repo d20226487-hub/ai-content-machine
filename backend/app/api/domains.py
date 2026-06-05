@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from typing import Any
 
 from datetime import datetime, timezone
@@ -28,6 +29,7 @@ from app.db.session import get_db
 from app.services.media_cache import clear_for_domain, count_for_domain
 from app.schemas.domain import (
     CsvImportResult,
+    CustomConfig,
     DomainCreate,
     DomainPickerItem,
     DomainPickerResponse,
@@ -1002,13 +1004,19 @@ async def import_csv(
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> CsvImportResult:
-    """Import domains from a CSV. Header row required. Columns:
+    """Import domains from a CSV. Header row required.
 
-    name, base_url, cms_type, auth_type, credentials, languages,
-    multilingual_plugin
+    Required columns: name, base_url, cms_type, auth_type.
+    Optional (all CMS): credentials, languages, multilingual_plugin.
+    Custom-CMS only: endpoint_path, body_template, response_id_path,
+    response_url_path, test_endpoint_path.
 
     languages may be a single value ("en") or a comma-separated list inside
     quotes ("en,de,fr"). multilingual_plugin defaults to 'none' if blank.
+    For cms_type='custom' an endpoint_path is required and body_template, when
+    present, must be a JSON object (use {{placeholders}} for publish-time
+    substitution) — these build the domain's custom_config so the row imports
+    as a publish-ready Custom site instead of being rejected.
     """
     raw = await file.read()
     try:
@@ -1037,17 +1045,44 @@ async def import_csv(
                 else []
             )
 
+            cms_type = (row.get("cms_type") or "").strip().lower()
+            # Build custom_config from the Custom-CMS columns so custom rows
+            # import as publish-ready sites (a custom domain without it is
+            # rejected by _validate_payload below).
+            custom_config = None
+            if cms_type == "custom":
+                body_template_raw = (row.get("body_template") or "").strip()
+                if body_template_raw:
+                    body_template = json.loads(body_template_raw)
+                    if not isinstance(body_template, dict):
+                        raise ValueError("body_template must be a JSON object")
+                else:
+                    body_template = {}
+                custom_config = CustomConfig(
+                    endpoint_path=(row.get("endpoint_path") or "").strip(),
+                    body_template=body_template,
+                    response_id_path=(row.get("response_id_path") or "").strip() or None,
+                    response_url_path=(row.get("response_url_path") or "").strip() or None,
+                    test_endpoint_path=(row.get("test_endpoint_path") or "").strip()
+                    or None,
+                )
+
             payload = DomainCreate(
                 name=(row.get("name") or "").strip(),
                 base_url=(row.get("base_url") or "").strip(),
-                cms_type=(row.get("cms_type") or "").strip().lower(),
+                cms_type=cms_type,
                 auth_type=(row.get("auth_type") or "").strip().lower(),
                 languages=languages,
                 multilingual_plugin=(
                     row.get("multilingual_plugin") or "none"
                 ).strip().lower() or "none",
                 credentials=(row.get("credentials") or "").strip() or None,
+                custom_config=custom_config,
             )
+        except json.JSONDecodeError:
+            errors.append({"row": row_index, "detail": "body_template must be valid JSON"})
+            skipped += 1
+            continue
         except Exception as e:
             errors.append({"row": row_index, "detail": str(e)})
             skipped += 1
@@ -1067,7 +1102,9 @@ async def import_csv(
             auth_type=payload.auth_type,
             languages=payload.languages,
             multilingual_plugin=payload.multilingual_plugin,
-            custom_config=None,
+            custom_config=(
+                payload.custom_config.model_dump() if payload.custom_config else None
+            ),
             publish_config=(
                 default_wp_profiles() if payload.cms_type == "wordpress" else None
             ),

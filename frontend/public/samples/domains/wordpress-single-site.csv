@@ -1,0 +1,3 @@
+name,base_url,cms_type,auth_type,credentials,languages,multilingual_plugin
+Main Blog,https://example.com,wordpress,wp_app_password,admin:xxxx xxxx xxxx xxxx xxxx xxxx,en,none
+Company News,https://example.org,wordpress,wp_app_password,editor:yyyy yyyy yyyy yyyy yyyy yyyy,en,none

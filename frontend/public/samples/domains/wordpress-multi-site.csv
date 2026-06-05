@@ -1,0 +1,3 @@
+name,base_url,cms_type,auth_type,credentials,languages,multilingual_plugin
+EU Store,https://example.net,wordpress,wp_app_password,admin:xxxx xxxx xxxx xxxx xxxx xxxx,"en,de,fr",polylang
+Global News,https://example.edu,wordpress,wp_app_password,editor:yyyy yyyy yyyy yyyy yyyy yyyy,"en,es,pt",wpml

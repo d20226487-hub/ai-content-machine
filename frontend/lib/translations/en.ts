@@ -1180,9 +1180,14 @@ export const en = {
   // domain CSV import
   "domainCsv.title": "Import domains from CSV",
   "domainCsv.requiredColumns": "Required columns:",
-  "domainCsv.sample": "Sample CSV",
-  "domainCsv.sampleStart": "Use as a starting point.",
-  "domainCsv.downloadSample": "Download domains_sample.csv",
+  "domainCsv.customColumns": "Custom CMS also accepts (per row):",
+  "domainCsv.sampleHint":
+    "Download a ready-made template for your CMS and site type, fill in your domains, then upload it.",
+  "domainCsv.downloadSample": "Download a template",
+  "domainCsv.sampleWpSingle": "WordPress — single-language",
+  "domainCsv.sampleWpMulti": "WordPress — multilingual (Polylang/WPML)",
+  "domainCsv.sampleCustomSingle": "Custom CMS — single-language",
+  "domainCsv.sampleCustomMulti": "Custom CMS — multilingual",
   "domainCsv.pickFirst": "Pick a CSV file first",
   "domainCsv.summary": "Inserted {inserted}; skipped {skipped}.",
   "domainCsv.rowError": "Row {row}: {detail}",
