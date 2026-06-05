@@ -1,3 +1,0 @@
-name,base_url,cms_type,auth_type,credentials,languages,multilingual_plugin,endpoint_path,body_template,response_id_path,response_url_path
-Multi-lang API,https://www.example.net,custom,bearer,YOUR_BEARER_TOKEN,"en,de,fr",none,/api/v1/articles,"{""title"":""{{title}}"",""content"":""{{content}}"",""slug"":""{{slug}}"",""lang"":""{{language}}""}",result.id,result.permalink
-Regional CMS,https://www.example.edu,custom,api_key_header,"{""header"":""X-API-Key"",""value"":""YOUR_API_KEY""}","en,es,pt",none,/v2/content,"{""heading"":""{{title}}"",""body_html"":""{{content}}"",""path"":""{{slug}}"",""locale"":""{{language}}""}",id,url

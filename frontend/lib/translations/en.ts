@@ -1184,10 +1184,8 @@ export const en = {
   "domainCsv.sampleHint":
     "Download a ready-made template for your CMS and site type, fill in your domains, then upload it.",
   "domainCsv.downloadSample": "Download a template",
-  "domainCsv.sampleWpSingle": "WordPress — single-language",
-  "domainCsv.sampleWpMulti": "WordPress — multilingual (Polylang/WPML)",
-  "domainCsv.sampleCustomSingle": "Custom CMS — single-language",
-  "domainCsv.sampleCustomMulti": "Custom CMS — multilingual",
+  "domainCsv.sampleWp": "WordPress sites",
+  "domainCsv.sampleCustom": "Custom CMS sites",
   "domainCsv.pickFirst": "Pick a CSV file first",
   "domainCsv.summary": "Inserted {inserted}; skipped {skipped}.",
   "domainCsv.rowError": "Row {row}: {detail}",

@@ -6,22 +6,17 @@ import { Modal } from "@/components/Modal";
 import { useT } from "@/lib/i18n-context";
 import { importDomainsCsv, type CsvImportResult } from "@/lib/domains";
 
-// Ready-made templates, one per CMS × single/multi-language shape. "Single
-// site" = one language (multilingual_plugin=none); "multi site" = a
-// multilingual install (polylang/wpml for WordPress, several languages for
-// Custom CMS). Custom-CMS files carry the extra custom_config columns.
+// One ready-made template per CMS type. Each file shows both shapes —
+// single-language rows (multilingual_plugin=none) and multilingual ones
+// (polylang/wpml for WordPress, several languages for Custom CMS) — so the
+// single/multi split isn't worth a separate file. Custom-CMS carries the
+// extra custom_config columns.
 const SAMPLES: {
   file: string;
-  labelKey:
-    | "domainCsv.sampleWpSingle"
-    | "domainCsv.sampleWpMulti"
-    | "domainCsv.sampleCustomSingle"
-    | "domainCsv.sampleCustomMulti";
+  labelKey: "domainCsv.sampleWp" | "domainCsv.sampleCustom";
 }[] = [
-  { file: "wordpress-single-site.csv", labelKey: "domainCsv.sampleWpSingle" },
-  { file: "wordpress-multi-site.csv", labelKey: "domainCsv.sampleWpMulti" },
-  { file: "custom-cms-single-site.csv", labelKey: "domainCsv.sampleCustomSingle" },
-  { file: "custom-cms-multi-site.csv", labelKey: "domainCsv.sampleCustomMulti" },
+  { file: "wordpress.csv", labelKey: "domainCsv.sampleWp" },
+  { file: "custom-cms.csv", labelKey: "domainCsv.sampleCustom" },
 ];
 
 export function DomainCsvImportModal({

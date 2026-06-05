@@ -1242,10 +1242,8 @@ export const ru: Record<keyof typeof en, string> = {
   "domainCsv.sampleHint":
     "Скачайте готовый шаблон для вашей CMS и типа сайта, впишите свои домены и загрузите файл.",
   "domainCsv.downloadSample": "Скачать шаблон",
-  "domainCsv.sampleWpSingle": "WordPress — один язык",
-  "domainCsv.sampleWpMulti": "WordPress — многоязычный (Polylang/WPML)",
-  "domainCsv.sampleCustomSingle": "Custom CMS — один язык",
-  "domainCsv.sampleCustomMulti": "Custom CMS — многоязычный",
+  "domainCsv.sampleWp": "Сайты WordPress",
+  "domainCsv.sampleCustom": "Сайты Custom CMS",
   "domainCsv.pickFirst": "Сначала выберите CSV-файл",
   "domainCsv.summary":
     "Добавлено: {inserted}; пропущено: {skipped}.",

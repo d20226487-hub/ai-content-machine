@@ -1,0 +1,4 @@
+name,base_url,cms_type,auth_type,credentials,languages,multilingual_plugin,endpoint_path,body_template,response_id_path,response_url_path
+Headless Blog,https://www.example.com,custom,bearer,YOUR_BEARER_TOKEN,en,none,/api/v1/posts,"{""title"":""{{title}}"",""content"":""{{content}}"",""slug"":""{{slug}}"",""status"":""published""}",data.id,data.url
+Docs Portal,https://www.example.org,custom,api_key_header,"{""header"":""X-API-Key"",""value"":""YOUR_API_KEY""}","en,de,fr",none,/v2/articles,"{""heading"":""{{title}}"",""body_html"":""{{content}}"",""path"":""{{slug}}"",""locale"":""{{language}}""}",id,permalink
+Partner API,https://www.example.net,custom,basic_auth,myuser:mypassword,en,none,/api/v1/content,"{""title"":""{{title}}"",""body"":""{{content}}"",""slug"":""{{slug}}""}",result.id,result.url
