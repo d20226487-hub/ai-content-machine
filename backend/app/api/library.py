@@ -121,13 +121,15 @@ from app.services.bulk_csv import build_table_csv
 from app.services.provider_cache import get_enabled_providers
 from app.services.find_replace import (
     InvalidPattern,
-    apply_replace,
-    compile_pattern,
     aligned_diff,
+    apply_rules,
+    compile_rules,
     condense_unified,
-    count_matches,
+    count_matches_rules,
     drift_segments,
-    segment_diff,
+    parse_finds,
+    parse_pairs,
+    segment_diff_rules,
     unified_segments,
 )
 from app.services.structure_format import (
@@ -2315,8 +2317,10 @@ async def find_in_table(
     occurrence + cell counts. Persists nothing."""
     await _get_table_or_404(db, table_id, actor, level="read")
     try:
-        compiled = compile_pattern(
-            payload.pattern,
+        finds = parse_finds(payload.pattern)
+        rules = compile_rules(
+            finds,
+            [""] * len(finds),
             is_regex=payload.is_regex,
             case_sensitive=payload.case_sensitive,
         )
@@ -2330,7 +2334,7 @@ async def find_in_table(
     ):
         if not cell.value:
             continue
-        n = count_matches(compiled, cell.value, whole_cell=payload.whole_cell)
+        n = count_matches_rules(rules, cell.value, whole_cell=payload.whole_cell)
         if n > 0:
             total_matches += n
             matched.append((cell, row_pos, col_name, n))
@@ -2373,8 +2377,10 @@ async def replace_in_table(
     matched (no empty run is created)."""
     await _get_table_or_404(db, table_id, actor, level="write")
     try:
-        compiled = compile_pattern(
-            payload.pattern,
+        finds, replaces = parse_pairs(payload.pattern, payload.replacement)
+        rules = compile_rules(
+            finds,
+            replaces,
             is_regex=payload.is_regex,
             case_sensitive=payload.case_sensitive,
         )
@@ -2388,10 +2394,9 @@ async def replace_in_table(
     ):
         if not cell.value:
             continue
-        new_value, n = apply_replace(
-            compiled,
+        new_value, n = apply_rules(
+            rules,
             cell.value,
-            payload.replacement,
             is_regex=payload.is_regex,
             whole_cell=payload.whole_cell,
         )
@@ -2529,18 +2534,20 @@ async def get_replace_run(
         if cur_val != e["new_value"]:
             drifted_count += 1
 
-    # Recompile the run's pattern once to recover per-cell match spans for
-    # the before/after highlight. If it somehow no longer compiles, fall
-    # back to whole-value segments (no highlight) rather than failing.
-    compiled = None
+    # Recompile the run's find→replace pairs once to recover per-cell match
+    # spans for the before/after highlight. If they somehow no longer compile,
+    # fall back to whole-value segments (no highlight) rather than failing.
+    rules = None
     try:
-        compiled = compile_pattern(
-            run.pattern,
+        finds, replaces = parse_pairs(run.pattern, run.replacement)
+        rules = compile_rules(
+            finds,
+            replaces,
             is_regex=run.is_regex,
             case_sensitive=run.case_sensitive,
         )
     except InvalidPattern:
-        compiled = None
+        rules = None
 
     start = (page - 1) * page_size
     page_snap = snap[start : start + page_size]
@@ -2553,12 +2560,11 @@ async def get_replace_run(
         new_v = e["new_value"]
         drifted = cur_val != new_v
         # old side (struck matches) + the green "what the replace inserted"
-        # new side both come from the regex match spans.
-        if compiled is not None and old_v is not None:
-            old_segs, replace_new_segs = segment_diff(
-                compiled,
+        # new side both come from the rule match spans.
+        if rules is not None and old_v is not None:
+            old_segs, replace_new_segs = segment_diff_rules(
+                rules,
                 old_v,
-                run.replacement,
                 is_regex=run.is_regex,
                 whole_cell=run.whole_cell,
             )

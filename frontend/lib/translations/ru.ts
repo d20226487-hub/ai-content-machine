@@ -1632,9 +1632,11 @@ export const ru: Record<keyof typeof en, string> = {
   "findReplace.modeFind": "Найти",
   "findReplace.modeReplace": "Заменить",
   "findReplace.patternLabel": "Найти",
-  "findReplace.patternPlaceholder": "Что искать…",
+  "findReplace.patternPlaceholder":
+    "По одному значению в строке, напр.\nкот\nООО «Ромашка»",
   "findReplace.replacementLabel": "Заменить на",
-  "findReplace.replacementPlaceholder": "Текст замены…",
+  "findReplace.replacementPlaceholder":
+    "По одной в строке, в пару к «Найти», напр.\nпёс\nGlobex",
   "findReplace.optRegex": "Regex",
   "findReplace.optCase": "Учитывать регистр",
   "findReplace.optWholeCell": "Вся ячейка",
@@ -1643,8 +1645,17 @@ export const ru: Record<keyof typeof en, string> = {
   "findReplace.findBtn": "Найти",
   "findReplace.previewBtn": "Показать совпадения",
   "findReplace.replaceBtn": "Заменить всё →",
+  "findReplace.multiHint":
+    "По одному значению в строке. Строка N в «Найти» заменяется строкой N в «Заменить»; оставьте «Заменить» пустым, чтобы удалить все термины. Каждый термин применяется к исходному тексту, поэтому результат одного правила не подхватывается другим.",
+  "findReplace.pairOk": "{n} пар найти → заменить",
+  "findReplace.pairDeleteAll": "Удаление {finds} термин(ов)",
+  "findReplace.mismatchError":
+    "{finds} строк(и) в «Найти», но {replaces} в «Заменить» — количество должно совпадать (оставьте «Заменить» пустым, чтобы удалить все термины).",
+  "findReplace.morePairs": "+ ещё {n}",
   "findReplace.confirmReplace":
     "Заменить все совпадения «{pattern}» на «{replacement}»? Замену можно откатить.",
+  "findReplace.confirmReplaceMulti":
+    "Применить все {n} пар найти → заменить ко всем совпадениям? Замену можно откатить.",
   "findReplace.summary": "{matches} совпадений в {cells} ячейках",
   "findReplace.colRow": "Строка",
   "findReplace.colColumn": "Колонка",

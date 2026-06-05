@@ -6,66 +6,184 @@ and Postgres only offers POSIX ERE. At current table sizes the cells are
 already loaded in one shot elsewhere, so a Python pass is cheap. Revisit
 if a table ever crosses ~10k cells.
 
-Semantics:
-  * literal mode (``is_regex=False``) — pattern is matched verbatim
-    (``re.escape``) and the replacement is inserted literally, so a ``\\1``
-    in the replacement is NOT treated as a backreference.
-  * regex mode — pattern compiled as-is; replacement honors backreferences.
-  * ``whole_cell`` — the pattern must match the ENTIRE cell value
-    (``fullmatch``); a replace then swaps the whole value.
+Multi-value (paired-dictionary) semantics:
+  A run carries a LIST of find→replace pairs, one per line in each textarea.
+  Line N of Find maps to line N of Replace; an empty Replace box deletes
+  every Find term. A single-value run is just a 1-pair list, so legacy runs
+  (and the single-value UI path) round-trip unchanged.
+
+Per-pair semantics:
+  * literal mode (``is_regex=False``) — the find is matched verbatim
+    (``re.escape``) and that pair's replacement is inserted literally, so a
+    ``\\1`` in the replacement is NOT treated as a backreference.
+  * regex mode — the find is compiled as-is; the replacement honors
+    backreferences against THAT pair's own groups (each pair compiles
+    separately, so ``\\1`` always means the pair's first group).
+  * ``whole_cell`` — a find must match the ENTIRE cell value (``fullmatch``);
+    the first pair (in order) that fullmatches swaps the whole value.
   * ``case_sensitive=False`` adds ``re.IGNORECASE``.
+
+Cascade rule: a cell's ORIGINAL value is scanned left-to-right in a single
+pass. At each position the pairs are tried IN ORDER and the first that matches
+wins; the matched span is consumed and replaced, and scanning resumes AFTER
+it. So a pair's inserted text is never re-scanned by a later pair (cat→dog
+followed by dog→bird leaves "cat" as "dog", not "bird").
 """
 from __future__ import annotations
 
 import difflib
 import re
+from typing import Iterator, NamedTuple
+
+# A run with thousands of pairs would make the per-cell O(len * pairs) scan
+# pathological; cap it well above any realistic glossary/rebrand sweep.
+MAX_PAIRS = 1000
 
 
 class InvalidPattern(ValueError):
-    """Raised for an empty pattern, an uncompilable regex, or a pattern that
-    matches the empty string (which would make replace behavior surprising)."""
+    """Raised for an empty find, an uncompilable regex, a find that matches the
+    empty string (which would make replace behavior surprising), too many
+    pairs, or a find/replace line-count mismatch."""
 
 
-def compile_pattern(
-    pattern: str,
+class Rule(NamedTuple):
+    """One compiled find→replace pair."""
+
+    compiled: re.Pattern[str]
+    replacement: str
+
+
+def _split_lines(text: str) -> list[str]:
+    """Split a textarea into one value per line. A single trailing newline is
+    tolerated (dropped) so a pasted list doesn't gain a spurious blank pair;
+    interior blank lines are preserved (they're meaningful for pairing — e.g.
+    a blank replacement line deletes its paired find)."""
+    lines = text.split("\n")
+    if len(lines) > 1 and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+def parse_finds(pattern: str) -> list[str]:
+    """The find side as a list of non-empty values (one per line). Raises if
+    any line is empty or there are too many."""
+    finds = _split_lines(pattern)
+    if not finds or any(f == "" for f in finds):
+        raise InvalidPattern("Each Find line must be non-empty.")
+    if len(finds) > MAX_PAIRS:
+        raise InvalidPattern(f"Too many find values (max {MAX_PAIRS}).")
+    return finds
+
+
+def parse_pairs(pattern: str, replacement: str) -> tuple[list[str], list[str]]:
+    """Split both textareas into paired find/replace lists.
+
+    An empty Replace box maps every Find to ``""`` (delete). Otherwise the two
+    sides must have the same number of lines; any other mismatch raises so the
+    user fixes it rather than getting a silently truncated run."""
+    finds = parse_finds(pattern)
+    if replacement == "":
+        return finds, [""] * len(finds)
+    replaces = _split_lines(replacement)
+    if len(replaces) != len(finds):
+        raise InvalidPattern(
+            f"{len(finds)} Find line(s) but {len(replaces)} Replace line(s) — "
+            "counts must match (leave Replace empty to delete every term)."
+        )
+    return finds, replaces
+
+
+def compile_rules(
+    finds: list[str],
+    replaces: list[str],
     *,
     is_regex: bool,
     case_sensitive: bool,
-) -> re.Pattern[str]:
-    if not pattern:
-        raise InvalidPattern("Pattern is empty.")
+) -> list[Rule]:
+    """Compile equal-length find/replace lists into ordered :class:`Rule`s."""
     flags = 0 if case_sensitive else re.IGNORECASE
-    raw = pattern if is_regex else re.escape(pattern)
-    try:
-        compiled = re.compile(raw, flags)
-    except re.error as e:  # noqa: PERF203
-        raise InvalidPattern(f"Invalid regular expression: {e}") from e
-    # A pattern that matches the empty string (e.g. ``a*`` or ``.*``) makes
-    # occurrence counting and substitution behave in ways that surprise the
-    # user (zero-width matches between every character). Reject up front.
-    if compiled.search("") is not None:
-        raise InvalidPattern("Pattern matches an empty string; refine it.")
-    return compiled
+    rules: list[Rule] = []
+    for find, rep in zip(finds, replaces):
+        if not find:
+            raise InvalidPattern("Each Find line must be non-empty.")
+        raw = find if is_regex else re.escape(find)
+        try:
+            compiled = re.compile(raw, flags)
+        except re.error as e:  # noqa: PERF203
+            raise InvalidPattern(f"Invalid regular expression “{find}”: {e}") from e
+        # A find that matches the empty string (e.g. ``a*`` or ``.*``) makes
+        # occurrence counting and substitution behave in ways that surprise the
+        # user (zero-width matches between every character). Reject up front.
+        if compiled.search("") is not None:
+            raise InvalidPattern(f"“{find}” matches an empty string; refine it.")
+        rules.append(Rule(compiled, rep))
+    return rules
 
 
-def count_matches(
-    compiled: re.Pattern[str], value: str, *, whole_cell: bool
+def _scan(
+    rules: list[Rule], value: str, *, whole_cell: bool
+) -> Iterator[tuple[re.Match[str], int]]:
+    """Yield ``(match, rule_index)`` for each replaced span, left-to-right and
+    non-overlapping. At each position the rules are tried in order and the
+    first match wins; scanning resumes after the matched span so a rule's
+    output is never re-scanned. ``rules`` reject empty-string matches, so every
+    yielded span is non-empty and the scan always makes progress."""
+    if not value:
+        return
+    if whole_cell:
+        for i, r in enumerate(rules):
+            m = r.compiled.fullmatch(value)
+            if m is not None:
+                yield m, i
+                return
+        return
+    pos = 0
+    n = len(value)
+    while pos < n:
+        for i, r in enumerate(rules):
+            m = r.compiled.match(value, pos)
+            if m is not None:
+                yield m, i
+                pos = m.end()
+                break
+        else:
+            pos += 1
+
+
+def count_matches_rules(
+    rules: list[Rule], value: str, *, whole_cell: bool
 ) -> int:
-    """Occurrences of ``compiled`` in ``value``. whole_cell → 0 or 1."""
+    """Total occurrences any rule replaces in ``value``. whole_cell → 0 or 1."""
     if not value:
         return 0
-    if whole_cell:
-        return 1 if compiled.fullmatch(value) is not None else 0
-    return sum(1 for _ in compiled.finditer(value))
+    return sum(1 for _ in _scan(rules, value, whole_cell=whole_cell))
 
 
-def segment_diff(
-    compiled: re.Pattern[str],
-    value: str,
-    replacement: str,
-    *,
-    is_regex: bool,
-    whole_cell: bool,
+def apply_rules(
+    rules: list[Rule], value: str, *, is_regex: bool, whole_cell: bool
+) -> tuple[str, int]:
+    """Return ``(new_value, occurrences_replaced)`` after one left-to-right
+    pass. In literal mode each pair's replacement is inserted verbatim (no
+    backreference parsing). ``occurrences`` is 0 when nothing changed, so
+    callers can skip writing untouched cells."""
+    if not value:
+        return value, 0
+    out: list[str] = []
+    pos = 0
+    count = 0
+    for m, i in _scan(rules, value, whole_cell=whole_cell):
+        start, end = m.span()
+        out.append(value[pos:start])
+        rep = rules[i].replacement
+        out.append(m.expand(rep) if is_regex else rep)
+        pos = end
+        count += 1
+    out.append(value[pos:])
+    return "".join(out), count
+
+
+def segment_diff_rules(
+    rules: list[Rule], value: str, *, is_regex: bool, whole_cell: bool
 ) -> tuple[list[dict], list[dict]]:
     """Split ``value`` (old) and its replaced form (new) into highlight
     segments for a diff view.
@@ -73,37 +191,26 @@ def segment_diff(
     Returns ``(old_segments, new_segments)`` where each segment is
     ``{"text": str, "changed": bool}``. In ``old`` the matched spans are
     ``changed=True`` (struck through by the UI); in ``new`` the inserted
-    replacement spans are ``changed=True`` (highlighted). Concatenating
-    each list reproduces the old / new value exactly — the new side matches
-    what ``apply_replace`` wrote.
-    """
+    replacement spans are ``changed=True`` (highlighted). Concatenating each
+    list reproduces the old / new value exactly — the new side matches what
+    ``apply_rules`` wrote."""
     old_segs: list[dict] = []
     new_segs: list[dict] = []
     if not value:
         return old_segs, new_segs
 
-    if whole_cell:
-        if compiled.fullmatch(value) is None:
-            return (
-                [{"text": value, "changed": False}],
-                [{"text": value, "changed": False}],
-            )
-        repl_fn = replacement if is_regex else (lambda _m: replacement)
-        return (
-            [{"text": value, "changed": True}],
-            [{"text": compiled.sub(repl_fn, value), "changed": True}],
-        )
-
     pos = 0
-    for m in compiled.finditer(value):
+    for m, i in _scan(rules, value, whole_cell=whole_cell):
         start, end = m.span()
         if start > pos:
             same = value[pos:start]
             old_segs.append({"text": same, "changed": False})
             new_segs.append({"text": same, "changed": False})
         old_segs.append({"text": value[start:end], "changed": True})
-        rep = m.expand(replacement) if is_regex else replacement
-        new_segs.append({"text": rep, "changed": True})
+        rep = rules[i].replacement
+        new_segs.append(
+            {"text": m.expand(rep) if is_regex else rep, "changed": True}
+        )
         pos = end
     if pos < len(value):
         tail = value[pos:]
@@ -329,30 +436,3 @@ def condense_unified(
     return out
 
 
-def apply_replace(
-    compiled: re.Pattern[str],
-    value: str,
-    replacement: str,
-    *,
-    is_regex: bool,
-    whole_cell: bool,
-) -> tuple[str, int]:
-    """Return ``(new_value, occurrences_replaced)``.
-
-    In literal mode the replacement is inserted verbatim (a ``lambda``
-    sidesteps ``re.sub``'s backreference parsing). ``occurrences`` is 0 when
-    nothing changed, so callers can skip writing untouched cells.
-    """
-    if not value:
-        return value, 0
-
-    repl = replacement if is_regex else (lambda _m: replacement)
-
-    if whole_cell:
-        if compiled.fullmatch(value) is None:
-            return value, 0
-        new_value = compiled.sub(repl, value)
-        return new_value, 1
-
-    new_value, n = compiled.subn(repl, value)
-    return new_value, n

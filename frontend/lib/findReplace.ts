@@ -82,6 +82,47 @@ export interface FindReplaceRunDetail extends FindReplaceRunRead {
   items: ReplacedCell[];
 }
 
+export interface FindReplacePair {
+  find: string;
+  replace: string;
+}
+
+/** Split a multi-line textarea into one value per line, tolerating a single
+ *  trailing newline (mirrors the backend `_split_lines`). */
+export function splitLines(text: string): string[] {
+  const lines = text.split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+
+/** Pair a find/replace textarea pair the same way the backend does: an empty
+ *  Replace box deletes every Find term, otherwise line N maps to line N. The
+ *  returned pairs are for DISPLAY only — the backend re-derives and validates
+ *  them, so a UI-visible count mismatch is surfaced via {@link pairMismatch}. */
+export function splitPairs(
+  pattern: string,
+  replacement: string,
+): FindReplacePair[] {
+  const finds = splitLines(pattern);
+  const replaces =
+    replacement === "" ? finds.map(() => "") : splitLines(replacement);
+  return finds.map((find, i) => ({ find, replace: replaces[i] ?? "" }));
+}
+
+/** Find/replace line counts for the live hint. `mismatch` is true when a
+ *  Replace was typed but its line count differs from Find (delete-all, i.e.
+ *  empty Replace, is never a mismatch). */
+export function pairCounts(pattern: string, replacement: string): {
+  finds: number;
+  replaces: number;
+  mismatch: boolean;
+} {
+  const finds = pattern.trim() === "" ? 0 : splitLines(pattern).length;
+  if (replacement === "") return { finds, replaces: 0, mismatch: false };
+  const replaces = splitLines(replacement).length;
+  return { finds, replaces, mismatch: finds > 0 && replaces !== finds };
+}
+
 export function findInTable(
   tableId: number,
   req: FindReplaceConfig & { page?: number; page_size?: number },

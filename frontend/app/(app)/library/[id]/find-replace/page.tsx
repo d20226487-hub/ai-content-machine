@@ -10,8 +10,10 @@ import {
   deleteReplaceRun,
   findInTable,
   listReplaceRuns,
+  pairCounts,
   renameReplaceRun,
   replaceInTable,
+  splitPairs,
   type FindReplaceConfig,
   type FindResponse,
   type FindReplaceRunRead,
@@ -71,6 +73,9 @@ export default function FindReplacePage({
     };
   }
 
+  const counts = pairCounts(pattern, replacement);
+  const multi = counts.finds > 1;
+
   const runFind = useCallback(
     async (page = 1) => {
       if (!pattern) return;
@@ -96,12 +101,20 @@ export default function FindReplacePage({
 
   async function runReplace() {
     if (!pattern) return;
-    if (
-      !window.confirm(
-        t("findReplace.confirmReplace", { pattern, replacement }),
-      )
-    )
+    if (counts.mismatch) {
+      setError(
+        t("findReplace.mismatchError", {
+          finds: counts.finds,
+          replaces: counts.replaces,
+        }),
+      );
       return;
+    }
+    const msg =
+      counts.finds > 1
+        ? t("findReplace.confirmReplaceMulti", { n: counts.finds })
+        : t("findReplace.confirmReplace", { pattern, replacement });
+    if (!window.confirm(msg)) return;
     setBusy(true);
     setError(null);
     try {
@@ -176,16 +189,19 @@ export default function FindReplacePage({
         </div>
 
         <div className="mt-4 grid gap-3">
+          <p className="text-xs text-neutral-500 dark:text-neutral-400">
+            {t("findReplace.multiHint")}
+          </p>
           <label className="block">
             <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
               {t("findReplace.patternLabel")}
             </span>
-            <input
-              type="text"
+            <textarea
               value={pattern}
               onChange={(e) => setPattern(e.target.value)}
               placeholder={t("findReplace.patternPlaceholder")}
-              className="mt-1 w-full rounded-md border border-neutral-300 px-3 py-1.5 font-mono text-sm dark:border-neutral-700 dark:bg-neutral-900"
+              rows={Math.min(8, Math.max(2, counts.finds || 2))}
+              className="mt-1 w-full resize-y rounded-md border border-neutral-300 px-3 py-1.5 font-mono text-sm dark:border-neutral-700 dark:bg-neutral-900"
             />
           </label>
 
@@ -194,13 +210,32 @@ export default function FindReplacePage({
               <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
                 {t("findReplace.replacementLabel")}
               </span>
-              <input
-                type="text"
+              <textarea
                 value={replacement}
                 onChange={(e) => setReplacement(e.target.value)}
                 placeholder={t("findReplace.replacementPlaceholder")}
-                className="mt-1 w-full rounded-md border border-neutral-300 px-3 py-1.5 font-mono text-sm dark:border-neutral-700 dark:bg-neutral-900"
+                rows={Math.min(8, Math.max(2, counts.replaces || 2))}
+                className="mt-1 w-full resize-y rounded-md border border-neutral-300 px-3 py-1.5 font-mono text-sm dark:border-neutral-700 dark:bg-neutral-900"
               />
+              {multi && (
+                <span
+                  className={
+                    "mt-1 block text-xs " +
+                    (counts.mismatch
+                      ? "text-red-600 dark:text-red-400"
+                      : "text-neutral-500 dark:text-neutral-400")
+                  }
+                >
+                  {counts.replaces === 0
+                    ? t("findReplace.pairDeleteAll", { finds: counts.finds })
+                    : counts.mismatch
+                      ? t("findReplace.mismatchError", {
+                          finds: counts.finds,
+                          replaces: counts.replaces,
+                        })
+                      : t("findReplace.pairOk", { n: counts.finds })}
+                </span>
+              )}
             </label>
           )}
 
@@ -284,7 +319,7 @@ export default function FindReplacePage({
             {mode === "replace" && (
               <button
                 type="button"
-                disabled={!pattern || busy}
+                disabled={!pattern || busy || counts.mismatch}
                 onClick={runReplace}
                 className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
               >
@@ -384,13 +419,28 @@ export default function FindReplacePage({
                         {r.name}
                       </span>
                     )}
-                    <code className="text-neutral-800 dark:text-neutral-200">
-                      {r.pattern}
-                    </code>
-                    <span className="text-neutral-400"> → </span>
-                    <code className="text-neutral-800 dark:text-neutral-200">
-                      {r.replacement || "∅"}
-                    </code>
+                    {(() => {
+                      const pairs = splitPairs(r.pattern, r.replacement);
+                      const first = pairs[0];
+                      return (
+                        <>
+                          <code className="text-neutral-800 dark:text-neutral-200">
+                            {first?.find}
+                          </code>
+                          <span className="text-neutral-400"> → </span>
+                          <code className="text-neutral-800 dark:text-neutral-200">
+                            {first?.replace || "∅"}
+                          </code>
+                          {pairs.length > 1 && (
+                            <span className="ml-2 text-xs text-neutral-400">
+                              {t("findReplace.morePairs", {
+                                n: pairs.length - 1,
+                              })}
+                            </span>
+                          )}
+                        </>
+                      );
+                    })()}
                   </span>
                   <span className="flex shrink-0 items-center gap-2 text-xs text-neutral-500">
                     {t("findReplace.historyCells", { n: r.cell_count })}

@@ -1569,9 +1569,11 @@ export const en = {
   "findReplace.modeFind": "Find",
   "findReplace.modeReplace": "Replace",
   "findReplace.patternLabel": "Find",
-  "findReplace.patternPlaceholder": "Text to search for…",
+  "findReplace.patternPlaceholder":
+    "One value per line, e.g.\ncat\nAcme Inc.",
   "findReplace.replacementLabel": "Replace with",
-  "findReplace.replacementPlaceholder": "Replacement text…",
+  "findReplace.replacementPlaceholder":
+    "One per line, paired with Find, e.g.\ndog\nGlobex",
   "findReplace.optRegex": "Regex",
   "findReplace.optCase": "Case-sensitive",
   "findReplace.optWholeCell": "Whole cell",
@@ -1580,8 +1582,17 @@ export const en = {
   "findReplace.findBtn": "Find",
   "findReplace.previewBtn": "Preview matches",
   "findReplace.replaceBtn": "Replace all →",
+  "findReplace.multiHint":
+    "One value per line. Line N of Find is replaced by line N of Replace; leave Replace empty to delete every term. Each term is applied to the original text, so one rule’s output is never re-matched by another.",
+  "findReplace.pairOk": "{n} find → replace pairs",
+  "findReplace.pairDeleteAll": "Deleting {finds} term(s)",
+  "findReplace.mismatchError":
+    "{finds} Find line(s) but {replaces} Replace line(s) — the counts must match (leave Replace empty to delete every term).",
+  "findReplace.morePairs": "+{n} more",
   "findReplace.confirmReplace":
     "Replace every match of “{pattern}” with “{replacement}”? This is revertable.",
+  "findReplace.confirmReplaceMulti":
+    "Apply all {n} find → replace pairs across every match? This is revertable.",
   "findReplace.summary": "{matches} matches in {cells} cells",
   "findReplace.colRow": "Row",
   "findReplace.colColumn": "Column",

@@ -9,6 +9,7 @@ import { ApiError } from "@/lib/api";
 import {
   getReplaceRun,
   revertReplaceRun,
+  splitPairs,
   type FindReplaceRunDetail,
   type HighlightSegment,
   type ReplacedCell,
@@ -119,15 +120,19 @@ export default function ReplaceRunPage({
               <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
                 {t("replaceRun.title", { id: run.id })}
               </h1>
-              <p className="mt-1 break-all text-sm">
-                <code className="rounded bg-neutral-100 px-1.5 py-0.5 dark:bg-neutral-800">
-                  {run.pattern}
-                </code>
-                <span className="px-1.5 text-neutral-400">→</span>
-                <code className="rounded bg-neutral-100 px-1.5 py-0.5 dark:bg-neutral-800">
-                  {run.replacement || "∅"}
-                </code>
-              </p>
+              <div className="mt-1.5 flex flex-col gap-1">
+                {splitPairs(run.pattern, run.replacement).map((p, i) => (
+                  <p key={i} className="break-all text-sm">
+                    <code className="rounded bg-neutral-100 px-1.5 py-0.5 dark:bg-neutral-800">
+                      {p.find}
+                    </code>
+                    <span className="px-1.5 text-neutral-400">→</span>
+                    <code className="rounded bg-neutral-100 px-1.5 py-0.5 dark:bg-neutral-800">
+                      {p.replace || "∅"}
+                    </code>
+                  </p>
+                ))}
+              </div>
               <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
                 {t("replaceRun.meta", {
                   cells: run.cell_count,
