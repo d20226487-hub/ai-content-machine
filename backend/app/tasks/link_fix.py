@@ -18,95 +18,21 @@ modules. Re-querying ``pending`` makes a redelivered / resumed task
 idempotent.
 """
 import asyncio
-from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
-from app.db.models import (
-    BulkTableCell,
-    LinkCheckRun,
-    LinkCheckViolation,
-    LinkFixCell,
-    LinkFixRun,
-)
+from app.db.models import BulkTableCell, LinkFixCell, LinkFixRun
 from app.providers.base import ProviderError
 from app.providers.registry import ProviderNotConfigured
 from app.services.brain import fix_links_text
-from app.services.link_check import (
-    extract_expected_links,
-    extract_output_links,
-    juxtapose,
-    normalize_link,
-)
-from app.services.translation_links import compute_expected_links, parse_domains
+from app.services.link_fix_apply import expected_links_for_row, reverify_in_place
 from app.tasks.celery_app import celery_app
 
-
-async def _expected_links_for_row(
-    db: AsyncSession, *, run: LinkFixRun, row_id: int
-) -> list[str]:
-    """Expected links for one row.
-
-    Translation runs have no materialized expected column — recompute the
-    localized expected links from the source run's ``translation_config`` (read
-    the row's original/lang/domain cells). Normal runs read the snapshotted
-    expected columns. ``db.get`` on the source run is identity-mapped, so this
-    stays one extra query per session."""
-    cfg = None
-    if run.source_run_id:
-        source = await db.get(LinkCheckRun, run.source_run_id)
-        cfg = source.translation_config if source else None
-
-    if cfg:
-        orig_col = int(cfg["original_column_id"])
-        lang_col = int(cfg["lang_column_id"])
-        domain_cols = [int(c) for c in cfg.get("internal_domain_column_ids", [])]
-        rows = (
-            await db.execute(
-                select(BulkTableCell.column_id, BulkTableCell.value).where(
-                    BulkTableCell.row_id == row_id,
-                    BulkTableCell.column_id.in_([orig_col, lang_col, *domain_cols]),
-                )
-            )
-        ).all()
-        vals = {cid: val for cid, val in rows}
-        lang = (vals.get(lang_col) or "").strip()
-        if not lang:
-            return []
-        internal_domains: list[str] = []
-        for dc in domain_cols:
-            internal_domains += parse_domains(vals.get(dc))
-        return compute_expected_links(
-            vals.get(orig_col),
-            lang,
-            internal_domains=internal_domains,
-            product_domains=cfg.get("product_domains", []),
-            exceptions=cfg.get("exceptions", []),
-            internal_treatment=cfg.get("internal_treatment", "skip"),
-            external_treatment=cfg.get("external_treatment", "skip"),
-            default_langs=cfg.get("product_default_langs", {}) or {},
-        )
-
-    exp_cols = [int(c) for c in (run.expected_column_ids or [])]
-    if not exp_cols:
-        return []
-    cells = (
-        await db.execute(
-            select(BulkTableCell.value).where(
-                BulkTableCell.row_id == row_id,
-                BulkTableCell.column_id.in_(exp_cols),
-            )
-        )
-    ).scalars().all()
-    out: list[str] = []
-    for v in cells:
-        out += extract_expected_links(v)
-    return out
 
 # Advisory-lock namespace for the per-run finalize ('LF').
 _ADVISORY_NS = 0x4C46
@@ -198,7 +124,7 @@ async def _fix_cell(db: AsyncSession, run_id: int, cell_id: int) -> None:
 
     # Expected links for this row — recomputed for translation runs (no
     # materialized column), else read from the snapshotted expected columns.
-    expected = await _expected_links_for_row(db, run=run, row_id=cell.row_id)
+    expected = await expected_links_for_row(db, run=run, row_id=cell.row_id)
 
     try:
         new_text, code, model = await fix_links_text(
@@ -283,7 +209,15 @@ async def _finalize_if_done(db: AsyncSession, run_id: int) -> None:
         {"ns": _ADVISORY_NS, "rid": run_id},
     )
     run = await db.get(LinkFixRun, run_id)
-    if run is None or run.status != "running":
+    if run is None:
+        await db.rollback()
+        return
+    # The per-cell bump uses a Core UPDATE, so with expire_on_commit=False the
+    # cached run.* counters + status are STALE — trusting them here meant a run
+    # whose cells all finished could stay 'running' forever. Refresh under the
+    # advisory lock to read the committed status + counters.
+    await db.refresh(run)
+    if run.status != "running":
         await db.rollback()
         return
     if run.done + run.failed + run.skipped < run.total:
@@ -297,66 +231,9 @@ async def _finalize_if_done(db: AsyncSession, run_id: int) -> None:
     # stamp the SOURCE check run's matching violations 'solved' / 'unsolved'
     # so the original run page shows what the fix did. We re-juxtapose only
     # (the AI corrector runs in juxtapose mode), never crawl.
-    await _reverify_in_place(db, run)
+    await reverify_in_place(db, run)
 
     await db.commit()
-
-
-async def _reverify_in_place(db: AsyncSession, run: LinkFixRun) -> None:
-    """Re-juxtapose the cells this run corrected and stamp the originating
-    check run's violations. NULL stays = untouched; 'solved' = the flagged
-    link is gone from the corrected cell, 'unsolved' = still present."""
-    if run.source_run_id is None:
-        return
-
-    cells = (
-        (
-            await db.execute(
-                select(LinkFixCell).where(
-                    LinkFixCell.run_id == run.id,
-                    LinkFixCell.state == "done",
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    for cell in cells:
-        target_col = run.target_column_id or cell.column_id
-        corrected = (
-            await db.execute(
-                select(BulkTableCell.value).where(
-                    BulkTableCell.row_id == cell.row_id,
-                    BulkTableCell.column_id == target_col,
-                )
-            )
-        ).scalar_one_or_none()
-
-        expected = await _expected_links_for_row(db, run=run, row_id=cell.row_id)
-
-        omitted, hallucinated = juxtapose(
-            extract_output_links(corrected), expected
-        )
-        still = {normalize_link(u) for u in omitted + hallucinated}
-
-        violations = (
-            (
-                await db.execute(
-                    select(LinkCheckViolation).where(
-                        LinkCheckViolation.run_id == run.source_run_id,
-                        LinkCheckViolation.row_id == cell.row_id,
-                        LinkCheckViolation.column_id == cell.column_id,
-                        LinkCheckViolation.problem.in_(("omitted", "hallucinated")),
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        for v in violations:
-            v.resolution = (
-                "unsolved" if normalize_link(v.link) in still else "solved"
-            )
 
 
 # ---------- resume ----------

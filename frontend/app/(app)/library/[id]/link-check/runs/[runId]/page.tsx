@@ -507,6 +507,7 @@ export default function LinkCheckRunPage({
             <div className="mt-5">
               <TranslationTableView
                 runId={rid}
+                tableId={tableId}
                 discrepancyLinksOnly
                 onFixRows={
                   canFix ? (rowIds) => setFixScope({ rowIds }) : undefined
@@ -528,7 +529,10 @@ export default function LinkCheckRunPage({
                   className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs dark:border-neutral-700 dark:bg-neutral-900"
                 >
                   <option value="">{t("linkCheckRun.filterAllProblems")}</option>
-                  {!isTranslation && (
+                  {/* "Битые" only makes sense when the crawl actually fetched
+                      links. A juxtapose-only run has no HTTP statuses, so the
+                      broken option is hidden. */}
+                  {run.check_crawl && (
                     <option value="broken">{t("linkCheckRun.broken")}</option>
                   )}
                   <option value="omitted">{omittedLabel}</option>
@@ -726,7 +730,13 @@ export default function LinkCheckRunPage({
                       className="flex items-center justify-between gap-3 px-3 py-2 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-900"
                     >
                       <span className="min-w-0 truncate text-neutral-700 dark:text-neutral-300">
-                        {fr.name || t("linkFix.runLabel", { id: fr.id })}
+                        {fr.name ||
+                          t(
+                            fr.method === "replace"
+                              ? "linkFix.replaceRunLabel"
+                              : "linkFix.runLabel",
+                            { id: fr.id },
+                          )}
                         <span className="ml-2 text-xs text-neutral-400">
                           {new Date(fr.created_at).toLocaleString()}
                         </span>

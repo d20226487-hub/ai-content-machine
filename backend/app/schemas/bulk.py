@@ -458,6 +458,16 @@ class DiffSegment(BaseModel):
     changed: bool
 
 
+class DiffBlock(BaseModel):
+    """One aligned block of a Before/After diff, shared by both sides so the two
+    panes snippet in step. ``before``/``after`` are the per-side text (either may
+    be empty for a pure insert/delete); ``changed`` marks a replaced span."""
+
+    before: str
+    after: str
+    changed: bool
+
+
 class UnifiedSegment(BaseModel):
     """One span of a single-pane diff: ``add`` green, ``del`` red+struck,
     ``equal`` plain."""
@@ -774,6 +784,9 @@ class TranslationLinkTag(BaseModel):
     url: str
     kind: Literal["ok", "discrepancy", "invented"]
     dismissed: bool = False
+    # A wrong link that a fix/replace run has since corrected — the overview
+    # shows it struck through so reviewers can see what was already handled.
+    resolved: bool = False
     expected: str | None = None
     # The original (source) link this discrepancy was paired to, so the raw
     # table can show it aligned beside the wrong translation link. None for an
@@ -791,20 +804,6 @@ class DismissRequest(BaseModel):
     """Bulk dismiss/restore of translation-table errors (per row+link)."""
 
     items: list[DismissItem] = Field(default_factory=list)
-
-
-class TranslationReplaceResult(BaseModel):
-    """Outcome of fixing wrong translation links.
-
-    ``replaced`` = links swapped for their expected link; ``stripped`` = links
-    that shouldn't exist (no expected) whose ``<a>`` wrapper was removed, keeping
-    the anchor text; ``skipped`` = selected links not found in the cell;
-    ``rows_changed`` = distinct translation cells written."""
-
-    replaced: int
-    stripped: int = 0
-    skipped: int
-    rows_changed: int
 
 
 class AlignedRow(BaseModel):
@@ -893,6 +892,9 @@ class LinkFixRunRead(BaseModel):
     recheck_run_id: int | None
     target_column_id: int | None = None
     prompt: str | None = None
+    # 'ai' (LLM rewrite) | 'replace' (deterministic link swap). Drives the
+    # run's display name so the two job kinds read distinctly in the history.
+    method: Literal["ai", "replace"] = "ai"
     status: LinkFixStatus
     column_ids: list[int]
     expected_column_ids: list[int]
@@ -906,6 +908,9 @@ class LinkFixRunRead(BaseModel):
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+    # Last per-cell progress stamp — drives the run page's "stalled?" check so
+    # Resume is only offered when a running job has actually gone quiet.
+    last_progress_at: datetime | None = None
 
 
 class LinkFixViolationLite(BaseModel):
@@ -929,9 +934,9 @@ class LinkFixCellRead(BaseModel):
     new_value: str | None
     violations: list[LinkFixViolationLite]
     error: str | None = None
-    # Char-level diff of source_value → new_value (Before / After highlight).
-    before_segments: list[DiffSegment] = []
-    after_segments: list[DiffSegment] = []
+    # Aligned char-level diff of source_value → new_value: one shared block list
+    # so the Before/After panes collapse the same regions and stay lined up.
+    diff_blocks: list[DiffBlock] = []
 
 
 class LinkFixRunDetail(LinkFixRunRead):

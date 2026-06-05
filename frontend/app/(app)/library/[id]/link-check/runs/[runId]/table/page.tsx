@@ -49,7 +49,7 @@ export default function TranslationTablePage({
       </div>
 
       <div className="mt-4">
-        <TranslationTableView runId={rid} />
+        <TranslationTableView runId={rid} tableId={tableId} />
       </div>
     </main>
   );

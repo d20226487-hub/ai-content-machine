@@ -27,6 +27,11 @@ export interface LinkFixRequest {
   prompt?: string | null;
 }
 
+/** How a correction run rewrote the links: an LLM rewrite ("ai") or a
+ *  deterministic swap of each wrong translation link for its expected one
+ *  ("replace"). Drives the run's display name. */
+export type LinkFixMethod = "ai" | "replace";
+
 export interface LinkFixRun {
   id: number;
   table_id: number;
@@ -35,6 +40,7 @@ export interface LinkFixRun {
   recheck_run_id: number | null;
   target_column_id: number | null;
   prompt: string | null;
+  method: LinkFixMethod;
   status: LinkFixStatus;
   column_ids: number[];
   expected_column_ids: number[];
@@ -48,6 +54,7 @@ export interface LinkFixRun {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  last_progress_at: string | null;
 }
 
 export interface LinkFixViolationLite {
@@ -57,9 +64,12 @@ export interface LinkFixViolationLite {
   status_code: number | null;
 }
 
-/** Two-sided diff span. `changed` = struck red (Before) / green (After). */
-export interface DiffSegment {
-  text: string;
+/** One aligned Before/After diff block, shared by both panes so they snippet
+ *  in step. `before`/`after` are the per-side text (either may be empty for a
+ *  pure insert/delete); `changed` = struck red (Before) / green (After). */
+export interface DiffBlock {
+  before: string;
+  after: string;
   changed: boolean;
 }
 
@@ -80,8 +90,7 @@ export interface LinkFixCell {
   new_value: string | null;
   violations: LinkFixViolationLite[];
   error: string | null;
-  before_segments: DiffSegment[];
-  after_segments: DiffSegment[];
+  diff_blocks: DiffBlock[];
 }
 
 /** A cell corrected by an applied fix run — grid tint + Changes view. */

@@ -1,4 +1,5 @@
 import { api } from "./api";
+import type { LinkFixRun } from "./linkFix";
 
 // Mirrors backend app/schemas/bulk.py (link checker section).
 
@@ -185,6 +186,9 @@ export interface TranslationLinkTag {
   kind: TranslationLinkKind;
   /** The user bulk-dismissed this error. */
   dismissed: boolean;
+  /** A wrong link a fix/replace run has since corrected — shown struck through
+   *  in the overview, and not selectable. */
+  resolved?: boolean;
   /** The link this one SHOULD have been (set only for a discrepancy paired to
    *  an expected link). Used to underline just the drifting part. */
   expected?: string | null;
@@ -272,20 +276,15 @@ export function restoreTranslationErrors(
   );
 }
 
-export interface TranslationReplaceResult {
-  replaced: number;
-  stripped: number;
-  skipped: number;
-  rows_changed: number;
-}
-
 /** Replace each selected wrong translation link with its expected link,
- *  in-place in the translated-content cell. */
+ *  in-place in the translated-content cell. Recorded as a revertable
+ *  link-fix run (method='replace'); returns that run so the caller can open
+ *  its detail page alongside the AI corrections. */
 export function replaceTranslationLinks(
   runId: number,
   items: DismissItem[],
-): Promise<TranslationReplaceResult> {
-  return api<TranslationReplaceResult>(
+): Promise<LinkFixRun> {
+  return api<LinkFixRun>(
     `/library/link-check-runs/${runId}/translation-table/replace`,
     { method: "POST", body: { items } },
   );

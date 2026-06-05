@@ -1780,9 +1780,7 @@ export const en = {
   "linkCheckRun.replaceSelected": "Replace ({n})",
   "linkCheckRun.fixSelectedAi": "Fix with AI ({n})",
   "linkCheckRun.confirmReplace":
-    "Replace the wrong translation link(s) with the expected link in {n} selected item(s)? This edits the translated content.",
-  "linkCheckRun.replaceResult":
-    "Replaced {replaced}, removed {stripped}, skipped {skipped}.",
+    "Replace the wrong translation link(s) with the expected link in {n} selected item(s)? This edits the translated content and is recorded as a revertable job.",
   "linkCheckRun.rawLegendOk": "Matches expected",
   "linkCheckRun.rawLegendDiscrepancy": "Discrepancy",
   "linkCheckRun.rawLegendInvented": "Made-up",
@@ -1847,9 +1845,10 @@ export const en = {
   "linkFix.overwriteWarn":
     "This replaces the original content in place. Consider a new column to keep the original.",
   "linkFix.startFix": "Start fix",
-  "linkFix.correctionsHeading": "AI corrections from this run",
-  "linkFix.fixedBadge": "Fixed by an AI correction",
-  "linkFix.runLabel": "Fix #{id}",
+  "linkFix.correctionsHeading": "Corrections from this run",
+  "linkFix.fixedBadge": "Fixed by a correction",
+  "linkFix.runLabel": "AI fix #{id}",
+  "linkFix.replaceRunLabel": "Link replace #{id}",
   "linkFixRun.revertedBadge": "reverted",
   // Shared run rename/delete actions
   "runs.rename": "Rename",
@@ -1860,10 +1859,15 @@ export const en = {
   "linkFix.needExpected":
     "AI fixing needs an expected-links column. Re-run the check with “Compare to expected links” on so it knows the correct links.",
   "linkFixRun.title": "AI link fix #{id}",
+  "linkFixRun.replaceTitle": "Link replace #{id}",
   "linkFixRun.confirmCancel": "Stop this AI fix run?",
   "linkFixRun.confirmRevert":
     "Restore every cell this run changed to its value before the fix? Cells edited since are left as-is.",
   "linkFixRun.revert": "Revert",
+  "linkFixRun.resumeStalledHint":
+    "This run hasn't progressed in a while — resume to re-enqueue its remaining cells.",
+  "linkFixRun.stalledNote":
+    "No progress for a while — the run may be stalled. You can resume it.",
   "linkFixRun.revertedNote": "Reverted on {when}.",
   "linkFixRun.fixing": "Fixing {done} / {total} cells…",
   "linkFixRun.fixed": "Fixed",
@@ -1873,6 +1877,8 @@ export const en = {
   "linkFixRun.viewRecheck": "See what's now Solved / Unsolved on the check run →",
   "linkFixRun.before": "Before",
   "linkFixRun.after": "After",
+  "linkFixRun.showFull": "Show full text",
+  "linkFixRun.showSnippet": "Show changes only",
   "linkFixRun.state.pending": "Pending",
   "linkFixRun.state.done": "Fixed",
   "linkFixRun.state.failed": "Failed",

@@ -1845,9 +1845,7 @@ export const ru: Record<keyof typeof en, string> = {
   "linkCheckRun.replaceSelected": "Заменить ({n})",
   "linkCheckRun.fixSelectedAi": "Исправить с ИИ ({n})",
   "linkCheckRun.confirmReplace":
-    "Заменить неверные ссылки перевода на ожидаемые в выбранных элементах ({n})? Это изменит переведённый контент.",
-  "linkCheckRun.replaceResult":
-    "Заменено: {replaced}, удалено: {stripped}, пропущено: {skipped}.",
+    "Заменить неверные ссылки перевода на ожидаемые в выбранных элементах ({n})? Это изменит переведённый контент и будет записано как откатываемая задача.",
   "linkCheckRun.rawLegendOk": "Совпадает с ожидаемой",
   "linkCheckRun.rawLegendDiscrepancy": "Несоответствие",
   "linkCheckRun.rawLegendInvented": "Выдуманная",
@@ -1912,9 +1910,10 @@ export const ru: Record<keyof typeof en, string> = {
   "linkFix.overwriteWarn":
     "Это заменит исходный контент на месте. Лучше выберите новую колонку, чтобы сохранить оригинал.",
   "linkFix.startFix": "Запустить исправление",
-  "linkFix.correctionsHeading": "ИИ-исправления из этого запуска",
-  "linkFix.fixedBadge": "Исправлено ИИ",
-  "linkFix.runLabel": "Исправление #{id}",
+  "linkFix.correctionsHeading": "Исправления из этого запуска",
+  "linkFix.fixedBadge": "Исправлено",
+  "linkFix.runLabel": "ИИ-исправление #{id}",
+  "linkFix.replaceRunLabel": "Замена ссылок #{id}",
   "linkFixRun.revertedBadge": "откачено",
   // Общие действия переименования/удаления запусков
   "runs.rename": "Переименовать",
@@ -1925,10 +1924,15 @@ export const ru: Record<keyof typeof en, string> = {
   "linkFix.needExpected":
     "Для исправления ИИ нужна колонка с ожидаемыми ссылками. Перезапустите проверку с включённым «Сравнить с ожидаемыми ссылками», чтобы ИИ знал правильные ссылки.",
   "linkFixRun.title": "ИИ-исправление ссылок #{id}",
+  "linkFixRun.replaceTitle": "Замена ссылок #{id}",
   "linkFixRun.confirmCancel": "Остановить это ИИ-исправление?",
   "linkFixRun.confirmRevert":
     "Вернуть все изменённые этим запуском ячейки к значению до исправления? Ячейки, отредактированные после, не трогаются.",
   "linkFixRun.revert": "Откатить",
+  "linkFixRun.resumeStalledHint":
+    "Запуск давно не двигался — возобновите, чтобы поставить оставшиеся ячейки в очередь заново.",
+  "linkFixRun.stalledNote":
+    "Прогресса давно нет — запуск мог зависнуть. Его можно возобновить.",
   "linkFixRun.revertedNote": "Откачено {when}.",
   "linkFixRun.fixing": "Исправлено {done} / {total} ячеек…",
   "linkFixRun.fixed": "Исправлено",
@@ -1938,6 +1942,8 @@ export const ru: Record<keyof typeof en, string> = {
   "linkFixRun.viewRecheck": "Что теперь Решено / Не решено — на странице проверки →",
   "linkFixRun.before": "До",
   "linkFixRun.after": "После",
+  "linkFixRun.showFull": "Показать весь текст",
+  "linkFixRun.showSnippet": "Только изменения",
   "linkFixRun.state.pending": "В очереди",
   "linkFixRun.state.done": "Исправлено",
   "linkFixRun.state.failed": "Ошибка",

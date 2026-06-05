@@ -160,6 +160,39 @@ def diff_segments(old: str, new: str) -> tuple[list[dict], list[dict]]:
     return old_segs, new_segs
 
 
+def aligned_diff(old: str, new: str) -> list[dict]:
+    """Aligned char-level diff: ONE list of blocks shared by both sides, each
+    ``{"before": str, "after": str, "changed": bool}``.
+
+    Unlike :func:`diff_segments` (two independent per-side lists), every block
+    occupies the same position on both sides: for an ``equal`` run
+    ``before == after``; for a replace/insert/delete run the two differ and
+    either may be empty (a pure deletion has ``after == ""``, a pure insertion
+    ``before == ""``). Concatenating the ``before`` fields reproduces ``old``
+    and the ``after`` fields reproduce ``new``. Adjacent changed runs coalesce.
+
+    A single aligned list is what lets the fix-run page snippet the Before/After
+    panes IN STEP — collapsing the same unchanged stretches on both sides so the
+    two snippets stay lined up (a pure deletion no longer snippets one pane while
+    leaving the other whole)."""
+    sm = difflib.SequenceMatcher(a=old or "", b=new or "", autojunk=False)
+    blocks: list[dict] = []
+
+    def push(before: str, after: str, changed: bool) -> None:
+        if not before and not after:
+            return
+        if blocks and blocks[-1]["changed"] == changed:
+            blocks[-1]["before"] += before
+            blocks[-1]["after"] += after
+        else:
+            blocks.append({"before": before, "after": after, "changed": changed})
+
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        same = tag == "equal"
+        push((old or "")[i1:i2], (new or "")[j1:j2], not same)
+    return blocks
+
+
 def unified_segments(old: str, new: str) -> list[dict]:
     """Single-pane char-level diff of ``old`` → ``new`` for a "Changes" view.
 

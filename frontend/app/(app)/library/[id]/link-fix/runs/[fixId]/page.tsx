@@ -13,9 +13,10 @@ import {
   getLinkFixRun,
   resumeLinkFixRun,
   revertLinkFixRun,
-  type DiffSegment,
+  type DiffBlock,
   type LinkFixCell,
   type LinkFixRunDetail,
+  type LinkFixViolationLite,
 } from "@/lib/linkFix";
 
 const PAGE_SIZE = 25;
@@ -118,6 +119,15 @@ export default function LinkFixRunPage({
 
   const isActive = run?.status === "queued" || run?.status === "running";
   const reverted = !!run?.reverted_at;
+  // A running job that hasn't made progress for a while is effectively stalled
+  // (worker died / lost message). Only then do we offer Resume — a healthy
+  // running job is left to finish on its own. 90s comfortably clears a slow
+  // per-cell LLM call without leaving a truly-stuck job without a way out.
+  const STALL_MS = 90_000;
+  const stalled =
+    run?.status === "running" &&
+    !!run.last_progress_at &&
+    Date.now() - new Date(run.last_progress_at).getTime() > STALL_MS;
 
   return (
     <main className="mx-auto max-w-5xl px-5 py-6">
@@ -143,7 +153,12 @@ export default function LinkFixRunPage({
           <header className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
-                {t("linkFixRun.title", { id: run.id })}
+                {t(
+                  run.method === "replace"
+                    ? "linkFixRun.replaceTitle"
+                    : "linkFixRun.title",
+                  { id: run.id },
+                )}
               </h1>
               <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
                 {t("linkCheckRun.meta", {
@@ -156,14 +171,17 @@ export default function LinkFixRunPage({
               <LinkCheckStatusChip status={run.status} />
               {isActive && (
                 <>
-                  <button
-                    type="button"
-                    onClick={onResume}
-                    disabled={busy !== ""}
-                    className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-60 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-                  >
-                    {busy === "resume" ? t("common.loading") : t("linkCheckRun.resume")}
-                  </button>
+                  {stalled && (
+                    <button
+                      type="button"
+                      onClick={onResume}
+                      disabled={busy !== ""}
+                      title={t("linkFixRun.resumeStalledHint")}
+                      className="rounded-md border border-amber-300 px-3 py-1.5 text-sm font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-60 dark:border-amber-700/60 dark:text-amber-300 dark:hover:bg-amber-900/20"
+                    >
+                      {busy === "resume" ? t("common.loading") : t("linkCheckRun.resume")}
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={onCancel}
@@ -204,6 +222,11 @@ export default function LinkFixRunPage({
                   total: run.total,
                 })}
               </p>
+              {stalled && (
+                <p className="mb-1.5 text-xs text-amber-700 dark:text-amber-300">
+                  {t("linkFixRun.stalledNote")}
+                </p>
+              )}
               <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
                 <div
                   className="h-full bg-violet-500 transition-[width] duration-300 dark:bg-violet-400"
@@ -264,8 +287,29 @@ export default function LinkFixRunPage({
   );
 }
 
+/** Collapse a cell's violations to one entry per distinct problem type (order
+ *  preserved), carrying the count and the underlying links for the tooltip. */
+function dedupeViolations(
+  violations: LinkFixViolationLite[],
+): { problem: string; count: number; links: string[] }[] {
+  const order: string[] = [];
+  const by = new Map<string, { count: number; links: string[] }>();
+  for (const v of violations) {
+    let e = by.get(v.problem);
+    if (!e) {
+      e = { count: 0, links: [] };
+      by.set(v.problem, e);
+      order.push(v.problem);
+    }
+    e.count += 1;
+    if (v.link) e.links.push(v.link);
+  }
+  return order.map((problem) => ({ problem, ...by.get(problem)! }));
+}
+
 function FixCellRow({ cell }: { cell: LinkFixCell }) {
   const { t } = useT();
+  const [showFull, setShowFull] = useState(false);
   const stateCls =
     cell.state === "done"
       ? "text-green-700 dark:text-green-400"
@@ -280,16 +324,28 @@ function FixCellRow({ cell }: { cell: LinkFixCell }) {
         <span className="font-medium text-neutral-700 dark:text-neutral-300">
           {cell.column_name} · #{cell.row_position + 1}
         </span>
-        <span className={"font-medium " + stateCls}>
-          {t(`linkFixRun.state.${cell.state}` as never)}
-        </span>
-        {cell.violations.map((v, i) => (
+        {/* For a done cell the "Исправлено" label lives on the corrected-link
+            box below; in the header it'd float free of the change it describes.
+            Other states (failed / skipped / pending) have no box, so keep them
+            here. */}
+        {cell.state !== "done" && (
+          <span className={"font-medium " + stateCls}>
+            {t(`linkFixRun.state.${cell.state}` as never)}
+          </span>
+        )}
+        {/* Dedupe by problem type: a translation cell can carry several
+            omitted + hallucinated links (two halves of each wrong link), which
+            rendered as a noisy, misleading repeat of the same two labels. Show
+            one chip per distinct problem, with a count when it stands for more
+            than one link. */}
+        {dedupeViolations(cell.violations).map(({ problem, count, links }) => (
           <span
-            key={i}
+            key={problem}
             className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
-            title={v.link}
+            title={links.join("\n")}
           >
-            {t(`linkCheckRun.${v.problem}` as never)}
+            {t(`linkCheckRun.${problem}` as never)}
+            {count > 1 ? ` ×${count}` : ""}
           </span>
         ))}
       </div>
@@ -298,45 +354,155 @@ function FixCellRow({ cell }: { cell: LinkFixCell }) {
           {cell.error}
         </p>
       )}
-      {cell.state === "done" && (
-        <div className="mt-2 grid gap-2 sm:grid-cols-2">
-          <div>
-            <p className="mb-1 text-[10px] uppercase tracking-wide text-neutral-400">
-              {t("linkFixRun.before")}
-            </p>
-            <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-neutral-50 p-2 text-xs text-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
-              <DiffText segments={cell.before_segments} side="before" />
-            </pre>
-          </div>
-          <div>
-            <p className="mb-1 text-[10px] uppercase tracking-wide text-neutral-400">
-              {t("linkFixRun.after")}
-            </p>
-            <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-neutral-50 p-2 text-xs text-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
-              <DiffText segments={cell.after_segments} side="after" />
-            </pre>
-          </div>
-        </div>
-      )}
+      {cell.state === "done" &&
+        (() => {
+          // ONE aligned snippet drives BOTH panes — changed spans + a little
+          // context, the same unchanged stretches collapsed on each side — so
+          // the Before/After snippets stay lined up (a pure deletion no longer
+          // snippets one pane while leaving the other whole).
+          const snip = buildSnippet(cell.diff_blocks);
+          const trimmed = snip.trimmed;
+          const items = showFull ? cell.diff_blocks : snip.items;
+          return (
+            <>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <div>
+                  <p className="mb-1 text-[10px] uppercase tracking-wide text-neutral-400">
+                    {t("linkFixRun.before")}
+                  </p>
+                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-neutral-50 p-2 text-xs text-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
+                    <DiffText items={items} side="before" />
+                  </pre>
+                </div>
+                <div>
+                  <p className="mb-1 flex items-center gap-2">
+                    <span className="text-[10px] uppercase tracking-wide text-neutral-400">
+                      {t("linkFixRun.after")}
+                    </span>
+                    <span className="rounded-full bg-green-50 px-1.5 py-0.5 text-[10px] font-medium text-green-700 dark:bg-green-950/40 dark:text-green-400">
+                      {t("linkFixRun.state.done")}
+                    </span>
+                  </p>
+                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-neutral-50 p-2 text-xs text-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
+                    <DiffText items={items} side="after" />
+                  </pre>
+                </div>
+              </div>
+              {trimmed && (
+                <button
+                  type="button"
+                  onClick={() => setShowFull((v) => !v)}
+                  className="mt-1.5 text-[11px] font-medium text-blue-600 hover:underline dark:text-blue-400"
+                >
+                  {showFull
+                    ? t("linkFixRun.showSnippet")
+                    : t("linkFixRun.showFull")}
+                </button>
+              )}
+            </>
+          );
+        })()}
     </div>
   );
 }
 
-/** Renders diff segments: on the Before side changed spans are struck red
- *  (links being removed/changed); on the After side they're highlighted green
- *  (links added/changed). */
+/** A snippet render item: an aligned diff block, or a collapsed gap. */
+type RenderItem = DiffBlock | { ellipsis: true };
+
+/** Chars of unchanged context kept on each side of a changed span. */
+const SNIPPET_CONTEXT = 60;
+
+/** Reduce an aligned diff to just its changed blocks plus a little surrounding
+ *  context, collapsing long unchanged stretches to an ellipsis — so a one-link
+ *  edit inside a large cell reads as a focused snippet, not the whole document.
+ *  Operating on the SHARED block list (not the two panes independently) keeps
+ *  the Before/After snippets aligned. `trimmed` reports whether anything was
+ *  collapsed (drives the "show full" toggle). Blocks alternate changed/unchanged
+ *  (the backend coalesces runs), so each unchanged run is trimmed by its changed
+ *  neighbours; an unchanged block has `before === after`. */
+function buildSnippet(blocks: DiffBlock[]): {
+  items: RenderItem[];
+  trimmed: boolean;
+} {
+  if (!blocks.some((b) => b.changed)) return { items: blocks, trimmed: false };
+  const items: RenderItem[] = [];
+  let trimmed = false;
+  const gap = () => {
+    const last = items[items.length - 1];
+    if (last && "ellipsis" in last) return;
+    items.push({ ellipsis: true });
+    trimmed = true;
+  };
+  const keep = (text: string): DiffBlock => ({
+    before: text,
+    after: text,
+    changed: false,
+  });
+  const n = blocks.length;
+  for (let i = 0; i < n; i++) {
+    const b = blocks[i];
+    if (b.changed) {
+      items.push(b);
+      continue;
+    }
+    const prevChanged = i > 0 && blocks[i - 1].changed;
+    const nextChanged = i < n - 1 && blocks[i + 1].changed;
+    const text = b.before; // unchanged → before === after
+    if (prevChanged && nextChanged) {
+      if (text.length <= SNIPPET_CONTEXT * 2) items.push(b);
+      else {
+        items.push(keep(text.slice(0, SNIPPET_CONTEXT)));
+        gap();
+        items.push(keep(text.slice(-SNIPPET_CONTEXT)));
+      }
+    } else if (prevChanged) {
+      if (text.length <= SNIPPET_CONTEXT) items.push(b);
+      else {
+        items.push(keep(text.slice(0, SNIPPET_CONTEXT)));
+        gap();
+      }
+    } else if (nextChanged) {
+      if (text.length <= SNIPPET_CONTEXT) items.push(b);
+      else {
+        gap();
+        items.push(keep(text.slice(-SNIPPET_CONTEXT)));
+      }
+    } else {
+      gap(); // unchanged and far from any change → collapse entirely
+    }
+  }
+  return { items, trimmed };
+}
+
+/** Renders one pane of the aligned diff. `side` selects the block's before/
+ *  after text: changed spans are struck red on Before, highlighted green on
+ *  After; a block empty on this side (a pure insert/delete) renders nothing;
+ *  collapsed gaps render as a centered ellipsis. Both panes pass the SAME items
+ *  so they line up. */
 function DiffText({
-  segments,
+  items,
   side,
 }: {
-  segments: DiffSegment[];
+  items: RenderItem[];
   side: "before" | "after";
 }) {
-  if (!segments || segments.length === 0) return null;
+  if (!items || items.length === 0) return null;
   return (
     <>
-      {segments.map((s, i) =>
-        s.changed ? (
+      {items.map((it, i) => {
+        if ("ellipsis" in it) {
+          return (
+            <span
+              key={i}
+              className="my-0.5 block select-none text-center text-neutral-400 dark:text-neutral-500"
+            >
+              ⋯
+            </span>
+          );
+        }
+        const text = side === "before" ? it.before : it.after;
+        if (!text) return null;
+        return it.changed ? (
           <mark
             key={i}
             className={
@@ -345,12 +511,12 @@ function DiffText({
                 : "bg-green-100 text-green-900 dark:bg-green-900/40 dark:text-green-200"
             }
           >
-            {s.text}
+            {text}
           </mark>
         ) : (
-          <span key={i}>{s.text}</span>
-        ),
-      )}
+          <span key={i}>{text}</span>
+        );
+      })}
     </>
   );
 }

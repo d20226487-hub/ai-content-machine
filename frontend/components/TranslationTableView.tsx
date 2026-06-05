@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Pagination } from "@/components/Pagination";
@@ -117,16 +118,20 @@ function urlDiff(expected: string, actual: string): UrlDiffSeg[] {
  *  standalone raw-table page. */
 export function TranslationTableView({
   runId,
+  tableId,
   discrepancyLinksOnly = false,
   onFixRows,
 }: {
   runId: number;
+  /** Needed to open the resulting replace job's detail page. */
+  tableId: number;
   discrepancyLinksOnly?: boolean;
   /** When provided, a "Fix with AI" button appears in the selection bar and
    *  calls this with the distinct selected row ids. */
   onFixRows?: (rowIds: number[]) => void;
 }) {
   const { t } = useT();
+  const router = useRouter();
 
   const [rows, setRows] = useState<TranslationTableRow[]>([]);
   const [page, setPage] = useState(1);
@@ -136,13 +141,11 @@ export function TranslationTableView({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => setPage(1), [view, linkType]);
   useEffect(() => {
     setSelected(new Set());
-    setNotice(null);
   }, [view, linkType, page]);
 
   const load = useCallback(
@@ -176,6 +179,7 @@ export function TranslationTableView({
           .filter(
             (l) =>
               l.kind !== "ok" &&
+              !l.resolved &&
               (view === "dismissed" ? l.dismissed : !l.dismissed),
           )
           .map((l) => errKey(r.row_id, l.url)),
@@ -215,29 +219,21 @@ export function TranslationTableView({
     }
   }
 
-  // Swap each selected wrong link for its expected link, in the cell itself.
+  // Swap each selected wrong link for its expected link, in the cell itself —
+  // recorded as a revertable replace job; open its detail page on success.
   async function applyReplace() {
     if (selected.size === 0 || busy) return;
     if (!window.confirm(t("linkCheckRun.confirmReplace", { n: selected.size })))
       return;
     setBusy(true);
     setError(null);
-    setNotice(null);
     try {
       const items = Array.from(selected).map(splitKey);
-      const res = await replaceTranslationLinks(runId, items);
+      const run = await replaceTranslationLinks(runId, items);
       setSelected(new Set());
-      await load(page);
-      setNotice(
-        t("linkCheckRun.replaceResult", {
-          replaced: res.replaced,
-          stripped: res.stripped,
-          skipped: res.skipped,
-        }),
-      );
+      router.push(`/library/${tableId}/link-fix/runs/${run.id}`);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
-    } finally {
       setBusy(false);
     }
   }
@@ -335,12 +331,6 @@ export function TranslationTableView({
         </div>
       )}
 
-      {notice && (
-        <p className="mt-3 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
-          {notice}
-        </p>
-      )}
-
       {error && (
         <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
           {error}
@@ -381,7 +371,7 @@ export function TranslationTableView({
                       return probs.map((l, idx) => {
                         const inView =
                           view === "dismissed" ? l.dismissed : !l.dismissed;
-                        const showCheck = selectable && inView;
+                        const showCheck = selectable && inView && !l.resolved;
                         const k = errKey(r.row_id, l.url);
                         return (
                           <tr key={`${r.row_id}:${l.url}`} className="align-top">
@@ -566,6 +556,29 @@ function TranslationLink({ tag }: { tag: TranslationLinkTag }) {
       ? t("linkCheckRun.rawExpectedTooltip", { url: tag.expected })
       : undefined;
 
+  // A corrected link — struck through, with a ✓, so reviewers can see what a
+  // fix/replace run already handled.
+  if (tag.resolved) {
+    return (
+      <span className="inline-flex items-start gap-1">
+        <span
+          className="text-green-600 dark:text-green-400"
+          title={t("linkFix.fixedBadge")}
+        >
+          ✓
+        </span>
+        <a
+          href={tag.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="break-all text-neutral-400 line-through dark:text-neutral-500"
+        >
+          {tag.url}
+        </a>
+      </span>
+    );
+  }
+
   if (
     tag.kind === "discrepancy" &&
     tag.expected &&
@@ -645,7 +658,7 @@ function TranslationCell({
       {shown.map((l, i) => {
         const isError = l.kind !== "ok";
         const inView = view === "dismissed" ? l.dismissed : !l.dismissed;
-        const showCheck = selectable && isError && inView;
+        const showCheck = selectable && isError && inView && !l.resolved;
         const k = errKey(rowId, l.url);
         return (
           <li key={`${l.url}:${i}`} className="flex items-start gap-1.5">

@@ -56,6 +56,13 @@ class LinkFixRun(Base):
 
     # queued → running → (cancelled | done | failed)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    # How the cells are corrected (migration 0052):
+    #   ai      — the Brain ``fix_links`` LLM rewrites the links.
+    #   replace — a deterministic swap of each wrong translation link for its
+    #             computed expected link (no model call).
+    method: Mapped[str] = mapped_column(
+        String(12), nullable=False, default="ai", server_default="ai"
+    )
     # Optional user-given label (NULL → UI shows a "<tool> #<id>" fallback).
     name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     # Column the corrected content is written to. NULL = overwrite the source
