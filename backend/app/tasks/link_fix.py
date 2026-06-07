@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
-from app.db.models import BulkTableCell, LinkFixCell, LinkFixRun
+from app.db.models import BulkTableCell, LinkCheckRun, LinkFixCell, LinkFixRun
 from app.providers.base import ProviderError
 from app.providers.registry import ProviderNotConfigured
 from app.services.brain import fix_links_text
@@ -61,6 +61,15 @@ async def _with_session(fn: Callable[[AsyncSession], Awaitable[None]]) -> None:
 @celery_app.task(name="linkfix.fix_cell")
 def fix_cell(run_id: int, cell_id: int) -> dict:
     asyncio.run(_with_session(lambda db: _fix_cell(db, run_id, cell_id)))
+    return {"run_id": run_id, "cell_id": cell_id, "ok": True}
+
+
+@celery_app.task(name="linkfix.replace_cell")
+def replace_cell(run_id: int, cell_id: int) -> dict:
+    """Deterministic per-cell sibling of ``fix_cell`` for ``method='replace'``
+    runs: swap each seeded wrong link for its (re-derived) expected link in
+    place. Same fan-out / progress / finalize machinery — no LLM call."""
+    asyncio.run(_with_session(lambda db: _replace_cell(db, run_id, cell_id)))
     return {"run_id": run_id, "cell_id": cell_id, "ok": True}
 
 
@@ -188,6 +197,145 @@ async def _fix_cell(db: AsyncSession, run_id: int, cell_id: int) -> None:
     await _finalize_if_done(db, run_id)
 
 
+async def _replace_cell(db: AsyncSession, run_id: int, cell_id: int) -> None:
+    """Deterministic in-place link swap for one seeded cell. The links to swap
+    were stored on the cell's ``violations`` at seed time; the EXPECTED link is
+    re-derived here (never trusted from the client). Mirrors ``_fix_cell``'s
+    idempotency, cancel handling, progress bump and finalize."""
+    from app.services.translation_links import (
+        compute_row_breakdown,
+        parse_domains,
+        replace_link_in_text,
+        strip_link_in_text,
+    )
+
+    cell = await db.get(LinkFixCell, cell_id)
+    if cell is None or cell.state != "pending":
+        return  # already processed / redelivery
+    run = await db.get(LinkFixRun, run_id)
+    if run is None or run.status in ("done", "failed"):
+        return
+    if run.status == "cancelled":
+        cell.state = "skipped"
+        await _bump(db, run_id, "skipped")
+        await db.commit()
+        await _finalize_if_done(db, run_id)
+        return
+
+    want_links = [
+        str(v["link"])
+        for v in (cell.violations or [])
+        if isinstance(v, dict) and v.get("link")
+    ]
+    source = (
+        await db.get(LinkCheckRun, run.source_run_id)
+        if run.source_run_id
+        else None
+    )
+    cfg = source.translation_config if source else None
+    if not cfg or not want_links:
+        cell.state = "skipped"
+        await _bump(db, run_id, "skipped")
+        await db.commit()
+        await _finalize_if_done(db, run_id)
+        return
+
+    try:
+        orig_col = int(cfg["original_column_id"])
+        trans_col = int(cfg["translated_column_id"])
+        lang_col = int(cfg["lang_column_id"])
+        domain_cols = [int(c) for c in cfg.get("internal_domain_column_ids", [])]
+        product_domains = cfg.get("product_domains", []) or []
+        exceptions = cfg.get("exceptions", []) or []
+        default_langs = cfg.get("product_default_langs", {}) or {}
+        internal_t = cfg.get("internal_treatment", "skip")
+        external_t = cfg.get("external_treatment", "skip")
+
+        vals = {
+            cid: val
+            for cid, val in (
+                await db.execute(
+                    select(BulkTableCell.column_id, BulkTableCell.value).where(
+                        BulkTableCell.row_id == cell.row_id,
+                        BulkTableCell.column_id.in_(
+                            [orig_col, trans_col, lang_col, *domain_cols]
+                        ),
+                    )
+                )
+            ).all()
+        }
+        internal_domains: list[str] = []
+        for dc in domain_cols:
+            internal_domains += parse_domains(vals.get(dc))
+        bd = compute_row_breakdown(
+            vals.get(orig_col),
+            vals.get(trans_col),
+            (vals.get(lang_col) or "").strip(),
+            internal_domains=internal_domains,
+            product_domains=product_domains,
+            exceptions=exceptions,
+            internal_treatment=internal_t,
+            external_treatment=external_t,
+            default_langs=default_langs,
+        )
+        tag_by_url = {t["url"]: t for t in bd["translation"] if t["kind"] != "ok"}
+
+        old_value = vals.get(trans_col)
+        new_value = old_value or ""
+        applied: list[dict] = []
+        for link in want_links:
+            tag = tag_by_url.get(link)
+            if tag is None or not new_value:
+                continue  # no longer a problem link / empty cell
+            expected = tag.get("expected")
+            if expected:
+                new_value, n = replace_link_in_text(new_value, link, expected)
+            else:
+                new_value, n = strip_link_in_text(new_value, link)
+            if n > 0:
+                applied.append(
+                    {
+                        "problem": "hallucinated",
+                        "link": link,
+                        "detail_code": "not_in_expected",
+                        "status_code": None,
+                    }
+                )
+
+        changed = new_value != (old_value or "")
+        cell.source_value = old_value
+        cell.old_value = old_value
+        cell.violations = applied
+        if changed:
+            # Preserve the cell's status (a targeted fix isn't a regeneration),
+            # but drop any cached translation — it no longer matches the source.
+            await db.execute(
+                update(BulkTableCell)
+                .where(
+                    BulkTableCell.row_id == cell.row_id,
+                    BulkTableCell.column_id == trans_col,
+                )
+                .values(value=new_value, translations=None)
+            )
+            cell.new_value = new_value
+            cell.state = "done"
+            await _bump(db, run_id, "done")
+        else:
+            cell.new_value = None
+            cell.state = "skipped"
+            await _bump(db, run_id, "skipped")
+        await db.commit()
+    except Exception as e:  # noqa: BLE001 — never strand the run on bad data
+        await db.rollback()
+        cell = await db.get(LinkFixCell, cell_id)
+        if cell is not None and cell.state == "pending":
+            cell.state = "failed"
+            cell.error = str(e)[:500]
+            await _bump(db, run_id, "failed")
+            await db.commit()
+    await _finalize_if_done(db, run_id)
+
+
 async def _bump(db: AsyncSession, run_id: int, field: str) -> None:
     """Atomic counter bump + progress stamp. ``field`` is a trusted literal."""
     if field not in ("done", "failed", "skipped"):
@@ -262,5 +410,6 @@ async def _resume(db: AsyncSession, run_id: int) -> None:
     if not pending:
         await _finalize_if_done(db, run_id)
         return
+    task = replace_cell if run.method == "replace" else fix_cell
     for cid in pending:
-        fix_cell.delay(run_id, cid)
+        task.delay(run_id, cid)

@@ -3769,32 +3769,18 @@ async def replace_translation_links(
     The expected link is recomputed server-side (never trusted from the
     client), so only a genuine discrepancy that pairs to an expected link is
     swapped; an invented / "no good match" link has its ``<a>`` wrapper dropped
-    (anchor text kept). The work is deterministic and bounded, so it runs
-    synchronously here rather than fanning out to Celery. Cell status is
-    preserved and any cached translation cleared, mirroring the AI-fix path."""
-    from app.services.link_fix_apply import reverify_in_place
-    from app.services.translation_links import (
-        compute_row_breakdown,
-        parse_domains,
-        replace_link_in_text,
-        strip_link_in_text,
-    )
+    (anchor text kept). Runs as a distributed, revertable background job (one
+    pending cell per row fanned out to the ``linkfix.replace_cell`` worker) so
+    the run page shows live progress. Cell status is preserved and any cached
+    translation cleared, mirroring the AI-fix path."""
+    from app.tasks.link_fix import replace_cell as replace_cell_task
 
     run = await _get_link_check_run_or_404(db, run_id)
     await _get_table_or_404(db, run.table_id, actor, level="write")
     cfg = run.translation_config
     if not cfg:
         raise HTTPException(status_code=400, detail="Not a translation run.")
-
-    orig_col = int(cfg["original_column_id"])
     trans_col = int(cfg["translated_column_id"])
-    lang_col = int(cfg["lang_column_id"])
-    domain_cols = [int(c) for c in cfg.get("internal_domain_column_ids", [])]
-    product_domains = cfg.get("product_domains", []) or []
-    exceptions = cfg.get("exceptions", []) or []
-    default_langs = cfg.get("product_default_langs", {}) or {}
-    internal_t = cfg.get("internal_treatment", "skip")
-    external_t = cfg.get("external_treatment", "skip")
 
     # Selected wrong links grouped by row.
     want: dict[int, set[str]] = defaultdict(set)
@@ -3819,28 +3805,20 @@ async def replace_translation_links(
             )
         ).all()
     )
-    cells = (
+    # Snapshot each row's current translated-cell value as its source_value.
+    trans_vals = dict(
         (
             await db.execute(
-                select(BulkTableCell)
-                .join(BulkTableRow, BulkTableRow.id == BulkTableCell.row_id)
-                .where(
-                    BulkTableRow.table_id == run.table_id,
+                select(BulkTableCell.row_id, BulkTableCell.value).where(
                     BulkTableCell.row_id.in_(row_ids),
-                    BulkTableCell.column_id.in_(
-                        [orig_col, trans_col, lang_col, *domain_cols]
-                    ),
+                    BulkTableCell.column_id == trans_col,
                 )
             )
-        )
-        .scalars()
-        .all()
+        ).all()
     )
-    cell_by_row: dict[int, dict[int, BulkTableCell]] = defaultdict(dict)
-    for c in cells:
-        cell_by_row[c.row_id][c.column_id] = c
 
-    # Create the run up front so its cells can reference it.
+    # One pending cell per row, carrying the links to swap; the deterministic
+    # replace worker re-derives the expected link and rewrites in place.
     fix_run = LinkFixRun(
         table_id=run.table_id,
         source_run_id=run.id,
@@ -3850,99 +3828,40 @@ async def replace_translation_links(
         target_column_id=None,  # overwrite the translated column in place
         column_ids=[trans_col],
         expected_column_ids=[],
-        total=0,
+        total=len(row_ids),
         started_at=datetime.now(timezone.utc),
         last_progress_at=datetime.now(timezone.utc),
     )
     db.add(fix_run)
     await db.flush()  # fix_run.id
 
-    fix_cells: list[LinkFixCell] = []
-    done = 0
-    skipped = 0
-    for rid in row_ids:
-        links = want[rid]
-        row_cells = cell_by_row.get(rid, {})
-        vals = {cid: c.value for cid, c in row_cells.items()}
-        internal_domains: list[str] = []
-        for dc in domain_cols:
-            internal_domains += parse_domains(vals.get(dc))
-        bd = compute_row_breakdown(
-            vals.get(orig_col),
-            vals.get(trans_col),
-            (vals.get(lang_col) or "").strip(),
-            internal_domains=internal_domains,
-            product_domains=product_domains,
-            exceptions=exceptions,
-            internal_treatment=internal_t,
-            external_treatment=external_t,
-            default_langs=default_langs,
+    fix_cells = [
+        LinkFixCell(
+            run_id=fix_run.id,
+            row_id=rid,
+            row_position=row_positions.get(rid, 0),
+            column_id=trans_col,
+            column_name=trans_col_name,
+            state="pending",
+            source_value=trans_vals.get(rid),
+            violations=[
+                {
+                    "problem": "hallucinated",
+                    "link": link,
+                    "detail_code": "not_in_expected",
+                    "status_code": None,
+                }
+                for link in sorted(want[rid])
+            ],
         )
-        # Every wrong link on this row → its tag (so we know its expected, if any).
-        tag_by_url = {t["url"]: t for t in bd["translation"] if t["kind"] != "ok"}
-        cell = row_cells.get(trans_col)
-        old_value = cell.value if cell else None
-        new_value = old_value or ""
-        applied_links: list[dict] = []
-        for link in links:
-            tag = tag_by_url.get(link)
-            if tag is None or not new_value:
-                continue  # no longer a problem link / nothing to change
-            expected = tag.get("expected")
-            if expected:
-                new_value, n = replace_link_in_text(new_value, link, expected)
-            else:
-                new_value, n = strip_link_in_text(new_value, link)
-            if n > 0:
-                applied_links.append(
-                    {
-                        "problem": "hallucinated",
-                        "link": link,
-                        "detail_code": "not_in_expected",
-                        "status_code": None,
-                    }
-                )
-
-        changed = bool(cell) and new_value != (old_value or "")
-        if changed:
-            cell.value = new_value
-            # A targeted link fix isn't a regeneration — keep the status, but
-            # drop any cached translation (it no longer matches the source).
-            if cell.translations is not None:
-                cell.translations = None
-            done += 1
-        else:
-            skipped += 1
-        fix_cells.append(
-            LinkFixCell(
-                run_id=fix_run.id,
-                row_id=rid,
-                row_position=row_positions.get(rid, 0),
-                column_id=trans_col,
-                column_name=trans_col_name,
-                state="done" if changed else "skipped",
-                source_value=old_value,
-                old_value=old_value,
-                new_value=new_value if changed else None,
-                violations=applied_links,
-            )
-        )
-
+        for rid in row_ids
+    ]
     db.add_all(fix_cells)
-    fix_run.total = len(fix_cells)
-    fix_run.done = done
-    fix_run.skipped = skipped
-    fix_run.status = "done"
-    fix_run.finished_at = datetime.now(timezone.utc)
-    await db.flush()
-
-    # Stamp the source run's violations solved/unsolved so the run page and the
-    # translation overview reflect what was corrected (same path the AI fix uses).
-    await reverify_in_place(db, fix_run)
-
-    if done:
-        await _bump_table_updated(db, run.table_id)
     await db.commit()
+
+    for c in fix_cells:
+        replace_cell_task.delay(fix_run.id, c.id)
+
     await db.refresh(fix_run)
     return fix_run
 
