@@ -127,8 +127,9 @@ export function TranslationTableView({
   tableId: number;
   discrepancyLinksOnly?: boolean;
   /** When provided, a "Fix with AI" button appears in the selection bar and
-   *  calls this with the distinct selected row ids. */
-  onFixRows?: (rowIds: number[]) => void;
+   *  calls this with the distinct selected row ids plus the active link-type
+   *  filter (so the fix is scoped to the same links the table is showing). */
+  onFixRows?: (rowIds: number[], linkType: LinkTypeFilter) => void;
 }) {
   const { t } = useT();
   const router = useRouter();
@@ -318,7 +319,7 @@ export function TranslationTableView({
                       Array.from(selected).map((k) => splitKey(k).row_id),
                     ),
                   );
-                  if (rowIds.length) onFixRows(rowIds);
+                  if (rowIds.length) onFixRows(rowIds, linkType);
                 }}
                 disabled={busy}
                 className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-60"

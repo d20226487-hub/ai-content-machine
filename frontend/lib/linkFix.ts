@@ -1,5 +1,5 @@
 import { api } from "./api";
-import type { LinkProblem } from "./linkCheck";
+import type { LinkProblem, LinkTypeCategory } from "./linkCheck";
 
 // Mirrors backend app/schemas/bulk.py (AI link-fix section).
 
@@ -19,6 +19,9 @@ export interface LinkFixRequest {
   status_code?: number | null;
   q?: string | null;
   q_negate?: boolean;
+  /** Translation link-type filter — when set, only that type's violations are
+   *  fixed, matching the overview's active filter. */
+  link_type?: LinkTypeCategory | null;
   /** Where corrected output goes. Existing column id, OR a new column name to
    *  create one. Both omitted = overwrite the scanned column. */
   target_column_id?: number | null;
@@ -161,8 +164,18 @@ export function resumeLinkFixRun(runId: number): Promise<LinkFixRun> {
   });
 }
 
-export function revertLinkFixRun(runId: number): Promise<LinkFixRun> {
-  return api<LinkFixRun>(`/library/link-fix-runs/${runId}/revert`, {
+/** A revert's outcome: the run plus how many done cells were actually restored
+ *  vs. skipped because they no longer hold what the fix wrote (a later edit or
+ *  newer fix run changed them). */
+export interface LinkFixRevertResult extends LinkFixRun {
+  reverted_count: number;
+  skipped_count: number;
+}
+
+export function revertLinkFixRun(
+  runId: number,
+): Promise<LinkFixRevertResult> {
+  return api<LinkFixRevertResult>(`/library/link-fix-runs/${runId}/revert`, {
     method: "POST",
   });
 }

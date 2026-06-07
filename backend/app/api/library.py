@@ -88,6 +88,7 @@ from app.schemas.bulk import (
     LinkFixCellRead,
     LinkFixDefaultPrompt,
     LinkFixRequest,
+    LinkFixRevertResult,
     LinkFixRunDetail,
     LinkFixRunRead,
     LinkViolationRead,
@@ -4060,6 +4061,49 @@ async def start_link_fix(
         )
     violations = (await db.execute(vq)).scalars().all()
 
+    # Scope to the translation overview's link-type filter (product/internal/
+    # external) when the caller passes one. Translation runs don't persist
+    # link_type on the violation rows (it's computed live in the table view),
+    # so classify each link's host here against the run's domains; crawl runs
+    # store it, so use the stored value.
+    if payload.link_type in ("product", "internal", "external"):
+        if source.translation_config:
+            from app.services.translation_links import (
+                classify_link,
+                normalize_domain,
+                parse_domains,
+            )
+
+            cfg = source.translation_config
+            prod = [normalize_domain(d) for d in (cfg.get("product_domains") or [])]
+            dom_cols = [int(c) for c in cfg.get("internal_domain_column_ids", [])]
+            v_rows = {v.row_id for v in violations}
+            internal_by_row: dict[int, list[str]] = defaultdict(list)
+            if dom_cols and v_rows:
+                for c in (
+                    (
+                        await db.execute(
+                            select(BulkTableCell).where(
+                                BulkTableCell.row_id.in_(v_rows),
+                                BulkTableCell.column_id.in_(dom_cols),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                ):
+                    internal_by_row[c.row_id] += parse_domains(c.value)
+            violations = [
+                v
+                for v in violations
+                if classify_link(
+                    v.link, internal_by_row.get(v.row_id, []), prod
+                )
+                == payload.link_type
+            ]
+        else:
+            violations = [v for v in violations if v.link_type == payload.link_type]
+
     # Group by (row, column) → the cell to fix.
     grouped: dict[tuple[int, int], dict] = {}
     for v in violations:
@@ -4419,21 +4463,31 @@ async def resume_link_fix_run(
     return run
 
 
-@router.post("/link-fix-runs/{run_id}/revert", response_model=LinkFixRunRead)
+@router.post("/link-fix-runs/{run_id}/revert", response_model=LinkFixRevertResult)
 async def revert_link_fix_run(
     run_id: int,
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> LinkFixRun:
+) -> LinkFixRevertResult:
     """Restore the pre-fix value of every cell this run changed.
 
     Idempotent. A cell is skipped if its current value no longer matches the
     value the fix wrote (someone edited or regenerated it since) — reverting
-    would otherwise discard that later change."""
+    would otherwise discard that later change. The reverted/skipped counts let
+    the UI explain a partial or no-op revert instead of looking like nothing
+    happened."""
     run = await _get_link_fix_run_or_404(db, run_id)
     await _get_table_or_404(db, run.table_id, actor, level="write")
+
+    def _result(reverted: int, skipped: int) -> LinkFixRevertResult:
+        return LinkFixRevertResult(
+            **LinkFixRunRead.model_validate(run).model_dump(),
+            reverted_count=reverted,
+            skipped_count=skipped,
+        )
+
     if run.reverted_at is not None:
-        return run
+        return _result(0, 0)
 
     cells = (
         (
@@ -4447,6 +4501,8 @@ async def revert_link_fix_run(
         .scalars()
         .all()
     )
+    reverted = 0
+    skipped = 0
     for fc in cells:
         # Corrected content lives in the run's target column (or the source
         # column when overwriting).
@@ -4469,6 +4525,9 @@ async def revert_link_fix_run(
                 )
                 .values(value=fc.old_value, translations=None)
             )
+            reverted += 1
+        else:
+            skipped += 1
 
     # Clear the in-place re-verify stamps this run set on the source check
     # run's violations, so they read as "untouched" again.
@@ -4489,7 +4548,7 @@ async def revert_link_fix_run(
     await _bump_table_updated(db, run.table_id)
     await db.commit()
     await db.refresh(run)
-    return run
+    return _result(reverted, skipped)
 
 
 def _norm_run_name(payload: RunRename) -> str | None:

@@ -51,7 +51,12 @@ export default function LinkCheckRunPage({
   const [startingFix, setStartingFix] = useState(false);
   const [fixError, setFixError] = useState<string | null>(null);
   // Which fix was requested (rows scope). null = modal closed.
-  const [fixScope, setFixScope] = useState<{ rowIds: number[] | null } | null>(null);
+  const [fixScope, setFixScope] = useState<{
+    rowIds: number[] | null;
+    /** Translation overview's active link-type filter, so the fix is scoped to
+     *  the same links shown. Empty/"all" = every type. */
+    linkType?: LinkTypeFilter | "";
+  } | null>(null);
   // Correction runs launched from THIS check run (nested below).
   const [fixRuns, setFixRuns] = useState<LinkFixRun[]>([]);
 
@@ -256,6 +261,7 @@ export default function LinkCheckRunPage({
     rowIds: number[] | null,
     target: FixTargetChoice,
     prompt: string,
+    linkType?: LinkTypeFilter | "",
   ) {
     if (!run || startingFix) return;
     setStartingFix(true);
@@ -269,6 +275,7 @@ export default function LinkCheckRunPage({
         status_code: filterStatus === "" ? null : filterStatus,
         q: q || null,
         q_negate: qNegate,
+        link_type: linkType && linkType !== "all" ? linkType : null,
         // Where corrected output goes.
         target_column_id: target.kind === "existing" ? target.columnId : null,
         new_column_name: target.kind === "new" ? target.name : null,
@@ -475,7 +482,12 @@ export default function LinkCheckRunPage({
                 {selectedRows.size > 0 && (
                   <button
                     type="button"
-                    onClick={() => setFixScope({ rowIds: Array.from(selectedRows) })}
+                    onClick={() =>
+                    setFixScope({
+                      rowIds: Array.from(selectedRows),
+                      linkType: filterLinkType,
+                    })
+                  }
                     disabled={startingFix}
                     className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-60"
                   >
@@ -484,7 +496,9 @@ export default function LinkCheckRunPage({
                 )}
                 <button
                   type="button"
-                  onClick={() => setFixScope({ rowIds: null })}
+                  onClick={() =>
+                    setFixScope({ rowIds: null, linkType: filterLinkType })
+                  }
                   disabled={startingFix}
                   className="rounded-md border border-violet-300 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-60 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-900/30"
                 >
@@ -510,7 +524,9 @@ export default function LinkCheckRunPage({
                 tableId={tableId}
                 discrepancyLinksOnly
                 onFixRows={
-                  canFix ? (rowIds) => setFixScope({ rowIds }) : undefined
+                  canFix
+                    ? (rowIds, linkType) => setFixScope({ rowIds, linkType })
+                    : undefined
                 }
               />
             </div>
@@ -789,7 +805,7 @@ export default function LinkCheckRunPage({
           busy={startingFix}
           onClose={() => setFixScope(null)}
           onConfirm={(target, prompt) =>
-            void startFix(fixScope.rowIds, target, prompt)
+            void startFix(fixScope.rowIds, target, prompt, fixScope.linkType)
           }
         />
       )}

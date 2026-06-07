@@ -862,6 +862,11 @@ class LinkFixRequest(BaseModel):
     q: str | None = None
     # When true, ``q`` is a "does NOT contain" filter.
     q_negate: bool = False
+    # Translation-overview link-type filter. When set, only that type's
+    # violations are fixed, mirroring what the table is showing (product /
+    # internal / external). Translation runs don't persist link_type on the
+    # violation rows, so the endpoint classifies each link's host to match.
+    link_type: Literal["product", "internal", "external"] | None = None
     # Where corrected content goes. Provide an existing column id, OR a
     # new_column_name to create one (keeps the original output intact). Both
     # omitted = overwrite the scanned source column.
@@ -945,6 +950,16 @@ class LinkFixRunDetail(LinkFixRunRead):
     page_size: int
     total_cells: int
     items: list[LinkFixCellRead]
+
+
+class LinkFixRevertResult(LinkFixRunRead):
+    """Outcome of reverting a fix run: the run plus how many done cells were
+    actually restored vs. skipped because they no longer hold what the fix
+    wrote (a later edit or a newer fix run changed them). Lets the UI explain a
+    partial / no-op revert instead of looking like nothing happened."""
+
+    reverted_count: int
+    skipped_count: int
 
 
 class TableFixedCell(BaseModel):

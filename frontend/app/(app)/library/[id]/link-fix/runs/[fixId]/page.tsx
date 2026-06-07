@@ -35,6 +35,7 @@ export default function LinkFixRunPage({
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"" | "cancel" | "resume" | "revert">("");
+  const [revertNotice, setRevertNotice] = useState<string | null>(null);
   const stoppedRef = useRef(false);
 
   const tick = useCallback(
@@ -108,7 +109,15 @@ export default function LinkFixRunPage({
     if (!window.confirm(t("linkFixRun.confirmRevert"))) return;
     setBusy("revert");
     try {
-      await revertLinkFixRun(run.id);
+      const res = await revertLinkFixRun(run.id);
+      setRevertNotice(
+        res.skipped_count > 0
+          ? t("linkFixRun.revertSkippedNote", {
+              reverted: res.reverted_count,
+              skipped: res.skipped_count,
+            })
+          : null,
+      );
       await tick(page);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
@@ -219,6 +228,12 @@ export default function LinkFixRunPage({
               {t("linkFixRun.revertedNote", {
                 when: new Date(run.reverted_at as string).toLocaleString(),
               })}
+            </p>
+          )}
+
+          {revertNotice && (
+            <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-inset ring-amber-200 dark:bg-amber-400/10 dark:text-amber-200 dark:ring-amber-400/25">
+              {revertNotice}
             </p>
           )}
 

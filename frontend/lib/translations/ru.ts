@@ -1950,6 +1950,8 @@ export const ru: Record<keyof typeof en, string> = {
   "linkFixRun.stalledNote":
     "Прогресса давно нет — запуск мог зависнуть. Его можно возобновить.",
   "linkFixRun.revertedNote": "Откачено {when}.",
+  "linkFixRun.revertSkippedNote":
+    "Восстановлено ячеек: {reverted}; пропущено {skipped}, которые изменились после этого исправления (правка вручную или более новое исправление). Сначала откатите более новые запуски, чтобы восстановить их.",
   "linkFixRun.fixing": "Исправлено {done} / {total} ячеек…",
   "linkFixRun.fixed": "Исправлено",
   "linkFixRun.failed": "Ошибки",

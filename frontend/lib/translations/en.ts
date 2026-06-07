@@ -1885,6 +1885,8 @@ export const en = {
   "linkFixRun.stalledNote":
     "No progress for a while — the run may be stalled. You can resume it.",
   "linkFixRun.revertedNote": "Reverted on {when}.",
+  "linkFixRun.revertSkippedNote":
+    "Restored {reverted} cell(s); skipped {skipped} that changed since this fix (a later edit, or a newer fix run). Revert the newer run(s) first to restore those.",
   "linkFixRun.fixing": "Fixing {done} / {total} cells…",
   "linkFixRun.fixed": "Fixed",
   "linkFixRun.failed": "Failed",
