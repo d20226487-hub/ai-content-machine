@@ -5,6 +5,7 @@ import { use, useCallback, useEffect, useRef, useState } from "react";
 
 import { LinkCheckStatusChip } from "@/components/LinkCheckStatusChip";
 import { Pagination } from "@/components/Pagination";
+import { Spinner } from "@/components/Spinner";
 import { ToolBreadcrumb } from "@/components/ToolBreadcrumb";
 import { ApiError } from "@/lib/api";
 import { useT } from "@/lib/i18n-context";
@@ -164,6 +165,12 @@ export default function LinkFixRunPage({
         <p className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
           {error}
         </p>
+      )}
+
+      {!run && !error && (
+        <div className="flex items-center justify-center gap-2 py-16 text-sm text-neutral-500 dark:text-neutral-400">
+          <Spinner /> {t("common.loading")}
+        </div>
       )}
 
       {run && (

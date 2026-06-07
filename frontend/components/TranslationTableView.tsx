@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Pagination } from "@/components/Pagination";
+import { Spinner } from "@/components/Spinner";
 import { ApiError } from "@/lib/api";
 import { useT } from "@/lib/i18n-context";
 import {
@@ -376,7 +377,23 @@ export function TranslationTableView({
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
+              <tbody
+                className={
+                  "divide-y divide-neutral-100 dark:divide-neutral-800 " +
+                  // Dim while a fetch is in flight so filter/page changes give
+                  // immediate feedback (the recompute can take ~0.5s).
+                  (loading ? "opacity-50 transition-opacity" : "")
+                }
+              >
+                {loading && rows.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="px-3 py-10 text-center">
+                      <span className="inline-flex items-center gap-2 text-sm text-neutral-500 dark:text-neutral-400">
+                        <Spinner /> {t("common.loading")}
+                      </span>
+                    </td>
+                  </tr>
+                )}
                 {discrepancyLinksOnly
                   ? rows.flatMap((r) => {
                       // One sub-row per problem link, so each wrong translation
