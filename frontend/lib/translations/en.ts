@@ -1688,6 +1688,7 @@ export const en = {
   "breadcrumb.table": "Back to table",
   "breadcrumb.run": "Run #{id}",
   "breadcrumb.fix": "AI fix #{id}",
+  "breadcrumb.replace": "Link replace #{id}",
 
   "linkCheck.backToTable": "← Back to table",
   "linkCheck.title": "Link checker",
@@ -1788,6 +1789,7 @@ export const en = {
   "linkCheckRun.rawViewAll": "All rows with links",
   "linkCheckRun.rawViewDismissed": "Dismissed",
   "linkCheckRun.selectedErrors": "{n} selected",
+  "linkCheckRun.clearSelection": "Clear",
   "linkCheckRun.selectAll": "Select all on this page",
   "linkCheckRun.dismissSelected": "Dismiss ({n})",
   "linkCheckRun.restoreSelected": "Restore ({n})",

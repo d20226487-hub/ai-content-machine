@@ -1751,6 +1751,7 @@ export const ru: Record<keyof typeof en, string> = {
   "breadcrumb.table": "Назад к таблице",
   "breadcrumb.run": "Запуск #{id}",
   "breadcrumb.fix": "ИИ-исправление #{id}",
+  "breadcrumb.replace": "Замена ссылок #{id}",
 
   "linkCheck.backToTable": "← Назад к таблице",
   "linkCheck.title": "Проверка ссылок",
@@ -1853,6 +1854,7 @@ export const ru: Record<keyof typeof en, string> = {
   "linkCheckRun.rawViewAll": "Все строки со ссылками",
   "linkCheckRun.rawViewDismissed": "Отклонённые",
   "linkCheckRun.selectedErrors": "Выбрано: {n}",
+  "linkCheckRun.clearSelection": "Очистить",
   "linkCheckRun.selectAll": "Выбрать все на этой странице",
   "linkCheckRun.dismissSelected": "Отклонить ({n})",
   "linkCheckRun.restoreSelected": "Восстановить ({n})",

@@ -3598,6 +3598,13 @@ async def get_translation_table(
             )
             for t in bd["translation"]
         ]
+        # The link-type filter must ALSO hide the other types' links inside each
+        # kept row — the frontend renders this `translation` list directly, so
+        # without this a Product-filtered row still showed its internal/external
+        # links beside the product ones. (The `aligned` list below was already
+        # type-filtered; `translation` is what the table actually renders.)
+        if link_type != "all":
+            translation = [tl for tl in translation if tl.link_type == link_type]
         # Re-inject corrected links that are no longer present in the cell (an
         # in-place replace removed them) as struck "ghost" entries, so the
         # overview still shows what was handled. Only in the active view at the

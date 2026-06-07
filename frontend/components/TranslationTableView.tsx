@@ -143,10 +143,15 @@ export function TranslationTableView({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => setPage(1), [view, linkType]);
+  // Reset to page 1 AND clear the selection when the view or link-type filter
+  // changes — both change which errors are selectable and the action semantics
+  // (active = dismiss, dismissed = restore). Crucially, do NOT clear on
+  // pagination: selection keys (`rowId|url`) are globally unique, so the
+  // selection persists across pages and a bulk action applies to every page.
   useEffect(() => {
+    setPage(1);
     setSelected(new Set());
-  }, [view, linkType, page]);
+  }, [view, linkType]);
 
   const load = useCallback(
     async (p: number) => {
@@ -283,6 +288,14 @@ export function TranslationTableView({
           <span className="text-violet-800 dark:text-violet-200">
             {t("linkCheckRun.selectedErrors", { n: selected.size })}
           </span>
+          <button
+            type="button"
+            onClick={() => setSelected(new Set())}
+            disabled={busy}
+            className="text-xs font-medium text-violet-700 underline-offset-2 hover:underline disabled:opacity-60 dark:text-violet-300"
+          >
+            {t("linkCheckRun.clearSelection")}
+          </button>
           <div className="ml-auto flex items-center gap-2">
             {/* Replace is offered only on the discrepancy-only overview, for
                 live errors — it rewrites the wrong link to the expected one. */}

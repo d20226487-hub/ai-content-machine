@@ -138,7 +138,16 @@ export default function LinkFixRunPage({
             label: t("linkCheck.title"),
             href: `/library/${tableId}/link-check`,
           },
-          { label: run?.name ?? t("breadcrumb.fix", { id: rid }) },
+          {
+            label:
+              run?.name ??
+              t(
+                run?.method === "replace"
+                  ? "breadcrumb.replace"
+                  : "breadcrumb.fix",
+                { id: rid },
+              ),
+          },
         ]}
       />
 
