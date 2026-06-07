@@ -281,8 +281,16 @@ def aligned_diff(old: str, new: str) -> list[dict]:
     A single aligned list is what lets the fix-run page snippet the Before/After
     panes IN STEP — collapsing the same unchanged stretches on both sides so the
     two snippets stay lined up (a pure deletion no longer snippets one pane while
-    leaving the other whole)."""
-    sm = difflib.SequenceMatcher(a=old or "", b=new or "", autojunk=False)
+    leaving the other whole).
+
+    Two-level for speed: diff LINES first (cheap — ~hundreds of elements), then
+    re-diff only the CHANGED line-blocks at TOKEN granularity. A flat char-level
+    ``SequenceMatcher`` is ~quadratic and was the dominant cost of the fix-run
+    page (hundreds of ms per ~10 KB cell, freezing a 25-row page); this produces
+    the same aligned blocks far faster. Token boundaries (whole HTML tags / words
+    / whitespace / punctuation) tile the text exactly, so concatenating the
+    ``before`` / ``after`` fields still reproduces ``old`` / ``new`` exactly."""
+    o, n = old or "", new or ""
     blocks: list[dict] = []
 
     def push(before: str, after: str, changed: bool) -> None:
@@ -294,9 +302,26 @@ def aligned_diff(old: str, new: str) -> list[dict]:
         else:
             blocks.append({"before": before, "after": after, "changed": changed})
 
-    for tag, i1, i2, j1, j2 in sm.get_opcodes():
-        same = tag == "equal"
-        push((old or "")[i1:i2], (new or "")[j1:j2], not same)
+    a_lines = o.splitlines(keepends=True)
+    b_lines = n.splitlines(keepends=True)
+    line_sm = difflib.SequenceMatcher(a=a_lines, b=b_lines, autojunk=False)
+    for tag, i1, i2, j1, j2 in line_sm.get_opcodes():
+        a_text = "".join(a_lines[i1:i2])
+        b_text = "".join(b_lines[j1:j2])
+        if tag == "equal":
+            push(a_text, b_text, False)
+            continue
+        # Re-diff the changed line-block at token granularity for inline
+        # precision (and to keep equal runs inside it collapsed).
+        a_tok = _DIFF_TOKEN_RE.findall(a_text)
+        b_tok = _DIFF_TOKEN_RE.findall(b_text)
+        tok_sm = difflib.SequenceMatcher(a=a_tok, b=b_tok, autojunk=False)
+        for ttag, ti1, ti2, tj1, tj2 in tok_sm.get_opcodes():
+            push(
+                "".join(a_tok[ti1:ti2]),
+                "".join(b_tok[tj1:tj2]),
+                ttag != "equal",
+            )
     return blocks
 
 
