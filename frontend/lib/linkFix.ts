@@ -108,6 +108,9 @@ export interface LinkFixRunDetail extends LinkFixRun {
   page: number;
   page_size: number;
   total_cells: number;
+  /** 'replace' runs only: count of individual links actually swapped/stripped
+   *  across all done cells (the unit the user selected). null for 'ai' runs. */
+  links_changed: number | null;
   items: LinkFixCell[];
 }
 

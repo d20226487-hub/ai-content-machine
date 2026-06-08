@@ -3467,7 +3467,7 @@ async def get_translation_table(
     run_id: int,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=200),
-    view: Literal["active", "all", "dismissed"] = Query(default="active"),
+    view: Literal["active", "all", "dismissed", "solved"] = Query(default="active"),
     link_type: Literal["all", "product", "internal", "external"] = Query(
         default="all"
     ),
@@ -3479,11 +3479,13 @@ async def get_translation_table(
     source columns + the run's translation_config. Nothing is materialized into
     the bulk table.
 
-    ``view``: ``active`` (default) = rows with a non-dismissed wrong/made-up
-    link, mismatches = active errors; ``dismissed`` = rows with dismissed
-    errors, mismatches = the dismissed ones (for restoring); ``all`` = every
-    row with links, mismatches = all errors (dismissed flagged). 400 if the
-    run isn't a translation run."""
+    ``view``: ``active`` (default) = rows with a live, unsolved wrong/made-up
+    link (corrected links are hidden — they live in the ``solved`` view);
+    ``solved`` = rows whose wrong links a fix/replace run already corrected,
+    shown struck through; ``dismissed`` = rows with dismissed errors, mismatches
+    = the dismissed ones (for restoring); ``all`` = every row with links,
+    mismatches = all errors (dismissed flagged). 400 if the run isn't a
+    translation run."""
     from app.services.translation_links import compute_row_breakdown, parse_domains
 
     run = await _get_link_check_run_or_404(db, run_id)
@@ -3606,21 +3608,29 @@ async def get_translation_table(
         # type-filtered; `translation` is what the table actually renders.)
         if link_type != "all":
             translation = [tl for tl in translation if tl.link_type == link_type]
-        # Re-inject corrected links that are no longer present in the cell (an
-        # in-place replace removed them) as struck "ghost" entries, so the
-        # overview still shows what was handled. Only in the active view at the
-        # default (all) link-type filter, to avoid clashing with the filters.
-        resolved_n = sum(1 for tl in translation if tl.resolved)
-        if view == "active" and link_type == "all":
+
+        # Corrected links that are no longer present in the cell (an in-place
+        # replace removed them) → re-inject as struck "ghost" entries so the
+        # "solved" view still lists everything a fix/replace run handled. Ghosts
+        # carry no link_type, so they're only meaningful at the default "all".
+        ghosts: list[TranslationLinkTag] = []
+        if link_type == "all":
             live_norms = {_norm_link(tl.url) for tl in translation if tl.kind != "ok"}
             for norm, raw in solved.items():
                 if norm not in live_norms:
-                    translation.append(
+                    ghosts.append(
                         TranslationLinkTag(
                             url=raw, kind="discrepancy", dismissed=False, resolved=True
                         )
                     )
-                    resolved_n += 1
+        resolved_n = sum(1 for tl in translation if tl.resolved) + len(ghosts)
+
+        # Corrected links now have their own "solved" view; the active overview
+        # shows only links still needing attention.
+        if view == "active":
+            translation = [tl for tl in translation if not tl.resolved]
+        elif view == "solved":
+            translation = [tl for tl in translation if tl.resolved] + ghosts
 
         # Build the aligned rows, applying the view filter to the WRONG side.
         # active: keep only lines whose wrong is a live error; dismissed: only
@@ -3633,15 +3643,23 @@ async def get_translation_table(
                 continue
             w = a["wrong"]
             d = bool(w) and (rid, w["url"]) in dismissed
+            w_solved = bool(w) and _norm_link(w["url"]) in solved
             if w:
                 if d:
                     dismissed_n += 1
-                else:
+                elif not w_solved:
                     active_n += 1
             if view == "active":
-                if not (w and not d):
+                # Live, unsolved, non-dismissed wrongs only.
+                if not (w and not d and not w_solved):
                     continue
                 wrong_tag = TranslationLinkTag(url=w["url"], kind=w["kind"], dismissed=False)
+            elif view == "solved":
+                if not (w and w_solved):
+                    continue
+                wrong_tag = TranslationLinkTag(
+                    url=w["url"], kind=w["kind"], dismissed=False, resolved=True
+                )
             elif view == "dismissed":
                 if not (w and d):
                     continue
@@ -3657,9 +3675,11 @@ async def get_translation_table(
             aligned.append(AlignedRow(expected=a["expected"], wrong=wrong_tag))
 
         if view == "active":
-            # Keep rows that still have a live error OR a corrected (struck)
-            # one, so the overview can show what was already handled.
-            if active_n == 0 and resolved_n == 0:
+            # Only rows that still have a live, unsolved error.
+            if active_n == 0:
+                continue
+        elif view == "solved":
+            if resolved_n == 0:
                 continue
         elif view == "dismissed":
             if dismissed_n == 0:
@@ -4257,6 +4277,21 @@ async def get_link_fix_run(
         .all()
     )
 
+    # For replace runs, report how many individual links were actually changed
+    # (the unit the user selected), not just how many cells — each done cell's
+    # `violations` holds the links it applied.
+    links_changed: int | None = None
+    if run.method == "replace":
+        applied = (
+            await db.execute(
+                select(LinkFixCell.violations).where(
+                    LinkFixCell.run_id == run_id,
+                    LinkFixCell.state == "done",
+                )
+            )
+        ).scalars().all()
+        links_changed = sum(len(v or []) for v in applied)
+
     return LinkFixRunDetail(
         id=run.id,
         table_id=run.table_id,
@@ -4283,6 +4318,7 @@ async def get_link_fix_run(
         page=page,
         page_size=page_size,
         total_cells=int(total),
+        links_changed=links_changed,
         items=[_fix_cell_read(c) for c in rows],
     )
 

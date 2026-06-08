@@ -223,9 +223,10 @@ export interface TranslationTableResponse {
   items: TranslationTableRow[];
 }
 
-/** active = rows with non-dismissed errors; dismissed = rows with dismissed
- *  errors (to restore); all = every row with links. */
-export type TranslationTableView = "active" | "all" | "dismissed";
+/** active = rows with live, unsolved errors; solved = rows whose errors a
+ *  fix/replace run already corrected (struck through); dismissed = rows with
+ *  dismissed errors (to restore); all = every row with links. */
+export type TranslationTableView = "active" | "all" | "dismissed" | "solved";
 
 /** Link-type filter. "all" = no filter. */
 export type LinkTypeFilter = "all" | LinkTypeCategory;

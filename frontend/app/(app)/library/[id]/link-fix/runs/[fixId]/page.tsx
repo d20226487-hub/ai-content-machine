@@ -275,13 +275,22 @@ export default function LinkFixRunPage({
             </div>
           )}
 
-          {/* counters */}
+          {/* counters — these count CELLS (one per row). For replace runs a
+              note below bridges to the link count the user actually selected. */}
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Counter label={t("linkFixRun.fixed")} value={run.done} accent="green" />
             <Counter label={t("linkFixRun.failed")} value={run.failed} accent="red" />
             <Counter label={t("linkFixRun.skipped")} value={run.skipped} accent="neutral" />
             <Counter label={t("linkFixRun.total")} value={run.total} accent="neutral" />
           </div>
+          {run.method === "replace" && run.links_changed != null && (
+            <p className="mt-2 text-xs text-neutral-600 dark:text-neutral-300">
+              {t("linkFixRun.linksReplacedNote", {
+                links: run.links_changed,
+                cells: run.done,
+              })}
+            </p>
+          )}
 
           {/* The fix re-verifies in place — point the user back to the source
               check run to see what's now Solved / Unsolved. */}

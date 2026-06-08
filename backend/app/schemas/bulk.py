@@ -949,6 +949,10 @@ class LinkFixRunDetail(LinkFixRunRead):
     page: int
     page_size: int
     total_cells: int
+    # For 'replace' runs: how many individual links were actually swapped/stripped
+    # across all done cells (the unit the user selected). None for 'ai' runs,
+    # where the LLM rewrites whole cells rather than per-link.
+    links_changed: int | None = None
     items: list[LinkFixCellRead]
 
 

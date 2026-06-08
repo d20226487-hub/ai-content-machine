@@ -20,6 +20,9 @@ import {
 } from "@/lib/linkCheck";
 
 const PAGE_SIZE = 25;
+// Page size used when sweeping every page for "select all matches" — matches
+// the endpoint's max so the fewest requests cover the whole (bounded) table.
+const MAX_FETCH = 200;
 
 const errKey = (rowId: number, url: string) => `${rowId}|${url}`;
 const splitKey = (k: string): { row_id: number; link: string } => {
@@ -142,6 +145,7 @@ export function TranslationTableView({
   const [linkType, setLinkType] = useState<LinkTypeFilter>("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [selectingAll, setSelectingAll] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -177,23 +181,60 @@ export function TranslationTableView({
   }, [runId, page, load]);
 
   const selectable = view === "active" || view === "dismissed";
-  // Every selectable error key on the page — the non-ok translation links
-  // matching the current view (active = live errors, dismissed = dismissed).
+  // The one predicate for "is this link selectable in the current view" — used
+  // for both the per-page keys and the across-all-pages select, so the two can
+  // never disagree (active = live errors, dismissed = dismissed).
+  const isSelectableLink = useCallback(
+    (l: TranslationLinkTag) =>
+      l.kind !== "ok" &&
+      !l.resolved &&
+      (view === "dismissed" ? l.dismissed : !l.dismissed),
+    [view],
+  );
+  // Every selectable error key on the CURRENT page.
   const pageKeys = useMemo(
     () =>
       rows.flatMap((r) =>
-        r.translation
-          .filter(
-            (l) =>
-              l.kind !== "ok" &&
-              !l.resolved &&
-              (view === "dismissed" ? l.dismissed : !l.dismissed),
-          )
-          .map((l) => errKey(r.row_id, l.url)),
+        r.translation.filter(isSelectableLink).map((l) => errKey(r.row_id, l.url)),
       ),
-    [rows, view],
+    [rows, isSelectableLink],
   );
   const allSelected = pageKeys.length > 0 && pageKeys.every((k) => selected.has(k));
+
+  // Select EVERY matching link across all pages: page through at the max size
+  // and add each selectable key, merging into the existing selection. Reuses
+  // the same data + predicate as the table, so it stays in sync.
+  async function selectAllMatches() {
+    if (selectingAll) return;
+    setSelectingAll(true);
+    setError(null);
+    try {
+      const keys = new Set(selected);
+      let p = 1;
+      for (;;) {
+        const r = await getTranslationTable(runId, p, MAX_FETCH, view, linkType);
+        for (const row of r.items) {
+          for (const l of row.translation) {
+            if (isSelectableLink(l)) keys.add(errKey(row.row_id, l.url));
+          }
+        }
+        if (r.items.length === 0 || p * MAX_FETCH >= r.total_rows) break;
+        p += 1;
+      }
+      setSelected(keys);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setSelectingAll(false);
+    }
+  }
+
+  // The selection is per-link; replace/AI-fix act per cell (one job-cell per
+  // row), so surface both units to bridge the link count and the row count.
+  const selectedRowCount = useMemo(
+    () => new Set(Array.from(selected).map((k) => splitKey(k).row_id)).size,
+    [selected],
+  );
 
   function toggle(k: string) {
     setSelected((cur) => {
@@ -204,9 +245,18 @@ export function TranslationTableView({
     });
   }
   function toggleAll() {
-    setSelected((cur) =>
-      pageKeys.every((k) => cur.has(k)) ? new Set() : new Set(pageKeys),
-    );
+    // Add/remove only THIS page's keys, preserving selections made on other
+    // pages — the keys (`rowId|url`) are globally unique, so the count
+    // compounds across pages (page 1 + page 2 = both, not just the latest).
+    setSelected((cur) => {
+      const next = new Set(cur);
+      if (pageKeys.every((k) => cur.has(k))) {
+        for (const k of pageKeys) next.delete(k);
+      } else {
+        for (const k of pageKeys) next.add(k);
+      }
+      return next;
+    });
   }
 
   async function applyAction() {
@@ -260,6 +310,7 @@ export function TranslationTableView({
             <option value="all">{t("linkCheckRun.rawViewAll")}</option>
           )}
           <option value="dismissed">{t("linkCheckRun.rawViewDismissed")}</option>
+          <option value="solved">{t("linkCheckRun.rawViewSolved")}</option>
         </select>
         <select
           value={linkType}
@@ -283,12 +334,26 @@ export function TranslationTableView({
             {t("linkCheckRun.rawLegendUnderline")}
           </span>
         </span>
+        {selectable && total > 0 && (
+          <button
+            type="button"
+            onClick={selectAllMatches}
+            disabled={selectingAll || loading}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-violet-300 px-2.5 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-60 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-900/30"
+          >
+            {selectingAll && <Spinner />}
+            {t("linkCheckRun.selectAllMatches")}
+          </button>
+        )}
       </div>
 
       {selectable && selected.size > 0 && (
         <div className="mt-3 flex items-center gap-3 rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-sm dark:border-violet-900/40 dark:bg-violet-950/20">
           <span className="text-violet-800 dark:text-violet-200">
-            {t("linkCheckRun.selectedErrors", { n: selected.size })}
+            {t("linkCheckRun.selectedErrorsRows", {
+              n: selected.size,
+              rows: selectedRowCount,
+            })}
           </span>
           <button
             type="button"
@@ -486,7 +551,9 @@ export function TranslationTableView({
                         ? t("linkCheckRun.rawTableEmptyDiscrepancies")
                         : view === "dismissed"
                           ? t("linkCheckRun.rawTableEmptyDismissed")
-                          : t("linkCheckRun.rawTableEmpty")}
+                          : view === "solved"
+                            ? t("linkCheckRun.rawTableEmptySolved")
+                            : t("linkCheckRun.rawTableEmpty")}
                     </td>
                   </tr>
                 )}
