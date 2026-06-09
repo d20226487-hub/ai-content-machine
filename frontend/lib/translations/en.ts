@@ -1646,7 +1646,7 @@ export const en = {
     "Strip a leading “html” / ``` fence and the <!DOCTYPE>/<html>/<head>/<body> wrapper so the cell starts at a real tag.",
   "structureFormat.op.close_tags.title": "Unclosed HTML tags",
   "structureFormat.op.close_tags.desc":
-    "Append the missing </tag> closers for tags left open (e.g. a truncated <div><p>…), so the text renders correctly. Existing markup is untouched.",
+    "Repair broken HTML so it renders: insert a missing > on a tag glued to text (<ptext → <p>text) and append missing </tag> closers for tags left open (e.g. a truncated <div><p>…). Well-formed markup is untouched.",
   "structureFormat.op.inline_css.title": "Inline CSS",
   "structureFormat.op.inline_css.desc":
     "Remove style=\"…\" attributes and <style> blocks; other attributes are kept.",

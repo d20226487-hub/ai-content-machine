@@ -160,26 +160,58 @@ _RAWTEXT_ELEMENTS = frozenset({"script", "style", "textarea", "title"})
 
 # One tag, anchored where a '<' was found. Group 1 = '/' for a closing tag;
 # group 2 = the tag name; group 3 = the attribute remainder (a trailing '/'
-# means self-closing). The attribute alternation consumes quoted strings whole
-# so a '>' inside an attribute value can't end the tag early.
+# means self-closing). Quoted attribute values are consumed whole (so a '>'
+# inside them can't end the tag early); the unquoted run excludes '<' so a
+# tag missing its '>' can't swallow the markup that follows it.
 _TAG_AT = re.compile(
-    r"""<(/?)\s*([a-zA-Z][a-zA-Z0-9:-]*)((?:"[^"]*"|'[^']*'|[^>])*)>"""
+    r"""<(/?)\s*([a-zA-Z][a-zA-Z0-9:-]*)((?:"[^"]*"|'[^']*'|[^<>])*)>"""
+)
+
+# Known HTML tags we'll repair when the model glues one straight onto content
+# without its closing '>': e.g. ``<pتتأهل`` (Arabic) or ``<p.`` — the '>' is
+# missing right after the name. Restricting to a known set keeps a literal
+# ``x<p.`` in prose-with-real-`<` from being mistaken for a tag.
+_KNOWN_TAGS = (
+    "p", "div", "span", "a", "br", "hr", "img", "h1", "h2", "h3", "h4", "h5",
+    "h6", "ul", "ol", "li", "strong", "em", "b", "i", "u", "s", "blockquote",
+    "pre", "code", "table", "thead", "tbody", "tfoot", "tr", "td", "th",
+    "caption", "section", "article", "header", "footer", "nav", "aside",
+    "figure", "figcaption", "main", "dl", "dt", "dd", "sup", "sub", "small",
+    "mark", "abbr", "cite", "q", "time", "label", "button",
+)
+# A known tag name (opening or closing) immediately followed by a character
+# that can't continue a tag — not a name char, whitespace, '/', or '>' — means
+# the '>' was dropped. The lookahead pins the FULL name (next char isn't a name
+# char) so ``<pre…`` isn't mistaken for ``<p``.
+_GLUED_TAG = re.compile(
+    r"(</?(?:" + "|".join(_KNOWN_TAGS) + r"))(?=[^A-Za-z0-9:_\s/>-])",
+    re.IGNORECASE,
 )
 
 
 def close_unclosed_tags(text: str) -> str:
-    """Balance the HTML by appending any missing closing tags.
+    """Repair broken HTML tags so the cell renders.
 
-    A stack tracks open (non-void) elements as the text is scanned: an opening
-    tag is pushed; a closing tag pops to its matching opener (implicitly closing
-    inner tags left open along the way); a closing tag with no opener is left
-    untouched. Whatever is still open at the end gets its ``</tag>`` appended in
-    reverse order. Append-only — existing markup is never rewritten, so the diff
-    shows exactly the inserted closers. Comments, CDATA, declarations and
-    raw-text element bodies are skipped rather than parsed.
+    Two fixes, in order:
+
+    1. **Missing ``>``** — a known tag glued straight onto content
+       (``<pتتأهل`` / ``<p.``) gets its ``>`` inserted right after the name, so
+       the tag stops swallowing the text (and real markup) that follows it.
+    2. **Missing ``</tag>``** — a stack tracks open (non-void) elements; an
+       opening tag is pushed, a closing tag pops to its matching opener
+       (implicitly closing inner tags left open along the way), and a closing
+       tag with no opener is left untouched. Whatever is still open at the end
+       gets its closer appended in reverse order.
+
+    Otherwise surgical: existing well-formed markup is never rewritten, so the
+    diff shows just the inserted ``>``/closers. Comments, CDATA, declarations
+    and raw-text element bodies are skipped rather than parsed.
     """
     if not text:
         return text
+    # (1) Repair tags whose '>' is missing before re-balancing — otherwise the
+    # tokenizer below reads the glued tag as a giant element and miscounts.
+    text = _GLUED_TAG.sub(r"\1>", text)
     stack: list[str] = []
     pos = 0
     n = len(text)
