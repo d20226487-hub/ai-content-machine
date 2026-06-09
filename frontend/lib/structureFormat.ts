@@ -7,12 +7,14 @@ import type { CellStatus } from "./types";
 export type StructureFormatOp =
   | "markdown"
   | "response_start"
+  | "close_tags"
   | "inline_css"
   | "html_format";
 
 export const SF_OPERATIONS: StructureFormatOp[] = [
   "markdown",
   "response_start",
+  "close_tags",
   "inline_css",
   "html_format",
 ];

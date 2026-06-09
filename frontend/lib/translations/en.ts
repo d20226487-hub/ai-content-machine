@@ -1644,6 +1644,9 @@ export const en = {
   "structureFormat.op.response_start.title": "Response start",
   "structureFormat.op.response_start.desc":
     "Strip a leading “html” / ``` fence and the <!DOCTYPE>/<html>/<head>/<body> wrapper so the cell starts at a real tag.",
+  "structureFormat.op.close_tags.title": "Unclosed HTML tags",
+  "structureFormat.op.close_tags.desc":
+    "Append the missing </tag> closers for tags left open (e.g. a truncated <div><p>…), so the text renders correctly. Existing markup is untouched.",
   "structureFormat.op.inline_css.title": "Inline CSS",
   "structureFormat.op.inline_css.desc":
     "Remove style=\"…\" attributes and <style> blocks; other attributes are kept.",

@@ -1708,6 +1708,9 @@ export const ru: Record<keyof typeof en, string> = {
   "structureFormat.op.response_start.title": "Начало ответа",
   "structureFormat.op.response_start.desc":
     "Убрать ведущее «html» / ограждение ``` и обёртку <!DOCTYPE>/<html>/<head>/<body>, чтобы ячейка начиналась с реального тега.",
+  "structureFormat.op.close_tags.title": "Незакрытые HTML-теги",
+  "structureFormat.op.close_tags.desc":
+    "Дописать недостающие закрывающие </tag> для незакрытых тегов (например, в обрезанном <div><p>…), чтобы текст отображался корректно. Существующая разметка не меняется.",
   "structureFormat.op.inline_css.title": "Инлайн-CSS",
   "structureFormat.op.inline_css.desc":
     "Удалить атрибуты style=\"…\" и блоки <style>; прочие атрибуты сохраняются.",

@@ -512,7 +512,7 @@ class FindReplaceRunDetail(FindReplaceRunRead):
 # The selectable transforms. Applied in THIS canonical order regardless of the
 # order they arrive in (mirrors services/structure_format.OPERATIONS).
 StructureFormatOp = Literal[
-    "markdown", "response_start", "inline_css", "html_format"
+    "markdown", "response_start", "close_tags", "inline_css", "html_format"
 ]
 
 
