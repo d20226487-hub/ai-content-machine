@@ -78,6 +78,13 @@ celery_app.conf.update(
             "task": "gdocs_import.watchdog",
             "schedule": 120.0,
         },
+        # Recover bulk-publish runs stuck in 'running' — a worker death between
+        # committing a row's status='posting' and the counter bump leaves the
+        # run permanently short of its total with no other recovery path.
+        "publish-watchdog": {
+            "task": "publish.watchdog",
+            "schedule": 120.0,
+        },
     },
 )
 
