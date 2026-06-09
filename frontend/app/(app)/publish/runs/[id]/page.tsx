@@ -5,7 +5,14 @@ import { useParams, useRouter } from "next/navigation";
 
 import { ApiError } from "@/lib/api";
 import { useT } from "@/lib/i18n-context";
-import { listPublishJobs, type JobStatus, type PublishJob } from "@/lib/publish";
+import { Modal } from "@/components/Modal";
+import {
+  getPublishJob,
+  listPublishJobs,
+  type JobStatus,
+  type PublishJob,
+  type PublishJobDetail,
+} from "@/lib/publish";
 import {
   cancelBulkRun,
   getBulkRun,
@@ -44,6 +51,24 @@ export default function RunDetailPage() {
   // Multi-mode filters: by domain id (null = "(unresolved)") and by job status.
   const [filterDomain, setFilterDomain] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<"all" | JobStatus>("all");
+
+  // Per-row "view request (curl)" modal — fetched on demand from the job
+  // detail endpoint so the heavy payload isn't pulled for every list row.
+  const [reqJob, setReqJob] = useState<PublishJobDetail | null>(null);
+  const [reqJobId, setReqJobId] = useState<number | null>(null);
+  const [reqError, setReqError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  async function openRequest(jobId: number) {
+    setReqJobId(jobId);
+    setReqJob(null);
+    setReqError(null);
+    try {
+      setReqJob(await getPublishJob(jobId));
+    } catch (err) {
+      setReqError(err instanceof ApiError ? err.message : String(err));
+    }
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -415,18 +440,20 @@ export default function RunDetailPage() {
             <tr className="text-left text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
               <th className="px-3 py-2">{t("bulkRun.colTime")}</th>
               <th className="px-3 py-2">{t("bulkRun.colRow")}</th>
+              <th className="px-3 py-2">{t("bulkRun.colSlug")}</th>
               <th className="px-3 py-2">{t("bulkRun.colDomain")}</th>
               <th className="px-3 py-2">{t("bulkRun.colProfile")}</th>
               <th className="px-3 py-2">{t("bulkRun.colLang")}</th>
               <th className="px-3 py-2">{t("bulkRun.colStatus")}</th>
               <th className="px-3 py-2">{t("bulkRun.colPost")}</th>
               <th className="px-3 py-2">{t("bulkRun.colError")}</th>
+              <th className="px-3 py-2">{t("bulkRun.colRequest")}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
             {jobs.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-3 py-6 text-center text-neutral-500">
+                <td colSpan={10} className="px-3 py-6 text-center text-neutral-500">
                   {t("bulkRun.empty")}
                 </td>
               </tr>
@@ -438,6 +465,15 @@ export default function RunDetailPage() {
                 </td>
                 <td className="px-3 py-2 text-xs text-neutral-700 dark:text-neutral-300">
                   {(j.source_ref?.row_id as number | undefined) ?? "—"}
+                </td>
+                <td className="px-3 py-2 font-mono text-xs text-neutral-700 dark:text-neutral-300">
+                  {j.slug ? (
+                    j.slug
+                  ) : (
+                    <span className="italic text-amber-700 dark:text-amber-400">
+                      {t("bulkRun.slugEmpty")}
+                    </span>
+                  )}
                 </td>
                 <td className="px-3 py-2 text-xs font-mono text-neutral-700 dark:text-neutral-300">
                   {j.domain_name ?? (j.domain_id == null ? <span className="text-neutral-500 italic">{t("bulkRun.unresolved")}</span> : j.domain_id)}
@@ -503,6 +539,15 @@ export default function RunDetailPage() {
                     </span>
                   )}
                 </td>
+                <td className="whitespace-nowrap px-3 py-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => openRequest(j.id)}
+                    className="rounded-md border border-neutral-300 px-2 py-0.5 font-mono text-[11px] font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                  >
+                    {t("bulkRun.viewRequest")}
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -556,6 +601,81 @@ export default function RunDetailPage() {
             </button>
           </div>
         </div>
+      )}
+
+      {reqJobId != null && (
+        <Modal
+          size="max-w-3xl"
+          onClose={() => {
+            setReqJobId(null);
+            setReqJob(null);
+            setReqError(null);
+            setCopied(false);
+          }}
+        >
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+                {t("bulkRun.requestTitle", { id: reqJobId })}
+              </h2>
+              {reqJob?.curl_preview && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard?.writeText(reqJob.curl_preview ?? "");
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1500);
+                  }}
+                  className="rounded-md border border-neutral-300 px-2 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                >
+                  {copied ? t("common.copied") : t("bulkRun.copyCurl")}
+                </button>
+              )}
+            </div>
+
+            {reqError && (
+              <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">
+                {reqError}
+              </p>
+            )}
+            {!reqJob && !reqError && (
+              <p className="text-xs text-neutral-500">{t("common.loading")}</p>
+            )}
+            {reqJob && (
+              <>
+                {reqJob.curl_preview ? (
+                  <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-all rounded-md bg-neutral-950 p-3 text-[11px] leading-relaxed text-neutral-100">
+                    {reqJob.curl_preview}
+                  </pre>
+                ) : (
+                  <p className="rounded-md bg-neutral-50 px-3 py-2 text-xs text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+                    {t("bulkRun.requestNone")}
+                  </p>
+                )}
+                {reqJob.status_code != null && (
+                  <p className="text-xs text-neutral-600 dark:text-neutral-400">
+                    {t("bulkRun.responseStatus", { code: reqJob.status_code })}
+                  </p>
+                )}
+                {reqJob.response_json && (
+                  <div>
+                    <p className="mb-1 text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                      {t("bulkRun.responseBody")}
+                    </p>
+                    <pre className="max-h-[30vh] overflow-auto whitespace-pre-wrap break-all rounded-md bg-neutral-100 p-3 text-[11px] text-neutral-800 dark:bg-neutral-800 dark:text-neutral-200">
+                      {JSON.stringify(reqJob.response_json, null, 2)}
+                    </pre>
+                  </div>
+                )}
+                {reqJob.error && (
+                  <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">
+                    {reqJob.error}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        </Modal>
       )}
     </main>
   );

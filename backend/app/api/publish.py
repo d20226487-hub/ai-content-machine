@@ -124,7 +124,7 @@ async def publish_single(
     # the row is visible.
     publish_one_single.delay(job.id)
 
-    return _to_detail(job, domain.name)
+    return _to_detail(job, domain.name, domain)
 
 
 @router.get("/jobs", response_model=PublishJobListResponse)
@@ -188,17 +188,13 @@ async def list_publish_jobs(
 async def get_publish_job(
     job_id: int, db: AsyncSession = Depends(get_db)
 ) -> PublishJobDetail:
-    row = (
-        await db.execute(
-            select(PublishJob, Domain.name)
-            .join(Domain, Domain.id == PublishJob.domain_id, isouter=True)
-            .where(PublishJob.id == job_id)
-        )
-    ).one_or_none()
-    if row is None:
+    job = await db.get(PublishJob, job_id)
+    if job is None:
         raise HTTPException(status_code=404, detail="Not found")
-    job, domain_name = row
-    return _to_detail(job, domain_name)
+    # Fetch the full domain (not just its name) so we can reconstruct the
+    # exact outgoing request as a copy-pasteable curl for debugging.
+    domain = await db.get(Domain, job.domain_id) if job.domain_id else None
+    return _to_detail(job, domain.name if domain else None, domain)
 
 
 _TERMINAL_JOB_STATUSES = ("posted", "failed")
@@ -254,6 +250,21 @@ async def delete_publish_job(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+def _extract_sent_slug(payload: object) -> str | None:
+    """The slug from the outgoing body. Posted/failed jobs store the real body
+    under ``slug``; a queued single job stashes the pre-normalization fields
+    under the ``__fields`` sentinel. None when no slug was present."""
+    if not isinstance(payload, dict):
+        return None
+    v = payload.get("slug")
+    if isinstance(v, str):
+        return v
+    fields = payload.get("__fields")
+    if isinstance(fields, dict) and isinstance(fields.get("slug"), str):
+        return fields["slug"]
+    return None
+
+
 def _to_read(job: PublishJob, domain_name: str | None) -> PublishJobRead:
     return PublishJobRead(
         id=job.id,
@@ -275,13 +286,79 @@ def _to_read(job: PublishJob, domain_name: str | None) -> PublishJobRead:
         warnings=list(job.warnings) if job.warnings else None,
         profile_name=job.profile_name,
         created_by_id=job.created_by_id,
+        slug=_extract_sent_slug(job.payload_sent),
     )
 
 
-def _to_detail(job: PublishJob, domain_name: str | None) -> PublishJobDetail:
+def _to_detail(
+    job: PublishJob, domain_name: str | None, domain: Domain | None = None
+) -> PublishJobDetail:
     base = _to_read(job, domain_name)
     return PublishJobDetail(
         **base.model_dump(),
         payload_sent=job.payload_sent,
         response_json=job.response_json,
+        curl_preview=_build_curl_preview(job, domain),
     )
+
+
+def _shell_single_quote(s: str) -> str:
+    """Wrap a value in single quotes for a shell command, escaping any
+    embedded single quotes the POSIX way (`'` → `'\\''`)."""
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
+def _masked_auth_header(domain: Domain) -> tuple[str, str] | None:
+    """The auth header that WOULD be sent, with the secret masked. We never
+    read the stored credentials, so nothing sensitive can leak."""
+    at = (domain.auth_type or "").strip()
+    if at == "bearer":
+        return ("Authorization", "Bearer <REDACTED>")
+    if at == "basic_auth":
+        return ("Authorization", "Basic <REDACTED>")
+    if at == "api_key_header":
+        # The header NAME lives in the (encrypted) credentials JSON alongside
+        # the secret value; we don't decrypt it here, so show a placeholder.
+        return ("<api-key-header>", "<REDACTED>")
+    return None
+
+
+def _build_curl_preview(job: PublishJob, domain: Domain | None) -> str | None:
+    """Reconstruct the exact outgoing request for this row as a copy-pasteable
+    curl — method, URL, headers (auth masked) and the real JSON body that was
+    sent. Returns None when there's nothing meaningful to show yet."""
+    import json
+
+    body = job.payload_sent
+    # Queued single jobs stash the to-publish fields under a `__fields`
+    # sentinel before the worker overwrites payload_sent with the real body —
+    # nothing has hit the wire yet, so no curl.
+    if not isinstance(body, dict) or "__fields" in body or domain is None:
+        return None
+
+    base = (domain.base_url or "").rstrip("/")
+    headers: list[tuple[str, str]] = [("Content-Type", "application/json")]
+    auth = _masked_auth_header(domain)
+
+    if domain.cms_type == "custom":
+        endpoint_path = (domain.custom_config or {}).get("endpoint_path") or ""
+        url = f"{base}{endpoint_path}"
+        prefix = ""
+    else:
+        # WordPress writes via the REST API after a lookup; we don't store the
+        # resolved post type / id, so this is a best-effort approximation.
+        url = f"{base}/wp-json/wp/v2/posts"
+        prefix = (
+            "# NOTE: approximate — WordPress first looks up the post, then "
+            "POSTs to /wp-json/wp/v2/<post_type>[/<id>].\n"
+        )
+
+    if auth is not None:
+        headers.append(auth)
+
+    body_json = json.dumps(body, ensure_ascii=False)
+    lines = [f"curl -X POST {_shell_single_quote(url)}"]
+    for k, v in headers:
+        lines.append(f"  -H {_shell_single_quote(f'{k}: {v}')}")
+    lines.append(f"  -d {_shell_single_quote(body_json)}")
+    return prefix + " \\\n".join(lines)

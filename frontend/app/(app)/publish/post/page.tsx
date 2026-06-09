@@ -102,6 +102,7 @@ export default function PostPage() {
             <tr className="text-left text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
               <th className="px-3 py-2">{t("pubHistory.colTime")}</th>
               <th className="px-3 py-2">{t("pubHistory.colDomain")}</th>
+              <th className="px-3 py-2">{t("pubHistory.colSlug")}</th>
               <th className="px-3 py-2">{t("pubHistory.colProfile")}</th>
               <th className="px-3 py-2">{t("pubHistory.colStatus")}</th>
               <th className="px-3 py-2">{t("pubHistory.colLang")}</th>
@@ -113,14 +114,14 @@ export default function PostPage() {
           <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
             {jobs === null && (
               <tr>
-                <td colSpan={8} className="px-3 py-8 text-center text-neutral-500">
+                <td colSpan={9} className="px-3 py-8 text-center text-neutral-500">
                   {t("common.loading")}
                 </td>
               </tr>
             )}
             {jobs !== null && jobs.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-3 py-8 text-center text-neutral-500">
+                <td colSpan={9} className="px-3 py-8 text-center text-neutral-500">
                   {t("pubHistory.empty")}
                 </td>
               </tr>
@@ -132,6 +133,15 @@ export default function PostPage() {
                 </td>
                 <td className="px-3 py-2 text-neutral-800 dark:text-neutral-200">
                   {j.domain_name ?? t("pubHistory.deletedDomain")}
+                </td>
+                <td className="px-3 py-2 font-mono text-xs text-neutral-700 dark:text-neutral-300">
+                  {j.slug ? (
+                    j.slug
+                  ) : (
+                    <span className="italic text-amber-700 dark:text-amber-400">
+                      {t("bulkRun.slugEmpty")}
+                    </span>
+                  )}
                 </td>
                 <td className="px-3 py-2 text-xs text-neutral-700 dark:text-neutral-300">
                   {j.profile_name ?? "—"}

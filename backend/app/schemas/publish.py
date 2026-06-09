@@ -238,11 +238,19 @@ class PublishJobRead(BaseModel):
     warnings: list[str] | None = None
     profile_name: str | None = None
     created_by_id: int | None
+    # The slug actually sent to the CMS (post-normalization), pulled from the
+    # outgoing body so it's visible per-row in the publish tables. None when no
+    # slug field was sent (e.g. an empty slug that got dropped from the body).
+    slug: str | None = None
 
 
 class PublishJobDetail(PublishJobRead):
     payload_sent: dict[str, Any] | None
     response_json: dict[str, Any] | None
+    # A copy-pasteable `curl` reproducing the exact request sent for this row
+    # (method + URL + headers + the actual JSON body). Auth headers are masked.
+    # None when nothing was sent yet (queued) or the target can't be resolved.
+    curl_preview: str | None = None
 
 
 class PublishJobListResponse(BaseModel):

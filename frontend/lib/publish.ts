@@ -28,11 +28,18 @@ export interface PublishJob {
   warnings: string[] | null;
   profile_name: string | null;
   created_by_id: number | null;
+  /** The slug actually sent to the CMS (post-normalization). null when no slug
+   *  field was sent (e.g. an empty slug dropped from the body). */
+  slug: string | null;
 }
 
 export interface PublishJobDetail extends PublishJob {
   payload_sent: Record<string, unknown> | null;
   response_json: Record<string, unknown> | null;
+  /** Copy-pasteable curl reproducing the exact request sent for this row
+   *  (method + URL + headers with auth masked + the real JSON body). null
+   *  when nothing was sent yet or the target can't be resolved. */
+  curl_preview: string | null;
 }
 
 export interface PublishJobListResponse {
