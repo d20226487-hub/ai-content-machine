@@ -1722,6 +1722,7 @@ async def import_csv(
     name: str = Form(...),
     delimiter: str = Form(","),
     has_header: bool = Form(True),
+    folder_id: int | None = Form(None),
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TableRead:
@@ -1730,13 +1731,16 @@ async def import_csv(
     Streamed multipart upload (not a JSON ``csv_text`` string) + bulk INSERTs
     (no per-row flush) so a multi-MB file imports in a couple of seconds instead
     of timing out the proxy (502). Empty cells are skipped; fields beyond the
-    header count are ignored.
+    header count are ignored. ``folder_id`` lands the new table in a folder
+    (same as a blank create) — omit for the implicit root.
     """
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
     table_name = (name or "").strip()
     if not table_name:
         raise HTTPException(status_code=400, detail="A table name is required.")
+    if folder_id is not None:
+        await _verify_folder(db, folder_id)
 
     # The delimiter <select> sends an escaped tab as the literal two chars "\t".
     if delimiter in ("\\t", "\t"):
@@ -1775,7 +1779,7 @@ async def import_csv(
         headers = [f"Column {i + 1}" for i in range(col_count)]
         data_rows = rows
 
-    t = BulkTable(name=table_name, created_by_id=actor.id)
+    t = BulkTable(name=table_name, created_by_id=actor.id, folder_id=folder_id)
     db.add(t)
     await db.flush()
 

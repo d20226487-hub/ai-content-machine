@@ -302,8 +302,15 @@ export default function LibraryPage() {
     }
   }
 
-  function onImported(table: BulkTable) {
-    router.push(`/library/${table.id}`);
+  function onImported(tables: BulkTable[], opts: { navigate: boolean }) {
+    // Single clean import → open the new table (unchanged behavior). Multiple
+    // → stay on the list and refresh so all the new tables show up.
+    if (opts.navigate && tables[0]) {
+      router.push(`/library/${tables[0].id}`);
+      return;
+    }
+    void refreshTables();
+    void refreshFolders();
   }
 
   function onGdocsQueued(run: GdocsImportRun) {
@@ -653,6 +660,7 @@ export default function LibraryPage() {
         <ImportCsvModal
           onClose={() => setShowImport(false)}
           onImported={onImported}
+          defaultFolderId={folder}
         />
       )}
 

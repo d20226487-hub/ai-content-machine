@@ -851,6 +851,7 @@ export default function DomainsPage() {
         <DomainModal
           onClose={() => setModal({ kind: "closed" })}
           onSaved={afterDomainSaved}
+          defaultFolderId={typeof scope === "number" ? scope : null}
         />
       )}
       {modal.kind === "edit" && (

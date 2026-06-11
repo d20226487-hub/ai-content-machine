@@ -447,6 +447,8 @@ export interface ImportCsvPayload {
   file: File;
   delimiter?: string;
   has_header?: boolean;
+  /** Land the new table in this folder (omit/null = implicit root). */
+  folder_id?: number | null;
 }
 
 export function importCsv(p: ImportCsvPayload): Promise<BulkTable> {
@@ -455,6 +457,7 @@ export function importCsv(p: ImportCsvPayload): Promise<BulkTable> {
   fd.append("name", p.name);
   fd.append("delimiter", p.delimiter ?? ",");
   fd.append("has_header", String(p.has_header ?? true));
+  if (p.folder_id != null) fd.append("folder_id", String(p.folder_id));
   return api<BulkTable>("/library/tables/import-csv", {
     method: "POST",
     body: fd,

@@ -46,9 +46,12 @@ interface Props {
   domain?: Domain | null;
   onClose: () => void;
   onSaved: (d: Domain) => void;
+  /** When creating, land the new domain in this folder (null = root). Ignored
+   *  on edit, where the domain's existing folder is preserved. */
+  defaultFolderId?: number | null;
 }
 
-export function DomainModal({ domain, onClose, onSaved }: Props) {
+export function DomainModal({ domain, onClose, onSaved, defaultFolderId }: Props) {
   const { t } = useT();
   const isEdit = !!domain;
   // Flips true the first time any input/select/textarea inside the form fires
@@ -371,7 +374,7 @@ export function DomainModal({ domain, onClose, onSaved }: Props) {
     try {
       const saved = isEdit
         ? await updateDomain(domain!.id, payload)
-        : await createDomain(payload);
+        : await createDomain({ ...payload, folder_id: defaultFolderId ?? null });
       onSaved(saved);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t("users.saveFailed"));
