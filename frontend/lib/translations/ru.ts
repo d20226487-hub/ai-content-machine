@@ -1628,6 +1628,9 @@ export const ru: Record<keyof typeof en, string> = {
   "tools.structureFormat.title": "Структура и форматирование",
   "tools.structureFormat.desc":
     "Чистка вывода ИИ: markdown→HTML, удаление мусора в начале, инлайн-CSS и жирный/курсив.",
+  "tools.normalize.title": "Нормализация",
+  "tools.normalize.desc":
+    "Приведение значений ячеек: убрать пробелы, схему URL и слэши, нижний регистр. Откатывается.",
 
   // ---------- пагинация ----------
   "pager.showing": "Показано {from}–{to} из {total}",
@@ -1755,6 +1758,54 @@ export const ru: Record<keyof typeof en, string> = {
     "{n} ячеек были изменены после этого запуска. Откат отменит и эти изменения. Продолжить?",
   "structureFormatRun.driftWarning":
     "{n} ячеек были изменены после этого запуска — откат отменит эти изменения.",
+
+  // ---------- инструмент нормализации ----------
+  "normalize.backToTable": "← Назад к таблице",
+  "normalize.title": "Нормализация",
+  "normalize.onTable": "В таблице «{name}»",
+  "normalize.opsLabel": "Операции",
+  "normalize.opsHint":
+    "Выбранные операции выполняются в указанном порядке — последующие опираются на предыдущие.",
+  "normalize.op.trim.title": "Убрать пробелы",
+  "normalize.op.trim.desc":
+    "Удалить пробелы, табуляции и переводы строк в начале и конце.",
+  "normalize.op.strip_scheme.title": "Убрать схему URL",
+  "normalize.op.strip_scheme.desc":
+    "Удалить ведущий http:// / https:// (и ведущий //) — удобно для колонки доменов.",
+  "normalize.op.strip_slashes.title": "Убрать слэши по краям",
+  "normalize.op.strip_slashes.desc":
+    "Удалить символы «/» в начале и конце значения.",
+  "normalize.op.lowercase.title": "Нижний регистр",
+  "normalize.op.lowercase.desc":
+    "Перевести всю ячейку в нижний регистр — применять только к колонкам языка/slug.",
+  "normalize.columnsLabel": "Колонки для нормализации",
+  "normalize.previewBtn": "Предпросмотр",
+  "normalize.previewResult": "Изменится {change} из {total} ячеек",
+  "normalize.previewHeading": "Предпросмотр — ячейки, которые изменятся",
+  "normalize.previewNone": "С текущим выбором ни одна ячейка не изменится.",
+  "normalize.applyBtn": "Применить",
+  "normalize.confirmApply":
+    "Применить выбранные операции ко всем ячейкам выбранных колонок? Действие можно откатить.",
+  "normalize.historyHeading": "История",
+  "normalize.historyCells": "{n} изменено",
+  "normalize.runLabel": "Запуск #{id}",
+  "normalize.reverted": "откатано",
+
+  // ---------- детали запуска нормализации ----------
+  "normalizeRun.title": "Нормализация #{id}",
+  "normalizeRun.meta": "{cells} изменено · {by} · {when}",
+  "normalizeRun.colBefore": "Было",
+  "normalizeRun.colAfter": "Стало",
+  "normalizeRun.revert": "Откатить нормализацию",
+  "normalizeRun.revertedAt": "Откатано · {when}",
+  "normalizeRun.confirmRevert":
+    "Вернуть все изменённые этой нормализацией ячейки к прежним значениям?",
+  "normalizeRun.confirmRevertDrift":
+    "{n} ячеек были отредактированы после этой нормализации. Откат отменит и эти изменения. Продолжить?",
+  "normalizeRun.driftWarning":
+    "{n} ячеек были изменены после этой нормализации — откат отменит и эти изменения.",
+  "normalizeRun.editedSince": "изменено позже",
+  "normalizeRun.revertedRow": "Откачено",
 
   "tools.linkCheck.title": "Проверка ссылок",
   "tools.linkCheck.desc":

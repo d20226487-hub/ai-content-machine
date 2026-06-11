@@ -51,6 +51,7 @@ from app.db.models import (
     LinkCheckViolation,
     LinkFixCell,
     LinkFixRun,
+    NormalizeRun,
     StructureFormatCell,
     StructureFormatRun,
     User,
@@ -92,6 +93,13 @@ from app.schemas.bulk import (
     LinkFixRunRead,
     LinkViolationRead,
     MatchedCell,
+    NormalizeApplyRequest,
+    NormalizedCell,
+    NormalizePreview,
+    NormalizePreviewCell,
+    NormalizePreviewRequest,
+    NormalizeRunDetail,
+    NormalizeRunRead,
     ReplacedCell,
     ReplaceRequest,
     RowRead,
@@ -126,11 +134,16 @@ from app.services.find_replace import (
     compile_rules,
     condense_unified,
     count_matches_rules,
+    diff_segments,
     drift_segments,
     parse_finds,
     parse_pairs,
     segment_diff_rules,
     unified_segments,
+)
+from app.services.normalize import (
+    OPERATIONS as NORMALIZE_OPERATIONS,
+    apply_operations_traced as normalize_apply_traced,
 )
 from app.services.structure_format import (
     OPERATIONS as SF_OPERATIONS,
@@ -2378,6 +2391,15 @@ async def _get_replace_run_or_404(
     return run
 
 
+async def _get_normalize_run_or_404(
+    db: AsyncSession, run_id: int
+) -> NormalizeRun:
+    run = await db.get(NormalizeRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Normalize run not found")
+    return run
+
+
 @router.post("/tables/{table_id}/find", response_model=FindResponse)
 async def find_in_table(
     table_id: int,
@@ -2772,6 +2794,404 @@ async def revert_replace_run(
     await db.commit()
     await db.refresh(run)
     return run
+
+
+# ---------- Normalize (content tool) ----------
+
+
+def _normalize_ops_ordered(operations: list[str]) -> list[str]:
+    """Selection as a subset of the canonical OPERATIONS, in canonical order."""
+    chosen = set(operations)
+    return [op for op in NORMALIZE_OPERATIONS if op in chosen]
+
+
+@router.post(
+    "/tables/{table_id}/normalize/preview",
+    response_model=NormalizePreview,
+)
+async def preview_normalize(
+    table_id: int,
+    payload: NormalizePreviewRequest,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=500),
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> NormalizePreview:
+    """Dry run: counts how many cells in scope WOULD change and returns a
+    paginated sample with the before/after diff. Persists nothing."""
+    await _get_table_or_404(db, table_id, actor, level="read")
+    ops = _normalize_ops_ordered(payload.operations)
+    if not ops:
+        raise HTTPException(
+            status_code=400, detail="Select at least one operation."
+        )
+
+    candidates = 0
+    changed: list[tuple[BulkTableCell, int, str, str, list[str]]] = []
+    for cell, row_pos, col_name in await _load_cells_with_meta(
+        db, table_id, payload.column_ids
+    ):
+        if not cell.value:
+            continue
+        candidates += 1
+        new_value, applied = normalize_apply_traced(cell.value, ops)
+        if applied and new_value != cell.value:
+            changed.append((cell, row_pos, col_name, new_value, applied))
+
+    start = (page - 1) * page_size
+    page_items = changed[start : start + page_size]
+    items: list[NormalizePreviewCell] = []
+    for cell, row_pos, col_name, new_value, applied in page_items:
+        old_segs, new_segs = diff_segments(cell.value or "", new_value)
+        items.append(
+            NormalizePreviewCell(
+                row_id=cell.row_id,
+                row_position=row_pos,
+                column_id=cell.column_id,
+                column_name=col_name,
+                old_value=cell.value,
+                new_value=new_value,
+                applied_ops=applied,
+                old_segments=old_segs,  # type: ignore[arg-type]
+                new_segments=new_segs,  # type: ignore[arg-type]
+            )
+        )
+    return NormalizePreview(
+        candidates=candidates,
+        would_change=len(changed),
+        page=page,
+        page_size=page_size,
+        items=items,
+    )
+
+
+@router.post(
+    "/tables/{table_id}/normalize",
+    response_model=NormalizeRunRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def normalize_table(
+    table_id: int,
+    payload: NormalizeApplyRequest,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> NormalizeRun:
+    """Apply the selected transforms across EVERY cell in scope at once and
+    record a revertable run with a full before/after snapshot. 400 when nothing
+    would change (no empty run is created)."""
+    await _get_table_or_404(db, table_id, actor, level="write")
+    ops = _normalize_ops_ordered(payload.operations)
+    if not ops:
+        raise HTTPException(
+            status_code=400, detail="Select at least one operation."
+        )
+
+    snapshot: list[dict] = []
+    for cell, _row_pos, _col_name in await _load_cells_with_meta(
+        db, table_id, payload.column_ids
+    ):
+        if not cell.value:
+            continue
+        new_value, applied = normalize_apply_traced(cell.value, ops)
+        if applied and new_value != cell.value:
+            snapshot.append(
+                {
+                    "row_id": cell.row_id,
+                    "column_id": cell.column_id,
+                    "old_value": cell.value,
+                    "old_status": cell.status,
+                    "new_value": new_value,
+                }
+            )
+            # A targeted normalize isn't a regeneration: keep the cell's status
+            # but drop any cached translation — it no longer matches the source,
+            # same invariant the upsert path enforces.
+            cell.value = new_value
+            if cell.translations is not None:
+                cell.translations = None
+
+    if not snapshot:
+        raise HTTPException(
+            status_code=400, detail="Nothing to normalize — cells already clean."
+        )
+
+    run = NormalizeRun(
+        table_id=table_id,
+        operations=ops,
+        column_ids=list(payload.column_ids),
+        cell_count=len(snapshot),
+        status="applied",
+        snapshot=snapshot,
+        created_by_id=actor.id,
+    )
+    db.add(run)
+    await _bump_table_updated(db, table_id)
+    await db.commit()
+    await db.refresh(run)
+    return run
+
+
+@router.get(
+    "/tables/{table_id}/normalize-runs",
+    response_model=list[NormalizeRunRead],
+)
+async def list_normalize_runs(
+    table_id: int,
+    limit: int = Query(default=100, ge=1, le=500),
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[NormalizeRun]:
+    """Normalize history for a table, newest first."""
+    await _get_table_or_404(db, table_id, actor, level="read")
+    runs = (
+        (
+            await db.execute(
+                select(NormalizeRun)
+                .where(NormalizeRun.table_id == table_id)
+                .order_by(NormalizeRun.created_at.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return list(runs)
+
+
+@router.get("/normalize-runs/{run_id}", response_model=NormalizeRunDetail)
+async def get_normalize_run(
+    run_id: int,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=500),
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> NormalizeRunDetail:
+    """Run metadata + the affected cells (paginated) with before/after and a
+    per-cell ``drifted`` flag (current value no longer matches what the
+    normalize wrote). ``drifted_count`` is computed across the whole run."""
+    run = await _get_normalize_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="read")
+
+    snap: list[dict] = run.snapshot or []
+    row_ids = {e["row_id"] for e in snap}
+    col_ids = {e["column_id"] for e in snap}
+
+    cur: dict[tuple[int, int], BulkTableCell] = {}
+    row_pos: dict[int, int] = {}
+    col_name: dict[int, str] = {}
+    if row_ids and col_ids:
+        cur_cells = (
+            (
+                await db.execute(
+                    select(BulkTableCell).where(
+                        BulkTableCell.row_id.in_(row_ids),
+                        BulkTableCell.column_id.in_(col_ids),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        cur = {(c.row_id, c.column_id): c for c in cur_cells}
+        row_pos = {
+            rid: pos
+            for rid, pos in (
+                await db.execute(
+                    select(BulkTableRow.id, BulkTableRow.position).where(
+                        BulkTableRow.id.in_(row_ids)
+                    )
+                )
+            ).all()
+        }
+        col_name = {
+            cid: name
+            for cid, name in (
+                await db.execute(
+                    select(BulkTableColumn.id, BulkTableColumn.name).where(
+                        BulkTableColumn.id.in_(col_ids)
+                    )
+                )
+            ).all()
+        }
+
+    drifted_count = 0
+    for e in snap:
+        c = cur.get((e["row_id"], e["column_id"]))
+        cur_val = c.value if c is not None else None
+        if cur_val != e["new_value"]:
+            drifted_count += 1
+
+    ops = run.operations or []
+    start = (page - 1) * page_size
+    page_snap = snap[start : start + page_size]
+    items: list[NormalizedCell] = []
+    for e in page_snap:
+        c = cur.get((e["row_id"], e["column_id"]))
+        cur_val = c.value if c is not None else None
+        cur_status = c.status if c is not None else "empty"
+        old_v = e["old_value"]
+        new_v = e["new_value"]
+        drifted = cur_val != new_v
+        # Which transforms actually changed THIS cell (recomputed from the
+        # stored old value — cheap + deterministic).
+        _nv, applied = normalize_apply_traced(old_v or "", ops)
+        # old side (struck removals) + the green "what normalize produced" new
+        # side both come from a char-level diff of old vs new.
+        old_segs, normalize_new_segs = diff_segments(old_v or "", new_v or "")
+        # When the cell was edited after the normalize, the "after" column
+        # shows the LIVE value with the later edit highlighted (amber), diffed
+        # against what the normalize wrote. Otherwise it shows the normalize
+        # result with the inserted text highlighted (green).
+        if drifted:
+            new_segs = (
+                drift_segments(new_v or "", cur_val)
+                if cur_val is not None
+                else []
+            )
+        else:
+            new_segs = normalize_new_segs
+        items.append(
+            NormalizedCell(
+                row_id=e["row_id"],
+                row_position=row_pos.get(e["row_id"], 0),
+                column_id=e["column_id"],
+                column_name=col_name.get(e["column_id"], "—"),
+                old_value=old_v,
+                new_value=new_v,
+                current_value=cur_val,
+                current_status=cur_status,  # type: ignore[arg-type]
+                drifted=drifted,
+                applied_ops=applied,
+                old_segments=old_segs,  # type: ignore[arg-type]
+                new_segments=new_segs,  # type: ignore[arg-type]
+            )
+        )
+
+    return NormalizeRunDetail(
+        id=run.id,
+        table_id=run.table_id,
+        name=run.name,
+        operations=run.operations,
+        column_ids=run.column_ids,
+        cell_count=run.cell_count,
+        status=run.status,  # type: ignore[arg-type]
+        created_by_id=run.created_by_id,
+        created_at=run.created_at,
+        reverted_at=run.reverted_at,
+        created_by_name=await _resolve_creator_name(db, run.created_by_id),
+        page=page,
+        page_size=page_size,
+        total_cells=len(snap),
+        drifted_count=drifted_count,
+        items=items,
+    )
+
+
+@router.post("/normalize-runs/{run_id}/revert", response_model=NormalizeRunRead)
+async def revert_normalize_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> NormalizeRun:
+    """Restore every cell this run changed to its pre-normalize value. Writes
+    through the normal cell path (clears stale translations). Idempotent:
+    a no-op on an already-reverted run. Note this discards any edits made
+    to those cells after the normalize — the run page surfaces a drift count
+    so the operator knows before clicking."""
+    run = await _get_normalize_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+
+    if run.status == "reverted":
+        return run
+
+    # Valid (row, column) pairs that still belong to this table — so a
+    # deleted row/column doesn't get a resurrected orphan cell.
+    valid_rows = {
+        rid
+        for (rid,) in (
+            await db.execute(
+                select(BulkTableRow.id).where(
+                    BulkTableRow.table_id == run.table_id
+                )
+            )
+        ).all()
+    }
+    valid_cols = {
+        cid
+        for (cid,) in (
+            await db.execute(
+                select(BulkTableColumn.id).where(
+                    BulkTableColumn.table_id == run.table_id
+                )
+            )
+        ).all()
+    }
+
+    for e in run.snapshot or []:
+        rid, cid = e["row_id"], e["column_id"]
+        if rid not in valid_rows or cid not in valid_cols:
+            continue
+        cell = (
+            await db.execute(
+                select(BulkTableCell).where(
+                    BulkTableCell.row_id == rid,
+                    BulkTableCell.column_id == cid,
+                )
+            )
+        ).scalar_one_or_none()
+        old_value = e["old_value"]
+        old_status = e.get("old_status") or _default_status_for(old_value)
+        if cell is None:
+            db.add(
+                BulkTableCell(
+                    row_id=rid,
+                    column_id=cid,
+                    value=old_value,
+                    status=old_status,
+                )
+            )
+        else:
+            if cell.value != old_value and cell.translations is not None:
+                cell.translations = None
+            cell.value = old_value
+            cell.status = old_status
+
+    run.status = "reverted"
+    run.reverted_at = datetime.now(timezone.utc)
+    await _bump_table_updated(db, run.table_id)
+    await db.commit()
+    await db.refresh(run)
+    return run
+
+
+@router.patch("/normalize-runs/{run_id}", response_model=NormalizeRunRead)
+async def rename_normalize_run(
+    run_id: int,
+    payload: RunRename,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> NormalizeRun:
+    run = await _get_normalize_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    run.name = _norm_run_name(payload)
+    await db.commit()
+    await db.refresh(run)
+    return run
+
+
+@router.delete(
+    "/normalize-runs/{run_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_normalize_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    run = await _get_normalize_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    await db.delete(run)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ---------- Structure & Formatting (content tool) ----------

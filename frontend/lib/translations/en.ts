@@ -1565,6 +1565,9 @@ export const en = {
   "tools.structureFormat.title": "Structure & formatting",
   "tools.structureFormat.desc":
     "Clean up AI output: markdown→HTML, strip response-start junk, inline CSS, and bold/italic.",
+  "tools.normalize.title": "Normalize",
+  "tools.normalize.desc":
+    "Tidy cell values: trim whitespace, strip URL schemes/slashes, lowercase. Revertable.",
 
   // ---------- pagination ----------
   "pager.showing": "Showing {from}–{to} of {total}",
@@ -1691,6 +1694,54 @@ export const en = {
     "{n} cell(s) were edited after this run. Reverting will discard those later changes too. Continue?",
   "structureFormatRun.driftWarning":
     "{n} cell(s) have been edited since this run — reverting would discard those changes.",
+
+  // ---------- normalize tool ----------
+  "normalize.backToTable": "← Back to table",
+  "normalize.title": "Normalize",
+  "normalize.onTable": "On table “{name}”",
+  "normalize.opsLabel": "Operations",
+  "normalize.opsHint":
+    "Selected operations run in the listed order — later ones build on earlier ones.",
+  "normalize.op.trim.title": "Trim whitespace",
+  "normalize.op.trim.desc":
+    "Strip leading and trailing spaces, tabs and newlines.",
+  "normalize.op.strip_scheme.title": "Strip URL scheme",
+  "normalize.op.strip_scheme.desc":
+    "Remove a leading http:// / https:// (and a leading //) — handy for a domains column.",
+  "normalize.op.strip_slashes.title": "Strip edge slashes",
+  "normalize.op.strip_slashes.desc":
+    "Remove leading and trailing “/” characters.",
+  "normalize.op.lowercase.title": "Lowercase",
+  "normalize.op.lowercase.desc":
+    "Lowercase the whole cell — apply only to lang/slug-style columns.",
+  "normalize.columnsLabel": "Columns to normalize",
+  "normalize.previewBtn": "Preview",
+  "normalize.previewResult": "{change} of {total} cells will change",
+  "normalize.previewHeading": "Preview — cells that will change",
+  "normalize.previewNone": "No cells would change with the current selection.",
+  "normalize.applyBtn": "Apply",
+  "normalize.confirmApply":
+    "Apply the selected operations to every cell in the chosen columns? This is revertable.",
+  "normalize.historyHeading": "History",
+  "normalize.historyCells": "{n} changed",
+  "normalize.runLabel": "Run #{id}",
+  "normalize.reverted": "reverted",
+
+  // ---------- normalize run detail ----------
+  "normalizeRun.title": "Normalize run #{id}",
+  "normalizeRun.meta": "{cells} changed · by {by} · {when}",
+  "normalizeRun.colBefore": "Before",
+  "normalizeRun.colAfter": "After",
+  "normalizeRun.revert": "Revert this normalize",
+  "normalizeRun.revertedAt": "Reverted · {when}",
+  "normalizeRun.confirmRevert":
+    "Restore every cell this normalize changed to its previous value?",
+  "normalizeRun.confirmRevertDrift":
+    "{n} cell(s) were edited after this normalize. Reverting will discard those later changes too. Continue?",
+  "normalizeRun.driftWarning":
+    "{n} cell(s) have been edited since this normalize ran — reverting would discard those changes.",
+  "normalizeRun.editedSince": "edited since",
+  "normalizeRun.revertedRow": "Reverted",
 
   // ---------- link checker tool ----------
   "tools.linkCheck.title": "Link checker",

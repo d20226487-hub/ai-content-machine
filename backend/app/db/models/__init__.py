@@ -24,6 +24,7 @@ from app.db.models.link_check_run import (
 )
 from app.db.models.link_fix_run import LinkFixCell, LinkFixRun
 from app.db.models.media_upload import MediaUpload
+from app.db.models.normalize_run import NormalizeRun
 from app.db.models.prompt import Prompt, PromptVersion
 from app.db.models.provider import Provider
 from app.db.models.publish_job import PublishJob
@@ -63,6 +64,7 @@ __all__ = [
     "LinkFixCell",
     "LinkFixRun",
     "MediaUpload",
+    "NormalizeRun",
     "Prompt",
     "PromptVersion",
     "Provider",

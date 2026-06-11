@@ -608,6 +608,107 @@ class StructureFormatRunDetail(StructureFormatRunRead):
     items: list[StructureFormatCell]
 
 
+# ----- Normalize (added in migration 0053) -----
+
+# The selectable transforms. Applied in THIS canonical order regardless of the
+# order they arrive in (mirrors services/normalize.OPERATIONS).
+NormalizeOp = Literal["trim", "strip_scheme", "strip_slashes", "lowercase"]
+
+
+class NormalizePreviewRequest(BaseModel):
+    """Dry-run a subset of the normalize transforms across the chosen columns.
+    ``column_ids`` empty = every column. At least one operation is required
+    (validated in the endpoint)."""
+
+    operations: list[NormalizeOp] = Field(default_factory=list)
+    column_ids: list[int] = Field(default_factory=list)
+
+
+class NormalizeApplyRequest(BaseModel):
+    """Apply the selected transforms across every cell in the chosen columns.
+    Same shape as the preview request."""
+
+    operations: list[NormalizeOp] = Field(default_factory=list)
+    column_ids: list[int] = Field(default_factory=list)
+
+
+class NormalizePreviewCell(BaseModel):
+    """One cell that would change, for the preview's scope table — same
+    Applied / before-after shape as the result table, without writing
+    anything."""
+
+    row_id: int
+    row_position: int
+    column_id: int
+    column_name: str
+    old_value: str | None
+    new_value: str | None
+    applied_ops: list[str] = []
+    old_segments: list[HighlightSegment] = []
+    new_segments: list[HighlightSegment] = []
+
+
+class NormalizePreview(BaseModel):
+    """Dry-run impact: counts + a paginated sample of the cells that would
+    change, so the user sees the scope before applying."""
+
+    candidates: int  # non-empty cells in scope
+    would_change: int  # of those, how many the transforms would alter
+    page: int
+    page_size: int
+    items: list[NormalizePreviewCell] = []
+
+
+class NormalizeRunRead(BaseModel):
+    """Summary of a normalize run — drives the history list."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    table_id: int
+    name: str | None = None
+    operations: list[str]
+    column_ids: list[int]
+    cell_count: int
+    status: Literal["applied", "reverted"]
+    created_by_id: int | None
+    created_at: datetime
+    reverted_at: datetime | None = None
+
+
+class NormalizedCell(BaseModel):
+    """One affected cell on the run detail page. ``current_value`` is the
+    cell's value right now; ``drifted`` is True when it no longer equals the
+    value the normalize wrote (someone edited or regenerated it since), so the
+    UI can warn that reverting would discard that later change.
+
+    ``applied_ops`` is the subset of the run's transforms that actually changed
+    THIS cell. ``old_segments`` / ``new_segments`` split the before/after text
+    so the UI can strike the removed parts and highlight the inserted parts."""
+
+    row_id: int
+    row_position: int
+    column_id: int
+    column_name: str
+    old_value: str | None
+    new_value: str | None
+    current_value: str | None
+    current_status: CellStatus
+    drifted: bool
+    applied_ops: list[str] = []
+    old_segments: list[HighlightSegment]
+    new_segments: list[HighlightSegment]
+
+
+class NormalizeRunDetail(NormalizeRunRead):
+    created_by_name: str | None = None
+    page: int
+    page_size: int
+    total_cells: int  # == cell_count, echoed for pagination math
+    drifted_count: int
+    items: list[NormalizedCell]
+
+
 # ----- Link checker (added in migration 0034) -----
 
 LinkCheckStatus = Literal["queued", "running", "cancelled", "done", "failed"]

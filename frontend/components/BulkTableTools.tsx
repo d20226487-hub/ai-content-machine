@@ -36,6 +36,12 @@ export function BulkTableTools({ tableId }: { tableId: number }) {
           title={t("tools.structureFormat.title")}
           description={t("tools.structureFormat.desc")}
         />
+        <ToolCard
+          href={`/library/${tableId}/normalize`}
+          icon="⌁"
+          title={t("tools.normalize.title")}
+          description={t("tools.normalize.desc")}
+        />
       </div>
     </section>
   );
