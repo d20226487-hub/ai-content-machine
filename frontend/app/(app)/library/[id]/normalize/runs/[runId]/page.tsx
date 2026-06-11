@@ -13,6 +13,7 @@ import {
   revertNormalizeRun,
   type HighlightSegment,
   type NormalizedCell,
+  type NormalizeOp,
   type NormalizeRunDetail,
 } from "@/lib/normalize";
 import type { BulkColumn } from "@/lib/types";
@@ -31,22 +32,28 @@ export default function NormalizeRunPage({
 
   const [run, setRun] = useState<NormalizeRunDetail | null>(null);
   const [page, setPage] = useState(1);
+  const [filterOp, setFilterOp] = useState<NormalizeOp | "">("");
   const [error, setError] = useState<string | null>(null);
   const [reverting, setReverting] = useState(false);
   const [editing, setEditing] = useState<NormalizedCell | null>(null);
   const [columns, setColumns] = useState<BulkColumn[]>([]);
 
+  // Changing the filter resets to page 1.
+  useEffect(() => {
+    setPage(1);
+  }, [filterOp]);
+
   const load = useCallback(
     async (p: number) => {
       try {
-        const r = await getNormalizeRun(rid, p, PAGE_SIZE);
+        const r = await getNormalizeRun(rid, p, PAGE_SIZE, filterOp);
         setRun(r);
         setError(null);
       } catch (e) {
         setError(e instanceof ApiError ? e.message : String(e));
       }
     },
-    [rid],
+    [rid, filterOp],
   );
 
   useEffect(() => {
@@ -165,6 +172,33 @@ export default function NormalizeRunPage({
             </p>
           )}
 
+          {/* filter by applied operation (only meaningful with >1 op) */}
+          {run.operations.length > 1 && (
+            <div className="mt-5 flex items-center gap-2">
+              <span className="text-xs text-neutral-500 dark:text-neutral-400">
+                {t("normalizeRun.filterLabel")}
+              </span>
+              <select
+                value={filterOp}
+                onChange={(e) => setFilterOp(e.target.value as NormalizeOp | "")}
+                className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs dark:border-neutral-700 dark:bg-neutral-900"
+              >
+                <option value="">{t("normalizeRun.filterAllOps")}</option>
+                {run.operations.map((o) => (
+                  <option key={o} value={o}>
+                    {t(`normalize.op.${o}.title` as never)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {run.total_cells === 0 ? (
+            <p className="mt-5 rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-3 text-sm text-neutral-600 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400">
+              {t("normalizeRun.noFilterMatch")}
+            </p>
+          ) : (
+            <>
           <div className="mt-5 overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-800">
             <table className="w-full text-left text-sm">
               <thead className="bg-neutral-50 text-xs uppercase tracking-wide text-neutral-500 dark:bg-neutral-900 dark:text-neutral-400">
@@ -222,6 +256,8 @@ export default function NormalizeRunPage({
             total={run.total_cells}
             onPage={setPage}
           />
+            </>
+          )}
         </>
       )}
 

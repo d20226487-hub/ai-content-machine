@@ -1742,6 +1742,9 @@ export const en = {
     "{n} cell(s) have been edited since this normalize ran — reverting would discard those changes.",
   "normalizeRun.editedSince": "edited since",
   "normalizeRun.revertedRow": "Reverted",
+  "normalizeRun.filterLabel": "Applied:",
+  "normalizeRun.filterAllOps": "All operations",
+  "normalizeRun.noFilterMatch": "No cells were changed by that operation.",
 
   // ---------- link checker tool ----------
   "tools.linkCheck.title": "Link checker",

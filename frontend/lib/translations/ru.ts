@@ -1806,6 +1806,9 @@ export const ru: Record<keyof typeof en, string> = {
     "{n} ячеек были изменены после этой нормализации — откат отменит и эти изменения.",
   "normalizeRun.editedSince": "изменено позже",
   "normalizeRun.revertedRow": "Откачено",
+  "normalizeRun.filterLabel": "Применено:",
+  "normalizeRun.filterAllOps": "Все операции",
+  "normalizeRun.noFilterMatch": "Эта операция не изменила ни одной ячейки.",
 
   "tools.linkCheck.title": "Проверка ссылок",
   "tools.linkCheck.desc":

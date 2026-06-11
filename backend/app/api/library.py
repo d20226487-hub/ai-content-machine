@@ -2964,12 +2964,14 @@ async def get_normalize_run(
     run_id: int,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=500),
+    op: str | None = Query(default=None),
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> NormalizeRunDetail:
     """Run metadata + the affected cells (paginated) with before/after and a
     per-cell ``drifted`` flag (current value no longer matches what the
-    normalize wrote). ``drifted_count`` is computed across the whole run."""
+    normalize wrote). ``drifted_count`` is computed across the whole run.
+    ``op`` filters to cells where that transform actually applied."""
     run = await _get_normalize_run_or_404(db, run_id)
     await _get_table_or_404(db, run.table_id, actor, level="read")
 
@@ -3023,8 +3025,23 @@ async def get_normalize_run(
             drifted_count += 1
 
     ops = run.operations or []
+    # Optional filter: only cells where the chosen transform actually applied.
+    # The snapshot stores no per-cell applied_ops (it's recomputed from the
+    # stored old value), so filtering recomputes it for each entry — cheap
+    # in-memory string ops, same call the page loop uses below.
+    op_filter = op if op in NORMALIZE_OPERATIONS else None
+    if op_filter:
+        visible = [
+            e
+            for e in snap
+            if op_filter
+            in normalize_apply_traced(e["old_value"] or "", ops)[1]
+        ]
+    else:
+        visible = snap
+
     start = (page - 1) * page_size
-    page_snap = snap[start : start + page_size]
+    page_snap = visible[start : start + page_size]
     items: list[NormalizedCell] = []
     for e in page_snap:
         c = cur.get((e["row_id"], e["column_id"]))
@@ -3082,7 +3099,7 @@ async def get_normalize_run(
         created_by_name=await _resolve_creator_name(db, run.created_by_id),
         page=page,
         page_size=page_size,
-        total_cells=len(snap),
+        total_cells=len(visible),
         drifted_count=drifted_count,
         items=items,
     )

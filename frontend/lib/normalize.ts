@@ -123,9 +123,15 @@ export function getNormalizeRun(
   runId: number,
   page = 1,
   pageSize = 25,
+  op?: NormalizeOp | "",
 ): Promise<NormalizeRunDetail> {
+  const sp = new URLSearchParams({
+    page: String(page),
+    page_size: String(pageSize),
+  });
+  if (op) sp.set("op", op);
   return api<NormalizeRunDetail>(
-    `/library/normalize-runs/${runId}?page=${page}&page_size=${pageSize}`,
+    `/library/normalize-runs/${runId}?${sp.toString()}`,
   );
 }
 
