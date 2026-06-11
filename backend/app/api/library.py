@@ -1704,9 +1704,10 @@ async def translate_cell(
 
 # ---------- CSV ----------
 
-# Match the proxy's request-body cap (Caddyfile: 50 MB) so a too-big upload
-# fails with a clear 400 instead of a confusing proxy error.
-_MAX_CSV_UPLOAD = 50 * 1024 * 1024
+# Upload ceiling for a CSV import. The Traefik deployment sets no request-body
+# limit, so this in-app guard is the only gate — keep it sane so an accidental
+# giant upload fails with a clear 400 instead of spiking API memory.
+_MAX_CSV_UPLOAD = 100 * 1024 * 1024  # 100 MB
 # Cells per bulk INSERT statement — bounds statement + memory size on huge files.
 _CSV_CELL_BATCH = 5000
 
@@ -1834,7 +1835,7 @@ async def import_csv(
 
 # ---------- Google-Docs import ----------
 
-_MAX_GDOCS_UPLOAD = 80 * 1024 * 1024  # 80 MB — Doc HTML adds up
+_MAX_GDOCS_UPLOAD = 200 * 1024 * 1024  # 200 MB — Doc HTML + JSON export adds up
 
 
 async def _get_gdocs_run_or_404(
