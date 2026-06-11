@@ -1267,6 +1267,8 @@ export const en = {
   "bulkRuns.colLang": "Lang",
   "bulkRuns.perRowLang": "per-row",
   "bulkRuns.perRowLangHint": "Each row reads its language from a column.",
+  "bulkRuns.multiDomain": "multiple sites",
+  "bulkRuns.multiDomainHint": "Each row publishes to the domain in a column — there's no single target.",
   "bulkRun.colLang": "Lang",
   "bulkRuns.clearCompleted": "Clear completed",
   "bulkRuns.clearCompletedConfirm":

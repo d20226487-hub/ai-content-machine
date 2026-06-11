@@ -1326,6 +1326,8 @@ export const ru: Record<keyof typeof en, string> = {
   "bulkRuns.colLang": "Язык",
   "bulkRuns.perRowLang": "из колонки",
   "bulkRuns.perRowLangHint": "Каждая строка читает язык из колонки таблицы.",
+  "bulkRuns.multiDomain": "несколько сайтов",
+  "bulkRuns.multiDomainHint": "Каждая строка публикуется в домен из колонки — единого адреса нет.",
   "bulkRun.colLang": "Язык",
   "bulkRuns.clearCompleted": "Очистить завершённые",
   "bulkRuns.clearCompletedConfirm":

@@ -171,7 +171,16 @@ export default function RunsPage() {
                     </Link>
                   </td>
                   <td className="px-3 py-2 text-neutral-700 dark:text-neutral-300">
-                    {r.domain_name ?? t("pubHistory.deletedDomain")}
+                    {r.mode === "multi" ? (
+                      <span
+                        className="italic text-sky-700 dark:text-sky-400"
+                        title={t("bulkRuns.multiDomainHint")}
+                      >
+                        {t("bulkRuns.multiDomain")}
+                      </span>
+                    ) : (
+                      r.domain_name ?? t("pubHistory.deletedDomain")
+                    )}
                   </td>
                   <td className="px-3 py-2 text-xs text-neutral-700 dark:text-neutral-300">
                     {r.profile_name ?? "—"}
