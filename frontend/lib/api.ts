@@ -36,8 +36,12 @@ interface ApiOptions extends Omit<RequestInit, "body"> {
 export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Promise<T> {
   const { body, noAuth, headers, ...rest } = opts;
 
+  // FormData bodies (file uploads) must NOT be JSON-stringified, and the
+  // browser sets the multipart Content-Type (with boundary) itself.
+  const isForm = typeof FormData !== "undefined" && body instanceof FormData;
+
   const finalHeaders: Record<string, string> = {
-    "Content-Type": "application/json",
+    ...(isForm ? {} : { "Content-Type": "application/json" }),
     ...(headers as Record<string, string> | undefined),
   };
 
@@ -49,7 +53,12 @@ export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Pro
   const res = await fetch(`${API_URL}${path}`, {
     ...rest,
     headers: finalHeaders,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body:
+      body === undefined
+        ? undefined
+        : isForm
+          ? (body as FormData)
+          : JSON.stringify(body),
   });
 
   if (res.status === 204) return undefined as T;

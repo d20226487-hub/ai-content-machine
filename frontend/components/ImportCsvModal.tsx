@@ -23,7 +23,10 @@ const SAMPLES: { file: string; labelKey: "csvImport.sampleWpSingle" | "csvImport
 export function ImportCsvModal({ onClose, onImported }: Props) {
   const { t } = useT();
   const [name, setName] = useState("");
-  const [csvText, setCsvText] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  // Only the first slice is read for the preview; the full file is streamed to
+  // the server as multipart on submit (never loaded into a JS string).
+  const [previewText, setPreviewText] = useState("");
   const [delimiter, setDelimiter] = useState(",");
   const [hasHeader, setHasHeader] = useState(true);
   const [filename, setFilename] = useState<string | null>(null);
@@ -35,8 +38,8 @@ export function ImportCsvModal({ onClose, onImported }: Props) {
   async function onPick(e: ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
-    const text = await f.text();
-    setCsvText(text);
+    setFile(f);
+    setPreviewText(await f.slice(0, 64 * 1024).text());
     setFilename(f.name);
     if (!name.trim()) {
       setName(f.name.replace(/\.[^.]+$/, ""));
@@ -45,12 +48,13 @@ export function ImportCsvModal({ onClose, onImported }: Props) {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    if (!file) return;
     setBusy(true);
     setError(null);
     try {
       const table = await importCsv({
         name: name.trim(),
-        csv_text: csvText,
+        file,
         delimiter,
         has_header: hasHeader,
       });
@@ -64,7 +68,7 @@ export function ImportCsvModal({ onClose, onImported }: Props) {
     }
   }
 
-  const previewRows = csvText
+  const previewRows = previewText
     .split("\n")
     .slice(0, 4)
     .map((l) => l.split(delimiter));
@@ -167,7 +171,7 @@ export function ImportCsvModal({ onClose, onImported }: Props) {
           </label>
         </div>
 
-        {csvText && (
+        {previewText && (
           <div>
             <p className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
               {t("csvImport.previewLabel")}
@@ -212,7 +216,7 @@ export function ImportCsvModal({ onClose, onImported }: Props) {
           </button>
           <button
             type="submit"
-            disabled={busy || !name.trim() || !csvText.trim()}
+            disabled={busy || !name.trim() || !file}
             className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 dark:hover:bg-neutral-200 disabled:opacity-60"
           >
             {busy ? t("common.importing") : t("common.import")}

@@ -443,15 +443,21 @@ export function deleteGenerationRun(runId: number): Promise<void> {
 
 export interface ImportCsvPayload {
   name: string;
-  csv_text: string;
+  /** The CSV file itself — streamed as multipart, not read into a string. */
+  file: File;
   delimiter?: string;
   has_header?: boolean;
 }
 
 export function importCsv(p: ImportCsvPayload): Promise<BulkTable> {
+  const fd = new FormData();
+  fd.append("file", p.file);
+  fd.append("name", p.name);
+  fd.append("delimiter", p.delimiter ?? ",");
+  fd.append("has_header", String(p.has_header ?? true));
   return api<BulkTable>("/library/tables/import-csv", {
     method: "POST",
-    body: p,
+    body: fd,
   });
 }
 

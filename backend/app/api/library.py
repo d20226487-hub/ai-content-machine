@@ -68,7 +68,6 @@ from app.schemas.bulk import (
     ColumnRead,
     ColumnUpdate,
     ColumnValuesResponse,
-    CsvImportRequest,
     DiffBlock,
     DismissRequest,
     FindReplaceRunDetail,
@@ -1692,20 +1691,67 @@ async def translate_cell(
 
 # ---------- CSV ----------
 
+# Match the proxy's request-body cap (Caddyfile: 50 MB) so a too-big upload
+# fails with a clear 400 instead of a confusing proxy error.
+_MAX_CSV_UPLOAD = 50 * 1024 * 1024
+# Cells per bulk INSERT statement — bounds statement + memory size on huge files.
+_CSV_CELL_BATCH = 5000
+
+
 @router.post(
     "/tables/import-csv", response_model=TableRead, status_code=status.HTTP_201_CREATED
 )
 async def import_csv(
-    payload: CsvImportRequest,
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    delimiter: str = Form(","),
+    has_header: bool = Form(True),
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TableRead:
-    reader = csv.reader(io.StringIO(payload.csv_text), delimiter=payload.delimiter)
+    """Create a bulk table from an uploaded CSV.
+
+    Streamed multipart upload (not a JSON ``csv_text`` string) + bulk INSERTs
+    (no per-row flush) so a multi-MB file imports in a couple of seconds instead
+    of timing out the proxy (502). Empty cells are skipped; fields beyond the
+    header count are ignored.
+    """
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    table_name = (name or "").strip()
+    if not table_name:
+        raise HTTPException(status_code=400, detail="A table name is required.")
+
+    # The delimiter <select> sends an escaped tab as the literal two chars "\t".
+    if delimiter in ("\\t", "\t"):
+        delimiter = "\t"
+    if len(delimiter) != 1:
+        raise HTTPException(
+            status_code=400, detail="Delimiter must be a single character."
+        )
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+    if len(raw) > _MAX_CSV_UPLOAD:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File too large (max {_MAX_CSV_UPLOAD // (1024 * 1024)} MB).",
+        )
+    try:
+        text_data = raw.decode("utf-8-sig")  # tolerate a UTF-8 BOM
+    except UnicodeDecodeError:
+        try:
+            text_data = raw.decode("latin-1")
+        except UnicodeDecodeError:
+            raise HTTPException(status_code=400, detail="The file is not valid text.")
+
+    reader = csv.reader(io.StringIO(text_data), delimiter=delimiter)
     rows = [r for r in reader]
     if not rows:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CSV is empty")
 
-    if payload.has_header:
+    if has_header:
         headers = [h.strip() or f"Column {i + 1}" for i, h in enumerate(rows[0])]
         data_rows = rows[1:]
     else:
@@ -1713,39 +1759,64 @@ async def import_csv(
         headers = [f"Column {i + 1}" for i in range(col_count)]
         data_rows = rows
 
-    t = BulkTable(name=payload.name.strip(), created_by_id=actor.id)
+    t = BulkTable(name=table_name, created_by_id=actor.id)
     db.add(t)
     await db.flush()
 
-    column_objs: list[BulkTableColumn] = []
-    for i, h in enumerate(headers):
-        col = BulkTableColumn(table_id=t.id, position=i, name=h, kind="input")
-        db.add(col)
-        column_objs.append(col)
-    await db.flush()
+    column_objs: list[BulkTableColumn] = [
+        BulkTableColumn(table_id=t.id, position=i, name=h, kind="input")
+        for i, h in enumerate(headers)
+    ]
+    db.add_all(column_objs)
+    await db.flush()  # one round-trip populates every column id
 
-    for ri, row_values in enumerate(data_rows):
-        row_obj = BulkTableRow(table_id=t.id, position=ri)
-        db.add(row_obj)
-        await db.flush()
-        for ci, val in enumerate(row_values):
-            if ci >= len(column_objs):
-                break  # ignore extra fields
-            value = (val or "").strip()
-            if value == "":
-                continue
-            db.add(
-                BulkTableCell(
-                    row_id=row_obj.id,
-                    column_id=column_objs[ci].id,
-                    value=value,
-                    status="manual",
+    if data_rows:
+        # Bulk-insert the rows in one statement, then read their ids back by
+        # position — versus a flush PER row (the old behaviour that timed out).
+        await db.execute(
+            pg_insert(BulkTableRow).values(
+                [{"table_id": t.id, "position": ri} for ri in range(len(data_rows))]
+            )
+        )
+        id_by_pos = {
+            pos: rid
+            for rid, pos in (
+                await db.execute(
+                    select(BulkTableRow.id, BulkTableRow.position).where(
+                        BulkTableRow.table_id == t.id
+                    )
                 )
+            ).all()
+        }
+        col_ids = [c.id for c in column_objs]
+        cell_payload: list[dict] = []
+        for ri, row_values in enumerate(data_rows):
+            rid = id_by_pos[ri]
+            for ci, val in enumerate(row_values):
+                if ci >= len(col_ids):
+                    break  # ignore extra fields
+                value = (val or "").strip()
+                if value == "":
+                    continue
+                cell_payload.append(
+                    {
+                        "row_id": rid,
+                        "column_id": col_ids[ci],
+                        "value": value,
+                        "status": "manual",
+                    }
+                )
+        # Batch the cell inserts to bound statement + memory size.
+        for i in range(0, len(cell_payload), _CSV_CELL_BATCH):
+            await db.execute(
+                pg_insert(BulkTableCell).values(cell_payload[i : i + _CSV_CELL_BATCH])
             )
 
     await db.commit()
     fresh = await _get_owned_table_or_404(db, t.id, actor, full=True)
-    return await _table_to_read(db, fresh)
+    # The client only needs the id to navigate (the table page re-fetches), so
+    # return a light first page instead of echoing every cell back as JSON.
+    return await _table_to_read_paginated(db, fresh, 1, 25)
 
 
 # ---------- Google-Docs import ----------
