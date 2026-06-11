@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.cms.registry import UnsupportedCms, get_cms_client
@@ -77,6 +77,14 @@ _CUSTOM_CMS_SLUG_LIKE_FIELDS = frozenset(
     {"slug", "url", "permalink", "path", "post_slug"}
 )
 _CUSTOM_CMS_DEFAULT_HOMEPAGE_SLUG = "home"
+
+
+def _is_simple_lang_code(value: str | None) -> bool:
+    """True for a bare 2-letter language code (``en``, ``AR``) — the only shape
+    we lowercase for Custom CMS. Region/script forms (``pt-BR``, ``zh-Hant``)
+    return False so their casing is preserved."""
+    s = (value or "").strip()
+    return len(s) == 2 and s.isalpha()
 
 
 # ---------- per-row target resolution ----------
@@ -208,17 +216,41 @@ async def resolve_row_target(
     if not domain_value:
         return ResolveError(message="Domain column is empty for this row.")
 
-    # Lookup by exact name among ACTIVE domains only. Trashed domains
-    # with the same name are invisible — the partial unique index added
-    # in migration 0023 lets a trashed and an active domain share a name
-    # (e.g. you trashed "Site A" and recreated a new "Site A").
+    # Tolerant lookup among ACTIVE domains only (trashed domains with the same
+    # name are invisible — the partial unique index from migration 0023 lets a
+    # trashed and an active domain share a name). Operators routinely paste a
+    # domain with a scheme / www / trailing slash (``https://example.com/``), so
+    # match the bare host case-insensitively first, then fall back to the exact
+    # raw value for a friendly (non-host) domain name.
+    from app.services.translation_links import normalize_domain
+
+    raw_domain = domain_value.strip()
+    bare_domain = normalize_domain(raw_domain)
+    # `.first()` (not scalar_one_or_none): the unique index is on the exact name,
+    # so a case-insensitive match could in theory hit >1 row — pick the lowest id
+    # deterministically rather than raising.
     domain = (
-        await db.execute(
-            select(Domain).where(
-                Domain.name == domain_value, Domain.deleted_at.is_(None)
+        (
+            await db.execute(
+                select(Domain)
+                .where(
+                    func.lower(Domain.name) == bare_domain,
+                    Domain.deleted_at.is_(None),
+                )
+                .order_by(Domain.id)
             )
         )
-    ).scalar_one_or_none()
+        .scalars()
+        .first()
+    )
+    if domain is None:
+        domain = (
+            await db.execute(
+                select(Domain).where(
+                    Domain.name == raw_domain, Domain.deleted_at.is_(None)
+                )
+            )
+        ).scalar_one_or_none()
     if domain is None:
         return ResolveError(message=f"Domain not found: {domain_value!r}.")
 
@@ -468,6 +500,13 @@ async def publish_one_row(
         lang_from_field = (fields.get("lang") or "").strip()
         if lang_from_field:
             effective_language = lang_from_field
+        # Custom CMS: lowercase a simple 2-letter language code (EN -> en) on
+        # both the body field and the value sent to the client; region/script
+        # codes (pt-BR, zh-Hant) keep their casing.
+        if _is_simple_lang_code(effective_language):
+            effective_language = (effective_language or "").strip().lower()
+            if "lang" in fields:
+                fields["lang"] = effective_language
         effective_lang_lc = (effective_language or "").strip().lower()
 
         # Normalize slug-like fields before they go on the wire. See the
@@ -489,7 +528,7 @@ async def publish_one_row(
                 # Cell was slashes-only — operator's marker for "this is
                 # the language homepage". Replace with the upstream's
                 # sentinel word so the body carries `slug=home`.
-                fields[fkey] = homepage_slug
+                new_val = homepage_slug
             elif (
                 effective_lang_lc
                 and stripped
@@ -500,9 +539,14 @@ async def publish_one_row(
                 # homepage to avoid the double-slug `/es/es/` URL —
                 # honoring how operators keep their per-language home
                 # rows in bulk tables.
-                fields[fkey] = homepage_slug
-            elif stripped != raw:
-                fields[fkey] = stripped
+                new_val = homepage_slug
+            else:
+                new_val = stripped
+            # Custom CMS slugs are lowercased — the upstream fleet expects
+            # lowercase paths (WP sanitizes its own slugs, so it's left alone).
+            new_val = new_val.lower()
+            if new_val != raw:
+                fields[fkey] = new_val
 
     try:
         media_cache = MediaCache(db, domain.id) if domain.cms_type == "wordpress" else None
