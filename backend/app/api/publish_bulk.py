@@ -391,11 +391,29 @@ async def pause_run(run_id: int, db: AsyncSession = Depends(get_db)) -> BulkRunD
 async def resume_run(
     run_id: int, db: AsyncSession = Depends(get_db)
 ) -> BulkRunDetail:
-    detail = await _set_status(
-        db, run_id, allowed_from={"paused"}, next_status="running"
-    )
+    """Resume a paused run.
+
+    The run is left in 'paused' and the seed task does the paused -> running
+    transition itself, re-enqueuing only the rows that never reached a terminal
+    state (candidate_row_ids excludes posted/failed/posting).
+
+    We deliberately do NOT pre-flip the run to 'running' here. The seed bails
+    unless the run is 'queued' or 'paused' (a guard that stops a stray seed from
+    re-enqueueing an already-running run), so setting 'running' first made every
+    Resume a silent no-op — the run stayed stuck in 'running' with its leftover
+    rows never re-enqueued. The seed flips to 'running' within moments; the
+    run-detail page polls while paused, so the UI catches up on the next tick.
+    """
+    run = await db.get(BulkPublishRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    if run.status != "paused":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot transition from {run.status} to running",
+        )
     seed_publish_run_task.delay(run_id)
-    return detail
+    return await _to_detail(db, run)
 
 
 @router.post(
