@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import {
@@ -14,7 +15,6 @@ import { useT } from "@/lib/i18n-context";
 import {
   listLanguageSyncRuns,
   syncLanguages,
-  type LanguageSyncOneResult,
   type LanguageSyncRun,
   type LanguageSyncTarget,
 } from "@/lib/publishLanguages";
@@ -54,7 +54,6 @@ export default function LanguagesPage() {
   >(DEFAULT_PAGE_SIZE);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [reloadTick, setReloadTick] = useState(0);
 
   // Reset to page 1 when page-size changes — otherwise a user on page 5
   // of size=10 (total 50) switching to size=100 lands on page 5 of an
@@ -83,7 +82,7 @@ export default function LanguagesPage() {
     return () => {
       cancelled = true;
     };
-  }, [reloadTick, page, pageSize]);
+  }, [page, pageSize]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const hasMore = page < totalPages;
@@ -99,7 +98,7 @@ export default function LanguagesPage() {
         </p>
       </header>
 
-      <NewSyncForm onCreated={() => setReloadTick((n) => n + 1)} />
+      <NewSyncForm />
 
       <section>
         <h2 className="mb-2 text-sm font-semibold text-neutral-900 dark:text-neutral-100">
@@ -229,8 +228,17 @@ function SourceBadge({ source }: { source: string }) {
 }
 
 function Counts({ run }: { run: LanguageSyncRun }) {
+  const { t } = useT();
   return (
     <span className="space-x-2 font-mono tabular-nums">
+      {run.status !== "done" && (
+        <span
+          className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950/50 dark:text-blue-300"
+          title={run.status}
+        >
+          {t("langPage.statusActive")}
+        </span>
+      )}
       <span title="total">{run.total_count}</span>
       {run.ok_count > 0 && (
         <span className="text-green-700 dark:text-green-400" title="ok">
@@ -266,8 +274,9 @@ function Counts({ run }: { run: LanguageSyncRun }) {
  * Picker: `MultiDomainPicker` (chip list + search + checkbox popover).
  * Custom-CMS-only because the upstream endpoint is.
  */
-function NewSyncForm({ onCreated }: { onCreated: () => void }) {
+function NewSyncForm() {
   const { t } = useT();
+  const router = useRouter();
   const [picked, setPicked] = useState<DomainPickerItem[]>([]);
   // Mode toggle: false = shared textarea, true = per-site textareas.
   const [perSite, setPerSite] = useState(false);
@@ -278,10 +287,6 @@ function NewSyncForm({ onCreated }: { onCreated: () => void }) {
   const [siteLangs, setSiteLangs] = useState<Record<number, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastResult, setLastResult] = useState<{
-    runId: number;
-    results: LanguageSyncOneResult[];
-  } | null>(null);
   // CSV import modal toggle. The modal does the heavy lifting (parse +
   // resolve + hard-fail on unknowns); on Apply it hands back N enriched
   // rows that we plug straight into picked + siteLangs + perSite=true.
@@ -357,11 +362,11 @@ function NewSyncForm({ onCreated }: { onCreated: () => void }) {
     if (targets.length === 0) return;
     setBusy(true);
     setError(null);
-    setLastResult(null);
     try {
+      // Enqueue + go straight to the run page, which streams the live
+      // progress bar + per-site outcomes and offers Retry-failed.
       const r = await syncLanguages(targets, "standalone");
-      setLastResult({ runId: r.run_id, results: r.results });
-      onCreated();
+      router.push(`/publish/languages/${r.run_id}`);
     } catch (e) {
       const raw = e instanceof ApiError ? e.message : String(e);
       const safe =
@@ -375,7 +380,6 @@ function NewSyncForm({ onCreated }: { onCreated: () => void }) {
               }
             })();
       setError(safe);
-    } finally {
       setBusy(false);
     }
   }
@@ -488,35 +492,6 @@ function NewSyncForm({ onCreated }: { onCreated: () => void }) {
         <p className="mt-3 rounded bg-red-50 px-2 py-1 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">
           {error}
         </p>
-      )}
-
-      {lastResult && (
-        <div className="mt-3 rounded-md border border-neutral-200 bg-neutral-50 p-3 text-xs dark:border-neutral-800 dark:bg-neutral-950/40">
-          <ul className="space-y-1">
-            {lastResult.results.map((r) => (
-              <li
-                key={r.domain_name}
-                className={
-                  r.skipped
-                    ? "text-neutral-500"
-                    : r.ok
-                      ? "text-green-700 dark:text-green-400"
-                      : "text-red-700 dark:text-red-400"
-                }
-              >
-                ● <span className="font-mono">{r.domain_name}</span>
-                {r.status_code != null ? ` · HTTP ${r.status_code}` : ""}
-                {r.skipped && r.skip_reason ? ` — ${r.skip_reason}` : ""}
-              </li>
-            ))}
-          </ul>
-          <Link
-            href={`/publish/languages/${lastResult.runId}`}
-            className="mt-2 inline-block text-blue-600 hover:underline dark:text-blue-400"
-          >
-            {t("langSync.viewThisRun")}
-          </Link>
-        </div>
       )}
 
       <div className="mt-3 flex items-center justify-between">

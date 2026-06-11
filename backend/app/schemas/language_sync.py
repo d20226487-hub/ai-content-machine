@@ -85,11 +85,13 @@ class LanguageSyncOneResult(BaseModel):
     elapsed_ms: int | None = None
 
 
-class LanguageSyncResult(BaseModel):
-    # `run_id` is the new persistent-run pointer — the trigger UI uses it
-    # to deep-link "View this run" into the history page after a sync.
+class LanguageSyncTrigger(BaseModel):
+    """Ack for an enqueued sync. The work now runs in the background, so the
+    trigger no longer carries per-site results — the caller polls the run
+    detail (or navigates to its page) to watch progress and see outcomes."""
+
     run_id: int
-    results: list[LanguageSyncOneResult]
+    status: str
 
 
 # ---------- run-history list + detail ----------
@@ -109,6 +111,7 @@ class LanguageSyncRunRead(BaseModel):
     created_by_id: int | None = None
     created_by_name: str | None = None
     source: str
+    status: str = "done"
     total_count: int
     ok_count: int
     fail_count: int
@@ -133,6 +136,8 @@ class LanguageSyncResultRead(BaseModel):
     domain_id: int | None = None
     domain_name: str
     languages: list[str]
+    # 'pending' until the worker attempts this target, then 'done'.
+    state: str = "done"
     ok: bool
     skipped: bool
     skip_reason: str | None = None
@@ -154,6 +159,9 @@ class LanguageSyncRunDetail(BaseModel):
     created_by_id: int | None = None
     created_by_name: str | None = None
     source: str
+    status: str = "done"
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
     total_count: int
     ok_count: int
     fail_count: int

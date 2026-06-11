@@ -10,9 +10,7 @@ publish to a domain should also be able to push languages to it).
 """
 from __future__ import annotations
 
-import asyncio
-
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -23,18 +21,17 @@ from app.db.models import LanguageSyncRun as LanguageSyncRunRow
 from app.db.models import User
 from app.db.session import get_db
 from app.schemas.language_sync import (
-    LanguageSyncOneResult,
     LanguageSyncRequest,
     LanguageSyncResolveKnownDomain,
     LanguageSyncResolveRequest,
     LanguageSyncResolveResult,
-    LanguageSyncResult,
     LanguageSyncResultRead,
     LanguageSyncRunDetail,
     LanguageSyncRunListResponse,
     LanguageSyncRunRead,
+    LanguageSyncTrigger,
 )
-from app.services.language_sync import sync_one_domain
+from app.tasks.language_sync import resume_langsync, run_langsync
 
 router = APIRouter(
     prefix="/publish/languages",
@@ -42,28 +39,52 @@ router = APIRouter(
     dependencies=[Depends(require_role("admin", "manager"))],
 )
 
-# Cap concurrent outbound HTTP. Per-domain rate limiting (like the
-# publish-bulk path) would be overkill for a one-shot sync — but we still
-# want to avoid hammering 50 sites at once if a user submits a 50-row
-# table. 5 in-flight at a time is enough to keep total wall-clock low.
-_CONCURRENCY = 5
+
+async def _creator_name(db: AsyncSession, user_id: int | None) -> str | None:
+    if user_id is None:
+        return None
+    return (
+        await db.execute(select(User.full_name).where(User.id == user_id))
+    ).scalar_one_or_none()
 
 
-@router.post("/sync", response_model=LanguageSyncResult)
+def _run_summary(run: LanguageSyncRunRow, creator: str | None) -> LanguageSyncRunRead:
+    return LanguageSyncRunRead(
+        id=run.id,
+        created_at=run.created_at,
+        created_by_id=run.created_by_id,
+        created_by_name=creator,
+        source=run.source,
+        status=run.status,
+        total_count=run.total_count,
+        ok_count=run.ok_count,
+        fail_count=run.fail_count,
+        skip_count=run.skip_count,
+    )
+
+
+@router.post(
+    "/sync",
+    response_model=LanguageSyncTrigger,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def sync_languages(
     payload: LanguageSyncRequest,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
-) -> LanguageSyncResult:
-    """Push a language set to each target site in parallel.
+) -> LanguageSyncTrigger:
+    """Enqueue a background sync that pushes a language set to each target
+    site. Returns immediately with the new ``run_id`` (202) — the work runs
+    in a Celery task that updates progress + per-site outcomes as it goes, so
+    the UI polls the run detail (or navigates to its page) rather than
+    blocking on the whole fan-out.
 
-    Resolution: target names are matched against ``Domain.name``
-    exactly. Unknown names come back as ``skipped`` so the UI can show
-    "the table references 'shop-zz' but no such domain exists".
-    Soft-deleted domains are excluded from the lookup.
+    Resolution: target names are matched against ``Domain.name`` exactly.
+    Unknown names are stored with ``domain_id=NULL`` and the worker records
+    them as ``skipped`` ("no such domain"). Soft-deleted domains are excluded.
     """
-    # Dedup names so a table with the same domain on 50 rows produces
-    # exactly one POST. Preserve order for stable result rendering.
+    # Dedup names so a table with the same domain on 50 rows produces exactly
+    # one target. Preserve order for stable result rendering.
     seen: set[str] = set()
     ordered_targets = []
     for t in payload.targets:
@@ -83,66 +104,104 @@ async def sync_languages(
     ).scalars().all()
     by_name = {d.name: d for d in rows}
 
-    sem = asyncio.Semaphore(_CONCURRENCY)
-
-    async def _run(target) -> tuple[LanguageSyncOneResult, list[str]]:
-        domain = by_name.get(target.domain_name)
-        # Normalize the language list the same way the service does, so
-        # what we persist matches what was actually sent (lowercase, deduped,
-        # no whitespace-only entries).
-        norm = sorted({s.strip().lower() for s in target.languages if s and s.strip()})
-        if domain is None:
-            return (
-                LanguageSyncOneResult(
-                    domain_name=target.domain_name,
-                    ok=False,
-                    skipped=True,
-                    skip_reason="No domain with this name (check /publish/domains)",
-                ),
-                norm,
-            )
-        async with sem:
-            return await sync_one_domain(domain, target.languages), norm
-
-    paired = await asyncio.gather(*[_run(t) for t in ordered_targets])
-    results = [p[0] for p in paired]
-
-    # Persist the run so it shows up in the history page. Counts are
-    # tallied here instead of via SQL aggregation later so the listing
-    # never has to GROUP BY across the results table.
-    ok_count = sum(1 for r in results if r.ok)
-    skip_count = sum(1 for r in results if r.skipped)
-    fail_count = sum(1 for r in results if not r.ok and not r.skipped)
-
     run = LanguageSyncRunRow(
         created_by_id=actor.id,
         source=payload.source,
-        total_count=len(results),
-        ok_count=ok_count,
-        fail_count=fail_count,
-        skip_count=skip_count,
+        status="queued",
+        total_count=len(ordered_targets),
+        ok_count=0,
+        fail_count=0,
+        skip_count=0,
     )
     db.add(run)
     await db.flush()  # populate run.id before child inserts
 
-    for (result, langs) in paired:
+    for t in ordered_targets:
+        domain = by_name.get(t.domain_name)
+        # Normalize once at seed time — what we persist as the attempted set
+        # matches what the worker will send (lowercase, deduped, trimmed).
+        norm = sorted({s.strip().lower() for s in t.languages if s and s.strip()})
         db.add(
             LanguageSyncResultRow(
                 run_id=run.id,
-                domain_id=result.domain_id,
-                domain_name=result.domain_name,
-                languages=langs,
-                ok=result.ok,
-                skipped=result.skipped,
-                skip_reason=result.skip_reason,
-                status_code=result.status_code,
-                detail=result.detail,
-                elapsed_ms=result.elapsed_ms,
+                domain_id=domain.id if domain else None,
+                domain_name=t.domain_name,
+                languages=norm,
+                state="pending",
+                ok=False,
+                skipped=False,
             )
         )
     await db.commit()
 
-    return LanguageSyncResult(run_id=run.id, results=results)
+    run_langsync.delay(run.id)
+    return LanguageSyncTrigger(run_id=run.id, status=run.status)
+
+
+@router.post("/runs/{run_id}/retry-failed", response_model=LanguageSyncRunRead)
+async def retry_failed(
+    run_id: int,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> LanguageSyncRunRead:
+    """Re-attempt the failed targets of a finished run, IN PLACE. Failed
+    result rows (attempted, not ok, not skipped) flip back to ``pending`` and
+    the run re-queues; previously-ok and skipped rows are left untouched. 400
+    if the run is still active or has nothing to retry."""
+    run = await db.get(LanguageSyncRunRow, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.status != "done":
+        raise HTTPException(status_code=400, detail="Run is still active")
+
+    failed = (
+        await db.execute(
+            select(LanguageSyncResultRow).where(
+                LanguageSyncResultRow.run_id == run_id,
+                LanguageSyncResultRow.state == "done",
+                LanguageSyncResultRow.ok.is_(False),
+                LanguageSyncResultRow.skipped.is_(False),
+            )
+        )
+    ).scalars().all()
+    if not failed:
+        raise HTTPException(status_code=400, detail="No failed targets to retry")
+
+    for r in failed:
+        r.state = "pending"
+        r.ok = False
+        r.skip_reason = None
+        r.status_code = None
+        r.detail = None
+        r.elapsed_ms = None
+    run.status = "queued"
+    run.finished_at = None
+    run.fail_count = 0
+    await db.commit()
+
+    resume_langsync.delay(run.id)
+    return _run_summary(run, await _creator_name(db, run.created_by_id))
+
+
+@router.post("/runs/{run_id}/resume", response_model=LanguageSyncRunRead)
+async def resume_run(
+    run_id: int,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> LanguageSyncRunRead:
+    """Re-enqueue an active run whose worker died mid-flight (so it sits at
+    'running' with pending targets left). Idempotent — the task re-queries
+    pending, so a double-resume can't double-send. 400 on a finished run
+    (use retry-failed for those)."""
+    run = await db.get(LanguageSyncRunRow, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.status == "done":
+        raise HTTPException(
+            status_code=400, detail="Run already finished — use Retry failed"
+        )
+    resume_langsync.delay(run.id)
+    return _run_summary(run, await _creator_name(db, run.created_by_id))
 
 
 # ---------- run history ----------
@@ -182,6 +241,7 @@ async def list_runs(
             created_by_id=run.created_by_id,
             created_by_name=name,
             source=run.source,
+            status=run.status,
             total_count=run.total_count,
             ok_count=run.ok_count,
             fail_count=run.fail_count,
@@ -223,6 +283,9 @@ async def get_run(
         created_by_id=run.created_by_id,
         created_by_name=creator,
         source=run.source,
+        status=run.status,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
         total_count=run.total_count,
         ok_count=run.ok_count,
         fail_count=run.fail_count,

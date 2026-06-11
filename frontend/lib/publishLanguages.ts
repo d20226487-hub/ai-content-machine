@@ -18,30 +18,24 @@ export interface LanguageSyncTarget {
 
 export type LanguageSyncSource = "bulk_modal" | "standalone";
 
-export interface LanguageSyncOneResult {
-  domain_name: string;
-  domain_id: number | null;
-  ok: boolean;
-  skipped: boolean;
-  skip_reason: string | null;
-  status_code: number | null;
-  detail: string | null;
-  elapsed_ms: number | null;
-}
+export type LanguageSyncStatus = "queued" | "running" | "done";
 
-export interface LanguageSyncResult {
+/** Ack for an enqueued sync. The work runs in the background now, so the
+ *  trigger returns only the new run id + its initial status — poll the run
+ *  detail (or open its page) to watch progress and see per-site outcomes. */
+export interface LanguageSyncTrigger {
   run_id: number;
-  results: LanguageSyncOneResult[];
+  status: LanguageSyncStatus;
 }
 
 export function syncLanguages(
   targets: LanguageSyncTarget[],
   source: LanguageSyncSource = "bulk_modal",
-): Promise<LanguageSyncResult> {
+): Promise<LanguageSyncTrigger> {
   // `api()` itself does JSON.stringify on the body field — pass the
   // object directly, not a pre-stringified payload. Double-stringifying
   // would send a JSON-encoded string and the backend would 422.
-  return api<LanguageSyncResult>("/publish/languages/sync", {
+  return api<LanguageSyncTrigger>("/publish/languages/sync", {
     method: "POST",
     body: { targets, source },
   });
@@ -55,6 +49,7 @@ export interface LanguageSyncRun {
   created_by_id: number | null;
   created_by_name: string | null;
   source: string;
+  status: LanguageSyncStatus;
   total_count: number;
   ok_count: number;
   fail_count: number;
@@ -73,6 +68,8 @@ export interface LanguageSyncResultRow {
   domain_id: number | null;
   domain_name: string;
   languages: string[];
+  /** 'pending' until the worker attempts this target, then 'done'. */
+  state: "pending" | "done";
   ok: boolean;
   skipped: boolean;
   skip_reason: string | null;
@@ -83,7 +80,23 @@ export interface LanguageSyncResultRow {
 }
 
 export interface LanguageSyncRunDetail extends LanguageSyncRun {
+  started_at: string | null;
+  finished_at: string | null;
   results: LanguageSyncResultRow[];
+}
+
+/** Re-attempt the failed targets of a finished run, in place. */
+export function retryFailedRun(id: number): Promise<LanguageSyncRun> {
+  return api<LanguageSyncRun>(`/publish/languages/runs/${id}/retry-failed`, {
+    method: "POST",
+  });
+}
+
+/** Re-enqueue an active run that stalled (worker died mid-flight). */
+export function resumeRun(id: number): Promise<LanguageSyncRun> {
+  return api<LanguageSyncRun>(`/publish/languages/runs/${id}/resume`, {
+    method: "POST",
+  });
 }
 
 export function listLanguageSyncRuns(

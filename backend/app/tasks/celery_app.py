@@ -29,6 +29,7 @@ celery_app = Celery(
         "app.tasks.link_check",
         "app.tasks.link_fix",
         "app.tasks.structure_format",
+        "app.tasks.language_sync",
         "app.tasks.gdocs_import",
         "app.tasks.publish_bulk",
         "app.tasks.publish_single",

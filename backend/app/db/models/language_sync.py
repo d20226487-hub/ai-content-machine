@@ -29,6 +29,22 @@ class LanguageSyncRun(Base):
     )
     source: Mapped[str] = mapped_column(String(40), default="bulk_modal", nullable=False)
 
+    # Background-job lifecycle: 'queued' -> 'running' -> 'done'. Synchronous
+    # historical runs (pre-0054) backfill to 'done'.
+    status: Mapped[str] = mapped_column(
+        String(16), default="queued", server_default="done", nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Bumped every batch so a stalled run can be detected.
+    last_progress_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     total_count: Mapped[int] = mapped_column(Integer, nullable=False)
     ok_count: Mapped[int] = mapped_column(Integer, nullable=False)
     fail_count: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -57,6 +73,13 @@ class LanguageSyncResult(Base):
     domain_name: Mapped[str] = mapped_column(String(200), nullable=False)
     # JSON array of language codes we attempted to upsert on this target.
     languages: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+
+    # 'pending' = the worker hasn't attempted this target yet; 'done' = it has
+    # (whatever the outcome — ok / fail / skip). Drives progress + lets
+    # retry-failed flip a failed row back to 'pending' for re-attempt.
+    state: Mapped[str] = mapped_column(
+        String(16), default="pending", server_default="done", nullable=False
+    )
 
     ok: Mapped[bool] = mapped_column(Boolean, nullable=False)
     skipped: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
