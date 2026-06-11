@@ -123,6 +123,8 @@ from app.schemas.bulk import (
     TranslationTableRow,
     TableRead,
     TableUpdate,
+    TableUpdateRequest,
+    TableUpdateResult,
     TrashBulkIds,
 )
 from app.services.bulk_csv import build_table_csv
@@ -1831,6 +1833,289 @@ async def import_csv(
     # The client only needs the id to navigate (the table page re-fetches), so
     # return a light first page instead of echoing every cell back as JSON.
     return await _table_to_read_paginated(db, fresh, 1, 25)
+
+
+async def _apply_cell_update(
+    db: AsyncSession,
+    table_id: int,
+    *,
+    rows: list[list[str | None]],
+    mappings: list[tuple[int, int]],
+    match_mode: str,
+    source_key_index: int | None,
+    key_column_id: int | None,
+    case_insensitive_key: bool,
+    skip_empty: bool,
+) -> TableUpdateResult:
+    """Shared core for both update endpoints (JSON paste + multipart file).
+
+    ``mappings`` is a list of ``(source_index, column_id)``. Matches each
+    incoming row to existing table rows — by a key column or by row order —
+    then bulk-upserts the mapped cells. Rows that match nothing are ignored
+    (never adds/removes rows). The upsert drops any cached translation on the
+    touched cells (same invariant as the editor path).
+    """
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    if match_mode not in ("key", "order"):
+        raise HTTPException(status_code=400, detail="Bad match_mode.")
+    if not mappings:
+        raise HTTPException(status_code=400, detail="No columns mapped.")
+
+    table_col_ids = {
+        cid
+        for (cid,) in (
+            await db.execute(
+                select(BulkTableColumn.id).where(
+                    BulkTableColumn.table_id == table_id
+                )
+            )
+        ).all()
+    }
+    bad = {cid for (_si, cid) in mappings} - table_col_ids
+    if bad:
+        raise HTTPException(
+            status_code=400, detail=f"Unknown column id(s): {sorted(bad)}"
+        )
+    if match_mode == "key":
+        if source_key_index is None or key_column_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Key matching needs a source key column and a table key column.",
+            )
+        if key_column_id not in table_col_ids:
+            raise HTTPException(status_code=400, detail="Unknown key column id.")
+
+    def cell_value(row: list[str | None], idx: int) -> str | None:
+        if idx < 0 or idx >= len(row):
+            return None
+        v = row[idx]
+        if v is None:
+            return None
+        v = v.strip()
+        return v or None
+
+    # (row_id, column_id) -> value. A dict so a later incoming row that targets
+    # the same cell simply wins (last-write-wins, deterministic).
+    writes: dict[tuple[int, int], str | None] = {}
+    matched_rows = 0
+    unmatched_rows = 0
+
+    if match_mode == "order":
+        table_row_ids = [
+            rid
+            for (rid,) in (
+                await db.execute(
+                    select(BulkTableRow.id)
+                    .where(BulkTableRow.table_id == table_id)
+                    .order_by(BulkTableRow.position, BulkTableRow.id)
+                )
+            ).all()
+        ]
+        n = len(table_row_ids)
+        for i, row in enumerate(rows):
+            if i >= n:
+                unmatched_rows += 1
+                continue
+            rid = table_row_ids[i]
+            matched_rows += 1
+            for src, col in mappings:
+                v = cell_value(row, src)
+                if v is None and skip_empty:
+                    continue
+                writes[(rid, col)] = v
+    else:
+        def norm_key(s: str | None) -> str | None:
+            if s is None:
+                return None
+            s = s.strip()
+            if not s:
+                return None
+            return s.lower() if case_insensitive_key else s
+
+        key_rows = (
+            await db.execute(
+                select(BulkTableCell.row_id, BulkTableCell.value).where(
+                    BulkTableCell.column_id == key_column_id
+                )
+            )
+        ).all()
+        index: dict[str, list[int]] = {}
+        for rid, val in key_rows:
+            k = norm_key(val)
+            if k is None:
+                continue
+            index.setdefault(k, []).append(rid)
+
+        for row in rows:
+            k = norm_key(cell_value(row, source_key_index))
+            rids = index.get(k) if k is not None else None
+            if not rids:
+                unmatched_rows += 1
+                continue
+            matched_rows += 1
+            for rid in rids:
+                for src, col in mappings:
+                    v = cell_value(row, src)
+                    if v is None and skip_empty:
+                        continue
+                    writes[(rid, col)] = v
+
+    # Drop no-op writes: a cell whose incoming value already equals what's
+    # stored isn't a real change, so it shouldn't be written or counted. This
+    # is what keeps mapping the key column onto itself (same value) from
+    # inflating "cells updated".
+    if writes:
+        rids = {r for (r, _c) in writes}
+        cids = {c for (_r, c) in writes}
+        existing = {
+            (r, c): val
+            for r, c, val in (
+                await db.execute(
+                    select(
+                        BulkTableCell.row_id,
+                        BulkTableCell.column_id,
+                        BulkTableCell.value,
+                    ).where(
+                        BulkTableCell.row_id.in_(rids),
+                        BulkTableCell.column_id.in_(cids),
+                    )
+                )
+            ).all()
+        }
+        writes = {
+            (r, c): nv
+            for (r, c), nv in writes.items()
+            if nv != existing.get((r, c))
+        }
+
+    if writes:
+        rows_payload = [
+            {
+                "row_id": rid,
+                "column_id": cid,
+                "value": v,
+                "status": "manual" if v else "empty",
+            }
+            for (rid, cid), v in writes.items()
+        ]
+        for i in range(0, len(rows_payload), _CSV_CELL_BATCH):
+            chunk = rows_payload[i : i + _CSV_CELL_BATCH]
+            stmt = pg_insert(BulkTableCell).values(chunk)
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_bulk_cells_row_column",
+                set_={
+                    "value": stmt.excluded.value,
+                    "status": stmt.excluded.status,
+                    "translations": None,
+                    "error": None,
+                },
+            )
+            await db.execute(stmt)
+        await _bump_table_updated(db, table_id)
+        await db.commit()
+
+    return TableUpdateResult(
+        matched_rows=matched_rows,
+        unmatched_rows=unmatched_rows,
+        updated_cells=len(writes),
+        affected_table_rows=len({rid for (rid, _cid) in writes}),
+    )
+
+
+@router.post(
+    "/tables/{table_id}/update-cells", response_model=TableUpdateResult
+)
+async def update_cells_from_rows(
+    table_id: int,
+    payload: TableUpdateRequest,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TableUpdateResult:
+    """Patch an existing table's cells from pasted rows (small JSON payload).
+    File uploads go through ``/update-cells-csv`` so a large CSV streams as
+    multipart instead of inflating a JSON body."""
+    await _get_table_or_404(db, table_id, actor, level="write")
+    return await _apply_cell_update(
+        db,
+        table_id,
+        rows=payload.rows,
+        mappings=[(m.source_index, m.column_id) for m in payload.mappings],
+        match_mode=payload.match_mode,
+        source_key_index=payload.source_key_index,
+        key_column_id=payload.key_column_id,
+        case_insensitive_key=payload.case_insensitive_key,
+        skip_empty=payload.skip_empty,
+    )
+
+
+@router.post(
+    "/tables/{table_id}/update-cells-csv", response_model=TableUpdateResult
+)
+async def update_cells_from_csv(
+    table_id: int,
+    file: UploadFile = File(...),
+    delimiter: str = Form(","),
+    has_header: bool = Form(True),
+    mappings: str = Form(...),  # JSON: [{"source_index": int, "column_id": int}]
+    match_mode: str = Form(...),
+    source_key_index: int | None = Form(None),
+    key_column_id: int | None = Form(None),
+    case_insensitive_key: bool = Form(False),
+    skip_empty: bool = Form(True),
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TableUpdateResult:
+    """Patch an existing table from an uploaded CSV. Streamed multipart +
+    server-side parse — same 100 MB ceiling and robust CSV handling as the
+    create-table import, so a re-uploaded export updates in place without
+    inflating a JSON request or hitting the paste row cap."""
+    await _get_table_or_404(db, table_id, actor, level="write")
+
+    delim = "\t" if delimiter in ("\\t", "\t") else delimiter
+    if len(delim) != 1:
+        raise HTTPException(
+            status_code=400, detail="Delimiter must be a single character."
+        )
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+    if len(raw) > _MAX_CSV_UPLOAD:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File too large (max {_MAX_CSV_UPLOAD // (1024 * 1024)} MB).",
+        )
+    try:
+        text_data = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            text_data = raw.decode("latin-1")
+        except UnicodeDecodeError:
+            raise HTTPException(status_code=400, detail="The file is not valid text.")
+
+    parsed_rows = [r for r in csv.reader(io.StringIO(text_data), delimiter=delim)]
+    if has_header and parsed_rows:
+        parsed_rows = parsed_rows[1:]
+
+    try:
+        maps = [
+            (int(m["source_index"]), int(m["column_id"]))
+            for m in json.loads(mappings)
+        ]
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(status_code=400, detail="Bad mappings payload.")
+
+    return await _apply_cell_update(
+        db,
+        table_id,
+        rows=parsed_rows,  # type: ignore[arg-type]
+        mappings=maps,
+        match_mode=match_mode,
+        source_key_index=source_key_index,
+        key_column_id=key_column_id,
+        case_insensitive_key=case_insensitive_key,
+        skip_empty=skip_empty,
+    )
 
 
 # ---------- Google-Docs import ----------

@@ -1113,3 +1113,42 @@ class GdocsImportRunRead(BaseModel):
     started_at: datetime | None = None
     finished_at: datetime | None = None
     last_progress_at: datetime | None = None
+
+
+# ----- Update table from CSV / pasted data -----
+
+
+class TableUpdateMapping(BaseModel):
+    """One incoming column → one table column. ``source_index`` is the 0-based
+    position of the column in the uploaded/pasted data (header already
+    stripped client-side)."""
+
+    source_index: int = Field(..., ge=0)
+    column_id: int
+
+
+class TableUpdateRequest(BaseModel):
+    """Patch an existing table's cells from parsed CSV/pasted rows. Only the
+    mapped columns are written; everything else is left untouched. Rows are
+    matched to existing table rows either by a key column or by row order;
+    incoming rows that match nothing are ignored (never added/removed)."""
+
+    # Parsed data rows, header already removed. Capped to keep the JSON body
+    # and the resulting upsert sane — Update is for patching, not bulk load.
+    rows: list[list[str | None]] = Field(..., max_length=200_000)
+    mappings: list[TableUpdateMapping] = Field(..., min_length=1)
+    match_mode: Literal["key", "order"]
+    # key mode only:
+    source_key_index: int | None = Field(default=None, ge=0)
+    key_column_id: int | None = None
+    case_insensitive_key: bool = False
+    # When an incoming cell is empty, leave the existing value (True) vs clear
+    # it (False).
+    skip_empty: bool = True
+
+
+class TableUpdateResult(BaseModel):
+    matched_rows: int
+    unmatched_rows: int
+    updated_cells: int
+    affected_table_rows: int

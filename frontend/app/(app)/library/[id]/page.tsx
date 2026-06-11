@@ -15,6 +15,7 @@ import { BulkTableTools } from "@/components/BulkTableTools";
 import { ErrorPanel } from "@/components/ErrorPanel";
 import { GdocsSlugAuditPanel } from "@/components/GdocsSlugAuditPanel";
 import { GdocsStructurePanel } from "@/components/GdocsStructurePanel";
+import { UpdateTableModal } from "@/components/UpdateTableModal";
 import { useT } from "@/lib/i18n-context";
 import {
   deleteTable,
@@ -35,6 +36,7 @@ export default function LibraryTablePage() {
   const [error, setError] = useState<unknown>(null);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
+  const [updateOpen, setUpdateOpen] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<number | null>(null);
@@ -237,6 +239,12 @@ export default function LibraryTablePage() {
             {t("libraryTable.exportCsv")}
           </button>
           <button
+            onClick={() => setUpdateOpen(true)}
+            className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+          >
+            {t("libraryTable.updateTable")}
+          </button>
+          <button
             onClick={onDuplicate}
             className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
           >
@@ -282,6 +290,15 @@ export default function LibraryTablePage() {
       </div>
 
       <BulkTableTools tableId={table.id} />
+
+      {updateOpen && (
+        <UpdateTableModal
+          tableId={table.id}
+          columns={table.columns}
+          onClose={() => setUpdateOpen(false)}
+          onUpdated={() => reloadPage()}
+        />
+      )}
 
       {table.gdocs_structure && table.gdocs_structure.length > 0 && (
         <GdocsStructurePanel sites={table.gdocs_structure} />

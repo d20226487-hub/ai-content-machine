@@ -467,6 +467,77 @@ export function exportCsvUrl(tableId: number): string {
   return `${API_URL}/library/tables/${tableId}/export.csv`;
 }
 
+// ----- Update an existing table from CSV / pasted rows -----
+
+export interface TableUpdateMapping {
+  /** 0-based column position in the incoming (header-stripped) data. */
+  source_index: number;
+  column_id: number;
+}
+
+export interface TableUpdateRequest {
+  rows: (string | null)[][];
+  mappings: TableUpdateMapping[];
+  match_mode: "key" | "order";
+  source_key_index?: number | null;
+  key_column_id?: number | null;
+  case_insensitive_key?: boolean;
+  skip_empty?: boolean;
+}
+
+export interface TableUpdateResult {
+  matched_rows: number;
+  unmatched_rows: number;
+  updated_cells: number;
+  affected_table_rows: number;
+}
+
+export function updateTableCells(
+  tableId: number,
+  req: TableUpdateRequest,
+): Promise<TableUpdateResult> {
+  return api<TableUpdateResult>(`/library/tables/${tableId}/update-cells`, {
+    method: "POST",
+    body: req,
+  });
+}
+
+export interface UpdateTableCsvParams {
+  /** Streamed as multipart — the server parses it (same 100 MB cap as import). */
+  file: File;
+  delimiter: string;
+  has_header: boolean;
+  mappings: TableUpdateMapping[];
+  match_mode: "key" | "order";
+  source_key_index?: number | null;
+  key_column_id?: number | null;
+  case_insensitive_key?: boolean;
+  skip_empty?: boolean;
+}
+
+export function updateTableCellsCsv(
+  tableId: number,
+  p: UpdateTableCsvParams,
+): Promise<TableUpdateResult> {
+  const fd = new FormData();
+  fd.append("file", p.file);
+  fd.append("delimiter", p.delimiter);
+  fd.append("has_header", String(p.has_header));
+  fd.append("mappings", JSON.stringify(p.mappings));
+  fd.append("match_mode", p.match_mode);
+  // Omit (rather than blank) the optional ints so FastAPI sees None.
+  if (p.source_key_index != null)
+    fd.append("source_key_index", String(p.source_key_index));
+  if (p.key_column_id != null)
+    fd.append("key_column_id", String(p.key_column_id));
+  fd.append("case_insensitive_key", String(p.case_insensitive_key ?? false));
+  fd.append("skip_empty", String(p.skip_empty ?? true));
+  return api<TableUpdateResult>(`/library/tables/${tableId}/update-cells-csv`, {
+    method: "POST",
+    body: fd,
+  });
+}
+
 // ----- Autotool (3rd publishing mode) -----
 
 export interface AutotoolState {
