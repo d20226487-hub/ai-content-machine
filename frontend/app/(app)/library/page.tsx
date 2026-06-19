@@ -22,6 +22,7 @@ import {
   getTrashCount,
   listFolders,
   listTables,
+  moveFolder,
   renameFolder,
   renameTable,
   type BulkFolder,
@@ -150,6 +151,59 @@ export default function LibraryPage() {
   );
   const currentFolder = folder !== null ? folderById.get(folder) ?? null : null;
 
+  // Full ancestor chain (outermost → current) for the breadcrumb, walked up
+  // via parent_id. The `guard` set stops a malformed cycle from looping.
+  const folderPath = useMemo<BulkFolder[]>(() => {
+    const path: BulkFolder[] = [];
+    let cur: BulkFolder | null = currentFolder;
+    const guard = new Set<number>();
+    while (cur && !guard.has(cur.id)) {
+      guard.add(cur.id);
+      path.unshift(cur);
+      cur = cur.parent_id != null ? folderById.get(cur.parent_id) ?? null : null;
+    }
+    return path;
+  }, [currentFolder, folderById]);
+
+  // Folder cards = the direct children of the folder we're viewing
+  // (top-level folders when at the root).
+  const visibleFolders = useMemo(
+    () => folders.filter((f) => (f.parent_id ?? null) === (folder ?? null)),
+    [folders, folder],
+  );
+
+  // parent_id → direct children, for the folder-move target list. A folder
+  // can't move into itself or any of its descendants (would cycle), so we
+  // walk its subtree to exclude them from the "Move to" options.
+  const childrenByParent = useMemo(() => {
+    const m = new Map<number | null, BulkFolder[]>();
+    for (const f of folders) {
+      const key = f.parent_id ?? null;
+      const arr = m.get(key);
+      if (arr) arr.push(f);
+      else m.set(key, [f]);
+    }
+    return m;
+  }, [folders]);
+
+  const descendantIdsOf = useCallback(
+    (rootId: number): Set<number> => {
+      const out = new Set<number>();
+      const stack = [rootId];
+      while (stack.length) {
+        const id = stack.pop()!;
+        for (const c of childrenByParent.get(id) ?? []) {
+          if (!out.has(c.id)) {
+            out.add(c.id);
+            stack.push(c.id);
+          }
+        }
+      }
+      return out;
+    },
+    [childrenByParent],
+  );
+
   function navigateFolder(id: number | null) {
     updateParams({ folder: id, page: null }, { push: true });
   }
@@ -158,7 +212,10 @@ export default function LibraryPage() {
     const name = window.prompt(t("library.folderNamePrompt"));
     if (!name?.trim()) return;
     try {
-      await createFolder(name.trim());
+      // Nest the new folder under whatever folder we're currently viewing
+      // (null at root → top-level). This is the fix for "subfolders landed
+      // in root": the parent was never sent.
+      await createFolder(name.trim(), folder);
       await refreshFolders();
     } catch (err) {
       alert(err instanceof ApiError ? err.message : t("common.createFailed"));
@@ -184,6 +241,17 @@ export default function LibraryPage() {
       if (folder === f.id) navigateFolder(null);
     } catch (err) {
       alert(err instanceof ApiError ? err.message : t("common.deleteFailed"));
+    }
+  }
+
+  async function onMoveFolder(f: BulkFolder, newParentId: number | null) {
+    if ((f.parent_id ?? null) === newParentId) return; // no-op
+    try {
+      await moveFolder(f.id, newParentId);
+      await refreshFolders();
+    } catch (err) {
+      // 400 = would create a cycle (server guard); surface its message.
+      alert(err instanceof ApiError ? err.message : t("common.moveFailed"));
     }
   }
 
@@ -325,7 +393,7 @@ export default function LibraryPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <Breadcrumb
-            current={currentFolder}
+            path={folderPath}
             onJump={(id) => navigateFolder(id)}
             rootLabel={t("library.breadcrumbRoot")}
           />
@@ -393,24 +461,41 @@ export default function LibraryPage() {
         </div>
       )}
 
-      {folder === null && folders.length > 0 && (
+      {visibleFolders.length > 0 && (
         <section className="mt-6">
           <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
-            {t("library.foldersHeading", { count: folders.length })}
+            {currentFolder
+              ? t("library.subfoldersHeading", { count: visibleFolders.length })
+              : t("library.foldersHeading", { count: visibleFolders.length })}
           </h2>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
-            {folders.map((f) => (
-              <FolderCard
-                key={f.id}
-                folder={f}
-                onOpen={() => navigateFolder(f.id)}
-                onRename={() => onRenameFolder(f)}
-                onDelete={() => onDeleteFolder(f)}
-                renameLabel={t("common.rename")}
-                deleteLabel={t("common.delete")}
-                tableCountLabel={t("library.folderTablesCount", { count: f.table_count ?? 0 })}
-              />
-            ))}
+            {visibleFolders.map((f) => {
+              const blocked = descendantIdsOf(f.id);
+              const moveTargets = folders.filter(
+                (t2) => t2.id !== f.id && !blocked.has(t2.id),
+              );
+              return (
+                <FolderCard
+                  key={f.id}
+                  folder={f}
+                  onOpen={() => navigateFolder(f.id)}
+                  onRename={() => onRenameFolder(f)}
+                  onDelete={() => onDeleteFolder(f)}
+                  onMove={(parentId) => void onMoveFolder(f, parentId)}
+                  moveTargets={moveTargets}
+                  renameLabel={t("common.rename")}
+                  deleteLabel={t("common.delete")}
+                  moveLabel={t("common.move")}
+                  moveRootLabel={t("library.breadcrumbRoot")}
+                  tableCountLabel={t("library.folderTablesCount", { count: f.table_count ?? 0 })}
+                  subfolderCountLabel={
+                    (f.subfolder_count ?? 0) > 0
+                      ? t("library.folderSubfoldersCount", { count: f.subfolder_count ?? 0 })
+                      : null
+                  }
+                />
+              );
+            })}
           </div>
         </section>
       )}
@@ -691,11 +776,12 @@ export default function LibraryPage() {
 // helpers
 
 function Breadcrumb({
-  current,
+  path,
   onJump,
   rootLabel,
 }: {
-  current: BulkFolder | null;
+  /** Ancestor chain, outermost first, ending at the current folder. */
+  path: BulkFolder[];
   onJump: (id: number | null) => void;
   rootLabel: string;
 }) {
@@ -708,14 +794,25 @@ function Breadcrumb({
       >
         {rootLabel}
       </button>
-      {current && (
-        <span className="flex items-center gap-1">
-          <span>/</span>
-          <span className="text-neutral-700 dark:text-neutral-300">
-            {current.name}
+      {path.map((f, i) => {
+        const isLast = i === path.length - 1;
+        return (
+          <span key={f.id} className="flex items-center gap-1">
+            <span>/</span>
+            {isLast ? (
+              <span className="text-neutral-700 dark:text-neutral-300">{f.name}</span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onJump(f.id)}
+                className="hover:text-neutral-900 hover:underline dark:hover:text-neutral-100"
+              >
+                {f.name}
+              </button>
+            )}
           </span>
-        </span>
-      )}
+        );
+      })}
     </nav>
   );
 }
@@ -725,18 +822,33 @@ function FolderCard({
   onOpen,
   onRename,
   onDelete,
+  onMove,
+  moveTargets,
   renameLabel,
   deleteLabel,
+  moveLabel,
+  moveRootLabel,
   tableCountLabel,
+  subfolderCountLabel,
 }: {
   folder: BulkFolder;
   onOpen: () => void;
   onRename: () => void;
   onDelete: () => void;
+  onMove: (parentId: number | null) => void;
+  /** Folders this one may move into — already excludes itself + its subtree. */
+  moveTargets: BulkFolder[];
   renameLabel: string;
   deleteLabel: string;
+  moveLabel: string;
+  moveRootLabel: string;
   tableCountLabel: string;
+  subfolderCountLabel?: string | null;
 }) {
+  // When the move picker is open we force the action cluster visible — a
+  // native <select> can briefly steal hover off the card, which would
+  // otherwise fade the (opacity-0) cluster mid-interaction.
+  const [moveOpen, setMoveOpen] = useState(false);
   return (
     <div className="group relative rounded-lg border border-neutral-200 bg-white p-4 shadow-sm transition hover:border-neutral-400 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-neutral-600">
       <button
@@ -753,30 +865,69 @@ function FolderCard({
           </p>
           <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
             {tableCountLabel}
+            {subfolderCountLabel ? ` · ${subfolderCountLabel}` : ""}
           </p>
         </div>
       </button>
-      <div className="absolute right-2 top-2 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onRename();
-          }}
-          className="rounded px-1.5 py-0.5 text-[10px] font-medium text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
-        >
-          {renameLabel}
-        </button>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          className="rounded px-1.5 py-0.5 text-[10px] font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40"
-        >
-          {deleteLabel}
-        </button>
+      <div
+        className={
+          "absolute right-2 top-2 flex items-center gap-1 transition-opacity " +
+          (moveOpen ? "opacity-100" : "opacity-0 group-hover:opacity-100")
+        }
+      >
+        {moveOpen ? (
+          <select
+            autoFocus
+            defaultValue={folder.parent_id ?? ""}
+            onChange={(e) => {
+              const v = e.target.value;
+              onMove(v === "" ? null : Number(v));
+              setMoveOpen(false);
+            }}
+            onBlur={() => setMoveOpen(false)}
+            className="max-w-[160px] rounded-md border border-neutral-300 bg-white px-1.5 py-0.5 text-[11px] dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
+          >
+            <option value="">{moveRootLabel}</option>
+            {moveTargets.map((tt) => (
+              <option key={tt.id} value={tt.id}>
+                {tt.name}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setMoveOpen(true);
+              }}
+              className="rounded px-1.5 py-0.5 text-[10px] font-medium text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+            >
+              {moveLabel}
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRename();
+              }}
+              className="rounded px-1.5 py-0.5 text-[10px] font-medium text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+            >
+              {renameLabel}
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete();
+              }}
+              className="rounded px-1.5 py-0.5 text-[10px] font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40"
+            >
+              {deleteLabel}
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

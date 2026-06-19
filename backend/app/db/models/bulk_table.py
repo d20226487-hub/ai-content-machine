@@ -31,13 +31,25 @@ from app.db.base import Base, TimestampMixin
 
 
 class BulkTableFolder(Base, TimestampMixin):
-    """Flat folder for organizing bulk tables. No nesting — folder_id on
-    bulk_tables is the only relationship; subfolders aren't supported in v1."""
+    """A node in the Library folder tree.
+
+    Self-referencing ``parent_id`` (null = top level) lets folders nest, same
+    shape as ``DomainFolder`` (migration 0027 / 0056). ``bulk_tables.folder_id``
+    still assigns each table to exactly one folder. Empty-folder enforcement
+    (no child folders, no live tables) lives in the API DELETE; the self-FK is
+    ON DELETE RESTRICT as belt-and-braces.
+    """
 
     __tablename__ = "bulk_table_folders"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
+    parent_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("bulk_table_folders.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     created_by_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

@@ -488,12 +488,50 @@ async def list_folders(
             )
         ).all()
     )
+    # Direct subfolder count per folder (folders whose parent_id == id), so the
+    # UI can show "N subfolders" on a folder card.
+    subfolder_counts = dict(
+        (
+            await db.execute(
+                select(BulkTableFolder.parent_id, func.count(BulkTableFolder.id))
+                .where(BulkTableFolder.parent_id.is_not(None))
+                .group_by(BulkTableFolder.parent_id)
+            )
+        ).all()
+    )
     out: list[FolderRead] = []
     for f in rows:
         fr = FolderRead.model_validate(f)
         fr.table_count = int(counts.get(f.id, 0))
+        fr.subfolder_count = int(subfolder_counts.get(f.id, 0))
         out.append(fr)
     return out
+
+
+async def _would_create_folder_cycle(
+    db: AsyncSession, folder_id: int, new_parent_id: int | None
+) -> bool:
+    """Walk up from new_parent_id; if we reach folder_id it's a cycle.
+
+    Mirrors the domain-folder guard. ``seen`` also breaks out if the table
+    somehow already held a cycle, so we never loop forever.
+    """
+    if new_parent_id is None:
+        return False
+    cursor: int | None = new_parent_id
+    seen: set[int] = set()
+    while cursor is not None:
+        if cursor == folder_id:
+            return True
+        if cursor in seen:
+            return True
+        seen.add(cursor)
+        cursor = (
+            await db.execute(
+                select(BulkTableFolder.parent_id).where(BulkTableFolder.id == cursor)
+            )
+        ).scalar_one_or_none()
+    return False
 
 
 @router.post(
@@ -504,7 +542,17 @@ async def create_folder(
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> FolderRead:
-    f = BulkTableFolder(name=payload.name.strip(), created_by_id=actor.id)
+    if payload.parent_id is not None:
+        parent = await db.get(BulkTableFolder, payload.parent_id)
+        if parent is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Parent folder not found"
+            )
+    f = BulkTableFolder(
+        name=payload.name.strip(),
+        parent_id=payload.parent_id,
+        created_by_id=actor.id,
+    )
     db.add(f)
     await db.commit()
     await db.refresh(f)
@@ -520,7 +568,33 @@ async def rename_folder(
     f = await db.get(BulkTableFolder, folder_id)
     if f is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
-    f.name = payload.name.strip()
+    # exclude_unset lets a PATCH touch just the name, just the parent, or both —
+    # and distinguishes an omitted parent_id from an explicit null (→ top level).
+    data = payload.model_dump(exclude_unset=True)
+
+    if "parent_id" in data:
+        new_parent = data["parent_id"]
+        if new_parent is not None:
+            if new_parent == folder_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="A folder cannot be its own parent.",
+                )
+            if await db.get(BulkTableFolder, new_parent) is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Parent folder not found",
+                )
+            if await _would_create_folder_cycle(db, folder_id, new_parent):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Move would create a cycle in the folder tree.",
+                )
+        f.parent_id = new_parent
+
+    if data.get("name") is not None:
+        f.name = data["name"].strip()
+
     await db.commit()
     await db.refresh(f)
     return FolderRead.model_validate(f)
@@ -560,6 +634,24 @@ async def delete_folder(
             detail=(
                 f"Folder has {int(in_use)} table(s) in it. "
                 "Move them out before deleting."
+            ),
+        )
+    # Also refuse when the folder still has subfolders — deleting it would
+    # either orphan them (FK is RESTRICT, so the DB would block it anyway) or
+    # silently strand their contents. Make the user empty it first.
+    subfolders = (
+        await db.execute(
+            select(func.count(BulkTableFolder.id)).where(
+                BulkTableFolder.parent_id == folder_id
+            )
+        )
+    ).scalar_one()
+    if int(subfolders) > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Folder has {int(subfolders)} subfolder(s) in it. "
+                "Move or delete them before deleting this folder."
             ),
         )
     await db.delete(f)

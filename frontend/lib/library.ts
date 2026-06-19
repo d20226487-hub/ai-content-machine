@@ -98,10 +98,13 @@ export function bulkMoveTables(payload: {
 export interface BulkFolder {
   id: number;
   name: string;
+  /** null = top-level; otherwise the id of the parent folder. */
+  parent_id: number | null;
   created_by_id: number | null;
   created_at: string;
   updated_at: string;
   table_count?: number | null;
+  subfolder_count?: number | null;
 }
 
 export function listFolders(opts: { with_counts?: boolean } = {}): Promise<BulkFolder[]> {
@@ -109,14 +112,34 @@ export function listFolders(opts: { with_counts?: boolean } = {}): Promise<BulkF
   return api<BulkFolder[]>(`/library/folders${qs}`);
 }
 
-export function createFolder(name: string): Promise<BulkFolder> {
-  return api<BulkFolder>("/library/folders", { method: "POST", body: { name } });
+/** Create a folder. Pass `parentId` to nest it inside another folder
+ *  (null/omitted = top level). */
+export function createFolder(
+  name: string,
+  parentId: number | null = null,
+): Promise<BulkFolder> {
+  return api<BulkFolder>("/library/folders", {
+    method: "POST",
+    body: { name, parent_id: parentId },
+  });
 }
 
 export function renameFolder(id: number, name: string): Promise<BulkFolder> {
   return api<BulkFolder>(`/library/folders/${id}`, {
     method: "PATCH",
     body: { name },
+  });
+}
+
+/** Move a folder under a new parent (null = top level). Cycle-checked
+ *  server-side. */
+export function moveFolder(
+  id: number,
+  parentId: number | null,
+): Promise<BulkFolder> {
+  return api<BulkFolder>(`/library/folders/${id}`, {
+    method: "PATCH",
+    body: { parent_id: parentId },
   });
 }
 

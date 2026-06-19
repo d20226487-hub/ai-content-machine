@@ -181,19 +181,29 @@ class FolderRead(BaseModel):
 
     id: int
     name: str
+    # null = top-level. Subfolders point at their parent folder's id.
+    parent_id: int | None = None
     created_by_id: int | None
     created_at: datetime
     updated_at: datetime
     # Populated when ?with_counts=true
     table_count: int | None = None
+    subfolder_count: int | None = None
 
 
 class FolderCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+    # When set, create the folder nested under this parent. null = top level.
+    parent_id: int | None = None
 
 
 class FolderUpdate(BaseModel):
-    name: str = Field(min_length=1, max_length=200)
+    # All optional so a PATCH can rename, re-parent, or both. ``parent_id``
+    # uses a sentinel default so we can distinguish "omitted" (leave parent
+    # unchanged) from an explicit null (move to top level) — Pydantic v2
+    # ``model_fields_set`` carries that, surfaced via exclude_unset in the API.
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    parent_id: int | None = None
 
 
 class TableCreate(BaseModel):
