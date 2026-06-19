@@ -20,7 +20,7 @@ from app.cms.custom_page_types import (
 )
 
 _SPORT_KEYS = {
-    "lang", "slug", "title", "seo_description", "date", "time",
+    "lang", "slug", "title", "seo_title", "seo_description", "date", "time",
     "venue", "group", "odds_home", "odds_draw", "odds_away", "content",
 }
 

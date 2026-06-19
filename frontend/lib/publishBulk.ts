@@ -42,6 +42,7 @@ export const MATCH_PAGE_FIELDS = [
   "lang",
   "slug",
   "title",
+  "seo_title",
   "seo_description",
   "date",
   "time",

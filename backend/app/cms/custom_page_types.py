@@ -40,7 +40,7 @@ CUSTOM_PAGE_TYPES: tuple[str, ...] = (ORDINARY, MATCH)
 # reference curl sends ``content: ""`` for a data-only page). ``id`` is NOT
 # here on purpose: it's dropped on create / supplied on update.
 _MATCH_KEEP_EMPTY: tuple[str, ...] = (
-    "lang", "slug", "title", "seo_description", "date", "time",
+    "lang", "slug", "title", "seo_title", "seo_description", "date", "time",
     "venue", "group", "odds_home", "odds_draw", "odds_away", "content",
 )
 
