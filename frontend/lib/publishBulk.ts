@@ -16,6 +16,43 @@ export type PublishLookupKind = "id" | "slug";
 /** What to do in Create mode when a row's slug already exists on the target. */
 export type OnSlugConflict = "create" | "skip" | "update";
 
+/** Built-in Custom CMS page type. 'ordinary' uses the domain's own endpoint +
+ *  body_template; 'match' pins the hardcoded /add-sport-page endpoint + the
+ *  sport field set. WordPress runs ignore this. */
+export type CustomPageType = "ordinary" | "match";
+
+/** The endpoints a 'match' run posts to — Create and Update hit different
+ *  URLs. Mirrors the backend constant in app/cms/custom_page_types.py; kept
+ *  here only for display (the request is built server-side). */
+export const MATCH_PAGE_ENDPOINT = "/add-sport-page"; // create
+export const MATCH_UPDATE_ENDPOINT = "/update-sport-page"; // update
+
+/** Mappable field slots for a 'match' run. Mirrors the match body_template
+ *  placeholders in app/cms/custom_page_types.py. ``lang`` IS included (same as
+ *  ordinary Custom pages) so a per-row language column maps straight to it —
+ *  without it, every row falls back to the run-level language. The run-level
+ *  language picker / "Language column" control still work as a fallback when
+ *  ``lang`` is left unmapped. (``action``/``id`` are driven by the operation
+ *  toggle + lookup panel, not field slots.)
+ *
+ *  The bulk modal renders these as mapping slots regardless of which domain a
+ *  row resolves to — so 'match' isn't subject to the "multi mode reads one
+ *  canonical domain's template" behavior that 'ordinary' has. */
+export const MATCH_PAGE_FIELDS = [
+  "lang",
+  "slug",
+  "title",
+  "seo_description",
+  "date",
+  "time",
+  "venue",
+  "group",
+  "odds_home",
+  "odds_draw",
+  "odds_away",
+  "content",
+] as const;
+
 export interface BulkRunSummary {
   id: number;
   name: string | null;
@@ -41,6 +78,7 @@ export interface BulkRunSummary {
   lookup_column_id: number | null;
   language_column_id: number | null;
   on_slug_conflict: OnSlugConflict;
+  custom_page_type: CustomPageType;
 }
 
 export interface ByDomainStat {
@@ -99,6 +137,9 @@ export interface BulkPublishPayload {
    *  the row as skipped. "update" = PATCH the existing post instead.
    *  Requires `slug` to be in field_to_column. */
   on_slug_conflict?: OnSlugConflict;
+  /** Custom CMS built-in page type. 'match' pins /add-sport-page + the sport
+   *  field set; 'ordinary' (default) uses the domain's own config. */
+  custom_page_type?: CustomPageType;
 }
 
 export interface PublishMapping {
@@ -112,6 +153,7 @@ export interface PublishMapping {
   lookup_kind?: PublishLookupKind | null;
   lookup_column_id?: number | null;
   on_slug_conflict?: OnSlugConflict;
+  custom_page_type?: CustomPageType;
 }
 
 export interface BulkRunListResponse {

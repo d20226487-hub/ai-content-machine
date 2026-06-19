@@ -520,6 +520,7 @@ export const en = {
   "library.searchPlaceholder": "Search tables…",
   "library.searchInFolderPlaceholder": "Search in \"{folder}\"…",
   "library.foldersHeading": "Folders ({count})",
+  "library.subfoldersHeading": "Subfolders ({count})",
   "library.tablesHeading": "Tables",
   "library.selectedCount": "{count} selected",
   "library.selectedCountPlural": "{count} selected",
@@ -538,6 +539,8 @@ export const en = {
   "library.tableMeta": "{cols} cols · {rows} rows · updated {time}",
   "library.folderTablesCount": "{count} table",
   "library.folderTablesCountPlural": "{count} tables",
+  "library.folderSubfoldersCount": "{count} subfolder",
+  "library.folderSubfoldersCountPlural": "{count} subfolders",
   "library.folderNamePrompt": "Folder name:",
   "library.renameFolderPrompt": "Rename folder:",
   "library.confirmDeleteFolder":
@@ -1377,6 +1380,13 @@ export const en = {
     "Pick the column holding each row's upstream post id. Renaming the slug? Map the new slug separately in the \"Fields to set\" section below — the lookup uses the id column, the body sends the new slug.",
   "bulkPub.customLookupSlugDisabled":
     "Slug-based lookup isn't supported by the upstream yet — the __add_content endpoint doesn't accept an old_slug parameter. Use id lookup; you can still rename the slug by mapping it in \"Fields to set\".",
+  "bulkPub.pageType": "Page type",
+  "bulkPub.pageTypeOrdinary": "Ordinary",
+  "bulkPub.pageTypeMatch": "Match",
+  "bulkPub.pageTypeOrdinaryHint":
+    "Standard page — uses each target site's own endpoint and body template.",
+  "bulkPub.pageTypeMatchHint":
+    "Sport match page with the match field set (lang, date, time, venue, group, odds). Create posts to {createEndpoint}; Update posts to {updateEndpoint} (pick the id column under \"Find existing posts by\"). Map your language column to the lang field for per-row languages, otherwise every row uses the run language.",
   "bulkPub.mode": "Mode",
   "bulkPub.modeSingle": "Single site",
   "bulkPub.modeMulti": "Multi site",

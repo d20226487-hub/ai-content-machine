@@ -539,6 +539,7 @@ export const ru: Record<keyof typeof en, string> = {
   "library.searchPlaceholder": "Поиск таблиц…",
   "library.searchInFolderPlaceholder": "Поиск в «{folder}»…",
   "library.foldersHeading": "Папки ({count})",
+  "library.subfoldersHeading": "Вложенные папки ({count})",
   "library.tablesHeading": "Таблицы",
   "library.selectedCount": "Выбрано: {count}",
   "library.selectedCountPlural": "Выбрано: {count}",
@@ -558,6 +559,8 @@ export const ru: Record<keyof typeof en, string> = {
     "колонок: {cols} · строк: {rows} · обновлено {time}",
   "library.folderTablesCount": "Таблиц: {count}",
   "library.folderTablesCountPlural": "Таблиц: {count}",
+  "library.folderSubfoldersCount": "Вложенных папок: {count}",
+  "library.folderSubfoldersCountPlural": "Вложенных папок: {count}",
   "library.folderNamePrompt": "Название папки:",
   "library.renameFolderPrompt": "Переименовать папку:",
   "library.confirmDeleteFolder":
@@ -1437,6 +1440,13 @@ export const ru: Record<keyof typeof en, string> = {
     "Выберите колонку с upstream id записи. Переименовываете slug? Сопоставьте новый slug отдельно в разделе «Поля для записи» ниже — поиск идёт по id, тело отправляется с новым slug.",
   "bulkPub.customLookupSlugDisabled":
     "Поиск по slug сервером пока не поддерживается — endpoint __add_content не принимает параметр old_slug. Используйте поиск по id; вы всё равно можете переименовать slug, указав его в «Поля для записи».",
+  "bulkPub.pageType": "Тип страницы",
+  "bulkPub.pageTypeOrdinary": "Обычная",
+  "bulkPub.pageTypeMatch": "Матч",
+  "bulkPub.pageTypeOrdinaryHint":
+    "Обычная страница — использует endpoint и шаблон тела каждого целевого сайта.",
+  "bulkPub.pageTypeMatchHint":
+    "Спортивная страница матча с набором полей матча (lang, дата, время, площадка, группа, кэфы). Создание публикуется на {createEndpoint}; Обновление — на {updateEndpoint} (укажите колонку id в «Найти существующие записи по»). Сопоставьте колонку языка с полем lang для языка по строкам, иначе все строки используют язык всего прогона.",
   "bulkPub.mode": "Режим",
   "bulkPub.modeSingle": "Один сайт",
   "bulkPub.modeMulti": "Несколько сайтов",

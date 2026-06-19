@@ -104,6 +104,14 @@ class BulkPublishRun(Base):
         String(16), nullable=False, default="create"
     )
 
+    # Built-in Custom CMS page type (migration 0055). 'ordinary' uses the
+    # domain's own endpoint + body_template; 'match' pins the hardcoded
+    # /add-sport-page endpoint + the sport field set. Ignored for WordPress
+    # rows. See app/cms/custom_page_types.py.
+    custom_page_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="ordinary", server_default="ordinary"
+    )
+
     created_by_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -188,6 +196,11 @@ class BulkTablePublishMapping(Base):
     )
     on_slug_conflict: Mapped[str] = mapped_column(
         String(16), nullable=False, default="create"
+    )
+    # Remembered Custom CMS page type (migration 0055), so the modal restores
+    # the last 'ordinary' / 'match' choice for this (table, mode).
+    custom_page_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="ordinary", server_default="ordinary"
     )
 
     updated_at: Mapped[datetime] = mapped_column(

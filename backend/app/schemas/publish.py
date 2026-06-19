@@ -27,6 +27,10 @@ PublishLookupKind = Literal["id", "slug"]
 # POST (WP auto-suffixes); 'skip' = log as skipped; 'update' = PATCH the
 # existing post.
 OnSlugConflict = Literal["create", "skip", "update"]
+# Built-in Custom CMS page type. 'ordinary' uses the domain's own endpoint +
+# body_template; 'match' pins the hardcoded /add-sport-page endpoint + sport
+# field set (see app/cms/custom_page_types.py). WordPress runs ignore it.
+CustomPageType = Literal["ordinary", "match"]
 
 
 class BulkPublishRequest(BaseModel):
@@ -72,6 +76,10 @@ class BulkPublishRequest(BaseModel):
     # per row, language-aware via find_post.
     on_slug_conflict: OnSlugConflict = "create"
 
+    # Custom CMS built-in page type. Non-default ('match') pins a hardcoded
+    # endpoint + body template. WordPress runs leave this 'ordinary'.
+    custom_page_type: CustomPageType = "ordinary"
+
     @model_validator(mode="after")
     def _validate_mode(self) -> "BulkPublishRequest":
         if self.mode == "single":
@@ -109,6 +117,13 @@ class BulkPublishRequest(BaseModel):
                     "field_to_column. Map a column to the slug field, or "
                     "set on_slug_conflict='create'."
                 )
+        # 'match' supports only Create (POST /add-sport-page) and Update
+        # (POST /update-sport-page) — there's no upsert endpoint.
+        if self.custom_page_type == "match" and self.operation == "upsert":
+            raise ValueError(
+                "The 'match' page type supports only Create and Update "
+                "(there is no upsert endpoint)."
+            )
         return self
 
 
@@ -145,6 +160,7 @@ class BulkRunSummary(BaseModel):
     lookup_column_id: int | None = None
     language_column_id: int | None = None
     on_slug_conflict: OnSlugConflict = "create"
+    custom_page_type: CustomPageType = "ordinary"
 
 
 class ByDomainStat(BaseModel):
@@ -192,6 +208,7 @@ class PublishMapping(BaseModel):
     lookup_kind: PublishLookupKind | None = None
     lookup_column_id: int | None = None
     on_slug_conflict: OnSlugConflict = "create"
+    custom_page_type: CustomPageType = "ordinary"
 
 
 class PublishDefaults(BaseModel):

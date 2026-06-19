@@ -8,6 +8,7 @@ import { BackFill } from "@/components/bulkPublish/BackFill";
 import { CellFilter } from "@/components/bulkPublish/CellFilter";
 import { CmsTypeSegmented } from "@/components/bulkPublish/CmsTypeSegmented";
 import { CustomCmsActionPanel } from "@/components/bulkPublish/CustomCmsActionPanel";
+import { CustomPageTypeSelector } from "@/components/bulkPublish/CustomPageTypeSelector";
 import { FieldMapping } from "@/components/bulkPublish/FieldMapping";
 import { LanguageSync } from "@/components/bulkPublish/LanguageSync";
 import { MultiModeSection } from "@/components/bulkPublish/MultiModeSection";
@@ -31,10 +32,12 @@ import {
   createBulkRun,
   getMappingMulti,
   getMappingSingle,
+  MATCH_PAGE_FIELDS,
   type BulkPublishPayload,
   // Type aliases keep these distinct from the same-named components
   // we import from @/components/bulkPublish/* above.
   type CellFilter as CellFilterValue,
+  type CustomPageType,
   type OnSlugConflict,
   type PublishLookupKind,
   type PublishMode,
@@ -135,6 +138,13 @@ export function BulkPublishModal({
   const [onSlugConflict, setOnSlugConflict] =
     useState<OnSlugConflict>("create");
 
+  // Custom CMS built-in page type. 'ordinary' = each domain's own endpoint
+  // + template (today's behavior); 'match' = hardcoded /add-sport-page +
+  // sport field set. Custom-only; reset to 'ordinary' when the CMS-type
+  // segmented control leaves Custom.
+  const [customPageType, setCustomPageType] =
+    useState<CustomPageType>("ordinary");
+
   // CMS-type segmented control at the top of the modal. Drives:
   //   - which CMS-specific panel renders (WP operation knobs vs Custom
   //     placeholder);
@@ -174,6 +184,20 @@ export function BulkPublishModal({
     setDomainId(null);
     setSelectedFullDomain(null);
     setSelectedLabel(null);
+    // Page type is Custom-only; a WP run is always 'ordinary'.
+    if (next !== "custom") setCustomPageType("ordinary");
+  }
+
+  // Page-type change. 'match' offers only create/update (no upsert endpoint),
+  // so if the user had Upsert selected, fall back to Create when switching to
+  // match. Otherwise the operation carries over unchanged.
+  function onCustomPageTypeChange(next: CustomPageType) {
+    setCustomPageType(next);
+    userTouchedRef.current.customPageType = true;
+    if (next === "match" && operation === "upsert") {
+      userTouchedRef.current.operation = true;
+      setOperation("create");
+    }
   }
 
   // Called by the combobox after every fresh page of results. We use
@@ -294,6 +318,17 @@ export function BulkPublishModal({
 
   // Compute the set of field "slots" the user must map columns to.
   const slots: FieldSlot[] = useMemo(() => {
+    // 'match' page type pins a fixed endpoint + body template, so its field
+    // schema is a constant — identical in single and multi mode regardless
+    // of which domain a row resolves to. (This is why 'match' isn't subject
+    // to the "multi mode reads one canonical domain's template" behavior.)
+    if (cmsTypeFilter === "custom" && customPageType === "match") {
+      return MATCH_PAGE_FIELDS.map((k) => ({
+        key: k,
+        label: k,
+        required: false,
+      }));
+    }
     if (mode === "multi") {
       // Custom CMS Multi mode: pull placeholders from the canonical
       // Custom CMS domain's body_template, not WP fields. Bug fix —
@@ -331,7 +366,7 @@ export function BulkPublishModal({
     return placeholders
       .filter((p) => p !== "language")
       .map((p) => ({ key: p, label: p, required: false }));
-  }, [mode, cmsTypeFilter, multiCanonicalDomain, multiCanonicalProfile, selected, activeProfile]);
+  }, [mode, cmsTypeFilter, customPageType, multiCanonicalDomain, multiCanonicalProfile, selected, activeProfile]);
 
   // When `slots` resolves to empty, render a context-specific reason in
   // the FieldMapping panel instead of the generic
@@ -394,6 +429,7 @@ export function BulkPublishModal({
     operation: false,
     lookupKind: false,
     onSlugConflict: false,
+    customPageType: false,
   });
   function setOperationTouched(op: PublishOperation): void {
     userTouchedRef.current.operation = true;
@@ -489,6 +525,9 @@ export function BulkPublishModal({
           if (m.on_slug_conflict && !userTouchedRef.current.onSlugConflict) {
             setOnSlugConflict(m.on_slug_conflict);
           }
+          if (m.custom_page_type && !userTouchedRef.current.customPageType) {
+            setCustomPageType(m.custom_page_type);
+          }
         })
         .catch(() => {
           // Server lookup failed — still drop fields that don't exist in
@@ -547,6 +586,9 @@ export function BulkPublishModal({
           });
           if (m.on_slug_conflict && !userTouchedRef.current.onSlugConflict) {
             setOnSlugConflict(m.on_slug_conflict);
+          }
+          if (m.custom_page_type && !userTouchedRef.current.customPageType) {
+            setCustomPageType(m.custom_page_type);
           }
         })
         .catch(() => {
@@ -787,11 +829,13 @@ export function BulkPublishModal({
         operation: false,
         lookupKind: false,
         onSlugConflict: false,
+        customPageType: false,
       };
       setOperation("create");
       setLookupKind("id");
       setLookupColumnId("");
       setOnSlugConflict("create");
+      setCustomPageType("ordinary");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t("domainMod.clearCacheFailed"));
     }
@@ -885,6 +929,9 @@ export function BulkPublishModal({
       back_fill,
       save_mapping: saveMapping,
       operation,
+      // Custom-only; WP runs always send 'ordinary'. The server also
+      // rejects 'match' against a non-Custom domain as a safety net.
+      custom_page_type: cmsTypeFilter === "custom" ? customPageType : "ordinary",
     };
 
     if (operation === "update" && lookupColumnId !== "") {
@@ -1009,15 +1056,30 @@ export function BulkPublishModal({
             fieldToColumn={fieldToColumn}
           />
         ) : (
-          <CustomCmsActionPanel
-            operation={operation}
-            onOperationChange={setOperationTouched}
-            lookupKind={lookupKind}
-            onLookupKindChange={setLookupKindTouched}
-            lookupColumnId={lookupColumnId}
-            onLookupColumnIdChange={setLookupColumnId}
-            columns={table.columns}
-          />
+          <div className="space-y-3">
+            <CustomPageTypeSelector
+              value={customPageType}
+              onChange={onCustomPageTypeChange}
+            />
+            {/* Both page types use the create/update operation + lookup
+                knobs. 'match' offers only create + update (Create posts to
+                /add-sport-page, Update to /update-sport-page); 'ordinary'
+                also offers upsert. */}
+            <CustomCmsActionPanel
+              operation={operation}
+              onOperationChange={setOperationTouched}
+              lookupKind={lookupKind}
+              onLookupKindChange={setLookupKindTouched}
+              lookupColumnId={lookupColumnId}
+              onLookupColumnIdChange={setLookupColumnId}
+              columns={table.columns}
+              operations={
+                customPageType === "match"
+                  ? ["create", "update"]
+                  : ["create", "update", "upsert"]
+              }
+            />
+          </div>
         )}
 
         {mode === "single" ? (

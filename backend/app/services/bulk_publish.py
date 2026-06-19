@@ -25,6 +25,7 @@ from typing import Any
 from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cms.custom_page_types import merged_custom_config
 from app.cms.registry import UnsupportedCms, get_cms_client
 from app.db.models import (
     BulkPublishRun,
@@ -550,7 +551,19 @@ async def publish_one_row(
 
     try:
         media_cache = MediaCache(db, domain.id) if domain.cms_type == "wordpress" else None
-        client = get_cms_client(domain, media_cache=media_cache)
+        # Built-in Custom CMS page type: 'match' pins the /add-sport-page
+        # endpoint + sport body template, overriding the domain's own config.
+        # 'ordinary' (and WordPress) → no override, normal path.
+        custom_cfg_override = None
+        if domain.cms_type == "custom" and run.custom_page_type not in (None, "ordinary"):
+            custom_cfg_override = merged_custom_config(
+                domain.custom_config, run.custom_page_type, operation=run.operation
+            )
+        client = get_cms_client(
+            domain,
+            media_cache=media_cache,
+            custom_config_override=custom_cfg_override,
+        )
     except UnsupportedCms as e:
         await _record_failure(
             db,

@@ -16,7 +16,20 @@ class UnsupportedCms(RuntimeError):
     pass
 
 
-def get_cms_client(domain: Domain, *, media_cache=None) -> CmsClient:
+def get_cms_client(
+    domain: Domain,
+    *,
+    media_cache=None,
+    custom_config_override: dict | None = None,
+) -> CmsClient:
+    """Build a CmsClient from a Domain row.
+
+    ``custom_config_override`` (Custom CMS only) swaps the domain's own
+    ``custom_config`` for a caller-supplied one — used by bulk publish to
+    pin a built-in page type's endpoint + body template (see
+    app/cms/custom_page_types.py) without mutating the Domain. Ignored for
+    WordPress domains.
+    """
     creds = (
         decrypt(domain.credentials_encrypted)
         if domain.credentials_encrypted
@@ -37,7 +50,11 @@ def get_cms_client(domain: Domain, *, media_cache=None) -> CmsClient:
             base_url=domain.base_url,
             credentials=creds,
             auth_type=domain.auth_type,
-            custom_config=domain.custom_config,
+            custom_config=(
+                custom_config_override
+                if custom_config_override is not None
+                else domain.custom_config
+            ),
         )
 
     raise UnsupportedCms(f"cms_type {domain.cms_type!r} is not supported")

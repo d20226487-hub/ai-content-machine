@@ -100,6 +100,17 @@ async def create_bulk_publish_run(
             raise HTTPException(status_code=404, detail="Domain not found")
         domain_id = domain.id
         profile = _norm_profile(payload.profile_name)
+        # A non-default Custom CMS page type ('match') only makes sense for
+        # Custom domains — it pins a Custom-API endpoint + body template.
+        if payload.custom_page_type != "ordinary" and domain.cms_type != "custom":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Page type {payload.custom_page_type!r} is only available "
+                    f"for Custom CMS domains; {domain.name!r} is "
+                    f"{domain.cms_type}."
+                ),
+            )
         # Validate operation vs cms_type per-CMS at run creation so the user
         # gets a clear rejection instead of every row failing one by one.
         # Multi mode validates per-row in resolve_row_target since each row
@@ -264,6 +275,7 @@ async def create_bulk_publish_run(
         lookup_kind=lookup_kind,
         lookup_column_id=lookup_column_id,
         on_slug_conflict=payload.on_slug_conflict,
+        custom_page_type=payload.custom_page_type,
     )
     db.add(run)
     await db.commit()
@@ -288,6 +300,7 @@ async def create_bulk_publish_run(
             lookup_column_id=lookup_column_id,
             language_column_id=language_column_id,
             on_slug_conflict=payload.on_slug_conflict,
+            custom_page_type=payload.custom_page_type,
         )
 
     seed_publish_run_task.delay(run.id)
@@ -659,6 +672,7 @@ async def get_mapping_single(
         lookup_kind=row.lookup_kind,
         lookup_column_id=row.lookup_column_id,
         on_slug_conflict=row.on_slug_conflict,
+        custom_page_type=row.custom_page_type,
     )
 
 
@@ -719,6 +733,7 @@ async def get_mapping_multi(
         lookup_kind=row.lookup_kind,
         lookup_column_id=row.lookup_column_id,
         on_slug_conflict=row.on_slug_conflict,
+        custom_page_type=row.custom_page_type,
     )
 
 
@@ -766,6 +781,7 @@ async def _save_mapping(
     lookup_column_id: int | None = None,
     language_column_id: int | None = None,
     on_slug_conflict: str = "create",
+    custom_page_type: str = "ordinary",
 ) -> None:
     """Upsert a mapping memo. Two shapes coexist:
       single mode: keyed on (table_id, mode='single', domain_id, profile_name)
@@ -817,6 +833,7 @@ async def _save_mapping(
     existing.lookup_kind = lookup_kind
     existing.lookup_column_id = lookup_column_id
     existing.on_slug_conflict = on_slug_conflict
+    existing.custom_page_type = custom_page_type
     existing.updated_by_id = actor_id
     await db.commit()
 
@@ -852,6 +869,7 @@ def _to_summary(
         lookup_column_id=run.lookup_column_id,
         language_column_id=run.language_column_id,
         on_slug_conflict=run.on_slug_conflict,  # type: ignore[arg-type]
+        custom_page_type=run.custom_page_type,  # type: ignore[arg-type]
     )
 
 

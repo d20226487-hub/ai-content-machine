@@ -165,7 +165,13 @@ class CustomCmsClient(CmsClient):
             values.setdefault("language", language)
             values.setdefault("lang", language)
 
-        body = _substitute(body_template, values)
+        # ``send_empty_fields`` (a list of keys, set by built-in page types
+        # like 'match') pins those keys into the body even when blank — empty
+        # → "" instead of the default "drop the key". Other empty keys (e.g.
+        # ``id`` on a create) still drop. Ordinary templates omit the key, so
+        # the multi-operation drop behavior is unchanged for them.
+        keep_empty = frozenset(cfg.get("send_empty_fields") or [])
+        body = _substitute(body_template, values, keep_empty_keys=keep_empty)
 
         url = f"{self.base_url}{endpoint_path}"
         headers = {**self._auth_header(), "Content-Type": "application/json"}
@@ -241,7 +247,12 @@ class CustomCmsClient(CmsClient):
         )
 
 
-def _substitute(node: Any, values: dict[str, Any]) -> Any:
+def _substitute(
+    node: Any,
+    values: dict[str, Any],
+    *,
+    keep_empty_keys: frozenset[str] = frozenset(),
+) -> Any:
     """Recursively replace {{key}} placeholders inside a JSON-shaped tree.
 
     A scalar string consisting of exactly one placeholder is replaced with
@@ -250,6 +261,12 @@ def _substitute(node: Any, values: dict[str, Any]) -> Any:
     so the parent container can drop the key entirely — this is what lets
     one body_template cover create / update / upsert: leave a field blank
     and it won't be sent.
+
+    ``keep_empty_keys`` overrides that omission per dict-key: a key listed
+    here stays in the body as ``""`` when its placeholder is empty/missing,
+    instead of being dropped. Used by fixed-contract page types (e.g. the
+    'match' page sends ``content: ""``) while still dropping the keys that
+    should vanish when blank (e.g. ``id`` on a create).
 
     Strings containing other text (interpolation) keep the existing
     "missing → empty string" behavior because dropping a sub-section of
@@ -274,7 +291,7 @@ def _substitute(node: Any, values: dict[str, Any]) -> Any:
     if isinstance(node, list):
         out_list: list[Any] = []
         for x in node:
-            r = _substitute(x, values)
+            r = _substitute(x, values, keep_empty_keys=keep_empty_keys)
             if r is _MISSING:
                 continue
             out_list.append(r)
@@ -283,8 +300,12 @@ def _substitute(node: Any, values: dict[str, Any]) -> Any:
     if isinstance(node, dict):
         out_dict: dict[str, Any] = {}
         for k, v in node.items():
-            r = _substitute(v, values)
+            r = _substitute(v, values, keep_empty_keys=keep_empty_keys)
             if r is _MISSING:
+                # Drop the key — unless it's pinned to always-send, in which
+                # case emit an empty string.
+                if k in keep_empty_keys:
+                    out_dict[k] = ""
                 continue
             out_dict[k] = r
         return out_dict

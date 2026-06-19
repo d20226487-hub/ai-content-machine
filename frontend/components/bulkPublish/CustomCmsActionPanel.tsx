@@ -33,6 +33,7 @@ export function CustomCmsActionPanel({
   lookupColumnId,
   onLookupColumnIdChange,
   columns,
+  operations = ["create", "update", "upsert"],
 }: {
   operation: PublishOperation;
   onOperationChange: (op: PublishOperation) => void;
@@ -44,6 +45,9 @@ export function CustomCmsActionPanel({
   lookupColumnId: number | "";
   onLookupColumnIdChange: (id: number | "") => void;
   columns: BulkColumn[];
+  /** Which operations to offer. The 'match' page type passes
+   *  ["create","update"] (no upsert endpoint exists for it). */
+  operations?: readonly PublishOperation[];
 }) {
   const { t } = useT();
   return (
@@ -53,7 +57,7 @@ export function CustomCmsActionPanel({
           {t("bulkPub.operation")}
         </span>
         <div className="inline-flex rounded-md border border-neutral-300 p-0.5 dark:border-neutral-700">
-          {(["create", "update", "upsert"] as const).map((op) => (
+          {operations.map((op) => (
             <button
               key={op}
               type="button"

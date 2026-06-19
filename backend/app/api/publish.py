@@ -9,7 +9,8 @@ from sqlalchemy import delete as sa_delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_role
-from app.db.models import Domain, PublishJob, User
+from app.cms.custom_page_types import merged_custom_config
+from app.db.models import BulkPublishRun, Domain, PublishJob, User
 from app.db.session import get_db
 from app.schemas.publish import (
     PublishDefaults,
@@ -194,7 +195,40 @@ async def get_publish_job(
     # Fetch the full domain (not just its name) so we can reconstruct the
     # exact outgoing request as a copy-pasteable curl for debugging.
     domain = await db.get(Domain, job.domain_id) if job.domain_id else None
-    return _to_detail(job, domain.name if domain else None, domain)
+    # For a bulk row from a Custom-CMS run with a built-in page type ('match'),
+    # the WORKER overrode the endpoint (Create → /add-sport-page, Update →
+    # /update-sport-page) regardless of the domain's own endpoint_path. Mirror
+    # that here so the curl preview shows the URL that was actually hit, not the
+    # domain's configured endpoint.
+    endpoint_override = await _match_endpoint_override(db, job, domain)
+    return _to_detail(
+        job, domain.name if domain else None, domain, endpoint_override=endpoint_override
+    )
+
+
+async def _match_endpoint_override(
+    db: AsyncSession, job: PublishJob, domain: Domain | None
+) -> str | None:
+    """The hardcoded endpoint a built-in page type pins for this job's run, or
+    None when the run uses the domain's own endpoint (ordinary / WP / single)."""
+    if domain is None or domain.cms_type != "custom":
+        return None
+    if job.source_kind != "bulk_row" or not isinstance(job.source_ref, dict):
+        return None
+    run_id = job.source_ref.get("run_id")
+    if run_id is None:
+        return None
+    try:
+        run = await db.get(BulkPublishRun, int(run_id))
+    except (TypeError, ValueError):
+        return None
+    if run is None:
+        return None
+    page_type = getattr(run, "custom_page_type", "ordinary")
+    if page_type in (None, "ordinary"):
+        return None
+    cfg = merged_custom_config(domain.custom_config, page_type, operation=run.operation)
+    return (cfg or {}).get("endpoint_path")
 
 
 _TERMINAL_JOB_STATUSES = ("posted", "failed")
@@ -291,14 +325,17 @@ def _to_read(job: PublishJob, domain_name: str | None) -> PublishJobRead:
 
 
 def _to_detail(
-    job: PublishJob, domain_name: str | None, domain: Domain | None = None
+    job: PublishJob,
+    domain_name: str | None,
+    domain: Domain | None = None,
+    endpoint_override: str | None = None,
 ) -> PublishJobDetail:
     base = _to_read(job, domain_name)
     return PublishJobDetail(
         **base.model_dump(),
         payload_sent=job.payload_sent,
         response_json=job.response_json,
-        curl_preview=_build_curl_preview(job, domain),
+        curl_preview=_build_curl_preview(job, domain, endpoint_override=endpoint_override),
     )
 
 
@@ -323,10 +360,17 @@ def _masked_auth_header(domain: Domain) -> tuple[str, str] | None:
     return None
 
 
-def _build_curl_preview(job: PublishJob, domain: Domain | None) -> str | None:
+def _build_curl_preview(
+    job: PublishJob, domain: Domain | None, endpoint_override: str | None = None
+) -> str | None:
     """Reconstruct the exact outgoing request for this row as a copy-pasteable
     curl — method, URL, headers (auth masked) and the real JSON body that was
-    sent. Returns None when there's nothing meaningful to show yet."""
+    sent. Returns None when there's nothing meaningful to show yet.
+
+    ``endpoint_override`` wins over the domain's configured ``endpoint_path``
+    for Custom CMS — used so built-in page types ('match') show the hardcoded
+    URL the worker actually posts to (/add-sport-page | /update-sport-page),
+    not the domain's own endpoint."""
     import json
 
     body = job.payload_sent
@@ -341,7 +385,11 @@ def _build_curl_preview(job: PublishJob, domain: Domain | None) -> str | None:
     auth = _masked_auth_header(domain)
 
     if domain.cms_type == "custom":
-        endpoint_path = (domain.custom_config or {}).get("endpoint_path") or ""
+        endpoint_path = (
+            endpoint_override
+            if endpoint_override is not None
+            else (domain.custom_config or {}).get("endpoint_path") or ""
+        )
         url = f"{base}{endpoint_path}"
         prefix = ""
     else:
