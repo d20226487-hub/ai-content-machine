@@ -44,12 +44,20 @@ _MATCH_KEEP_EMPTY: tuple[str, ...] = (
     "venue", "group", "odds_home", "odds_draw", "odds_away", "content",
 )
 
+# Fields the upstream expects as a JSON boolean, not a string — their table
+# cell holds "true"/"false" text, which CustomCmsClient.publish_post coerces
+# to a real bool before sending. Deliberately NOT in _MATCH_KEEP_EMPTY: a
+# mapped-but-blank cell becomes ``false`` (handled by the coercion), and an
+# unmapped one is dropped rather than sent as the string "".
+_MATCH_BOOLEAN: tuple[str, ...] = ("top",)
+
 # The match body template. There's no ``action`` field — the operation picks
 # the endpoint instead. ``id`` is a bare placeholder → dropped when blank
 # (create), present when supplied (update, to address the existing page).
 _MATCH_BODY_TEMPLATE: dict[str, Any] = {
     "id": "{{id}}",
     **{k: f"{{{{{k}}}}}" for k in _MATCH_KEEP_EMPTY},
+    **{k: f"{{{{{k}}}}}" for k in _MATCH_BOOLEAN},
 }
 
 # Per-operation endpoint for the match page type (the operation, not an
@@ -67,6 +75,7 @@ _OVERRIDES: dict[str, dict[str, Any]] = {
         "operations": ("create", "update"),  # no upsert for match
         "body_template": _MATCH_BODY_TEMPLATE,
         "keep_empty": _MATCH_KEEP_EMPTY,
+        "boolean_fields": _MATCH_BOOLEAN,
     },
 }
 
@@ -111,4 +120,8 @@ def merged_custom_config(
     }
     if operation == "create":
         merged["send_empty_fields"] = list(spec["keep_empty"])
+    # Boolean coercion applies to both create and update (you can flip the
+    # flag on an update too); publish_post converts the mapped text cell.
+    if spec.get("boolean_fields"):
+        merged["boolean_fields"] = list(spec["boolean_fields"])
     return merged

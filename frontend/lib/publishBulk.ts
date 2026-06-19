@@ -51,6 +51,9 @@ export const MATCH_PAGE_FIELDS = [
   "odds_draw",
   "odds_away",
   "content",
+  // 'top' holds "true"/"false" text in the table; the backend sends it as a
+  // real JSON boolean (see boolean_fields in app/cms/custom_page_types.py).
+  "top",
 ] as const;
 
 export interface BulkRunSummary {

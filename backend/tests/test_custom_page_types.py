@@ -56,11 +56,12 @@ def test_match_create_uses_add_endpoint_keeps_response_paths():
     cfg = merged_custom_config(dom, "match", operation="create")
     assert cfg["endpoint_path"] == "/add-sport-page"
     assert cfg["response_id_path"] == "data.id"  # domain's response paths kept
-    # body = id + sport fields, NO action.
-    assert set(cfg["body_template"].keys()) == _SPORT_KEYS | {"id"}
+    # body = id + sport fields + the boolean 'top', NO action.
+    assert set(cfg["body_template"].keys()) == _SPORT_KEYS | {"id", "top"}
     assert "action" not in cfg["body_template"]
-    # create keeps blank sport fields
+    # create keeps blank sport fields; 'top' is a boolean field (not kept-empty)
     assert set(cfg["send_empty_fields"]) == _SPORT_KEYS
+    assert cfg["boolean_fields"] == ["top"]
 
 
 def test_match_update_uses_update_endpoint_and_drops_blanks():
@@ -151,6 +152,28 @@ def test_match_update_posts_to_update_endpoint_with_id_drops_blanks():
     assert body["id"] == "page_42"
     assert body["odds_home"] == "1.90"
     assert "content" not in body and "title" not in body and "slug" not in body
+
+
+def test_match_top_field_is_sent_as_json_boolean():
+    """The 'top' column holds true/false TEXT but must go out as a real JSON
+    boolean (developer requirement)."""
+    cases = [
+        ("true", True), ("false", False), ("TRUE", True), ("1", True),
+        ("0", False), ("yes", True), ("", False), ("no", False),
+    ]
+    for raw, expected in cases:
+        captured: dict = {}
+        _run_match_publish({"slug": "x", "top": raw}, "create", captured)
+        sent = captured["json"]["top"]
+        assert isinstance(sent, bool), f"{raw!r} → {sent!r} is not a bool"
+        assert sent is expected, f"{raw!r} → {sent!r}, expected {expected}"
+
+
+def test_match_top_unmapped_is_not_sent():
+    """An unmapped 'top' isn't forced into the body (no stray top:false)."""
+    captured: dict = {}
+    _run_match_publish({"slug": "x"}, "create", captured)
+    assert "top" not in captured["json"]
 
 
 # ---- request-schema guard: match has no upsert ------------------------------

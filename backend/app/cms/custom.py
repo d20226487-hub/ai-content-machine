@@ -165,6 +165,16 @@ class CustomCmsClient(CmsClient):
             values.setdefault("language", language)
             values.setdefault("lang", language)
 
+        # ``boolean_fields`` (set by built-in page types, e.g. 'match' → "top")
+        # are stored in the table as text ("true"/"false") but the upstream
+        # wants a real JSON boolean. Coerce the mapped cell value here so the
+        # placeholder substitutes a bool, which serializes as true/false.
+        # Only mapped fields are touched — an unmapped boolean field is left
+        # to the normal drop/keep logic below.
+        for bfield in cfg.get("boolean_fields") or []:
+            if bfield in values:
+                values[bfield] = _coerce_bool(values[bfield])
+
         # ``send_empty_fields`` (a list of keys, set by built-in page types
         # like 'match') pins those keys into the body even when blank — empty
         # → "" instead of the default "drop the key". Other empty keys (e.g.
@@ -245,6 +255,18 @@ class CustomCmsClient(CmsClient):
             cms_post_url=None,
             error=f"HTTP {resp.status_code}: {msg}",
         )
+
+
+_TRUTHY = {"true", "1", "yes", "y", "on", "t"}
+
+
+def _coerce_bool(v: Any) -> bool:
+    """Text cell → JSON boolean. ``"true"/"1"/"yes"`` (any case, trimmed) and a
+    real ``True`` → True; everything else, including ``""`` and ``"false"`` →
+    False. Used for page-type boolean fields (e.g. the match 'top' flag)."""
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in _TRUTHY
 
 
 def _substitute(

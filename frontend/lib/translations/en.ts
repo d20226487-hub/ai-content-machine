@@ -1386,7 +1386,7 @@ export const en = {
   "bulkPub.pageTypeOrdinaryHint":
     "Standard page — uses each target site's own endpoint and body template.",
   "bulkPub.pageTypeMatchHint":
-    "Sport match page with the match field set (lang, date, time, venue, group, odds). Create posts to {createEndpoint}; Update posts to {updateEndpoint} (pick the id column under \"Find existing posts by\"). Map your language column to the lang field for per-row languages, otherwise every row uses the run language.",
+    "Sport match page with the match field set (lang, date, time, venue, group, odds, top). Create posts to {createEndpoint}; Update posts to {updateEndpoint} (pick the id column under \"Find existing posts by\"). Map your language column to the lang field for per-row languages, otherwise every row uses the run language. 'top' takes true/false text and is sent as a boolean.",
   "bulkPub.mode": "Mode",
   "bulkPub.modeSingle": "Single site",
   "bulkPub.modeMulti": "Multi site",
