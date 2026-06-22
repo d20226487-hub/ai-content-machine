@@ -1,16 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import { Modal } from "@/components/Modal";
 import { Pagination } from "@/components/Pagination";
 import { ApiError } from "@/lib/api";
 import {
+  createAutotoolRun,
   getPostPreview,
   listSharedTables,
-  sendToAutotool,
   type AutotoolPostPreview,
-  type AutotoolSendResult,
   type AutotoolTableItem,
   type AutotoolTablesPage,
 } from "@/lib/autotool";
@@ -46,9 +47,17 @@ export function AutotoolSharedTables() {
 
   return (
     <section className="max-w-3xl">
-      <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
-        {t("autotoolCfg.sharedHeading")}
-      </h2>
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+          {t("autotoolCfg.sharedHeading")}
+        </h2>
+        <Link
+          href="/publish/autotool/runs"
+          className="shrink-0 text-xs font-medium text-blue-600 hover:underline dark:text-blue-400"
+        >
+          {t("autotoolCfg.viewRuns")}
+        </Link>
+      </div>
       <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
         {t("autotoolCfg.sharedSubtitle")}
       </p>
@@ -120,14 +129,15 @@ function PostRequestModal({
   onClose: () => void;
 }) {
   const { t } = useT();
+  const router = useRouter();
   const [siteColumnId, setSiteColumnId] = useState<number | null>(null);
   const [touchedColumn, setTouchedColumn] = useState(false);
+  const [pageSize, setPageSize] = useState(50);
   const [data, setData] = useState<AutotoolPostPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [sending, setSending] = useState(false);
-  const [sendResult, setSendResult] = useState<AutotoolSendResult | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [copiedFile, setCopiedFile] = useState<string | null>(null);
 
@@ -143,7 +153,7 @@ function PostRequestModal({
 
   useEffect(() => {
     let cancelled = false;
-    getPostPreview(table.id, touchedColumn ? siteColumnId : undefined)
+    getPostPreview(table.id, touchedColumn ? siteColumnId : undefined, pageSize)
       .then((p) => {
         if (cancelled) return;
         setData(p);
@@ -155,7 +165,7 @@ function PostRequestModal({
     return () => {
       cancelled = true;
     };
-  }, [table.id, siteColumnId, touchedColumn, t]);
+  }, [table.id, siteColumnId, touchedColumn, pageSize, t]);
 
   function fmtRequest(body: object): string {
     if (!data) return "";
@@ -188,17 +198,17 @@ function PostRequestModal({
     setSending(true);
     setSendError(null);
     try {
-      const res = await sendToAutotool(
+      const run = await createAutotoolRun(
         table.id,
         touchedColumn ? siteColumnId : undefined,
+        pageSize,
       );
-      setSendResult(res);
-      setConfirming(false);
+      // Hand off to the run's progress page.
+      router.push(`/publish/autotool/runs/${run.id}`);
     } catch (e) {
       setSendError(
         e instanceof ApiError ? e.message : t("common.somethingWentWrong"),
       );
-    } finally {
       setSending(false);
     }
   }
@@ -242,7 +252,6 @@ function PostRequestModal({
                   setTouchedColumn(true);
                   setSiteColumnId(e.target.value ? Number(e.target.value) : null);
                   // A column change regroups the requests; drop stale send state.
-                  setSendResult(null);
                   setConfirming(false);
                   setSendError(null);
                 }}
@@ -261,8 +270,36 @@ function PostRequestModal({
               <span className="text-xs text-neutral-500 dark:text-neutral-400">
                 {t("autotoolCfg.splitSummary", {
                   domains: data.domain_count,
+                  pages: data.page_count,
                   rows: data.total_rows_matched,
                 })}
+              </span>
+            </span>
+          </label>
+
+          {/* Rows per request (page size) */}
+          <label className="block text-sm">
+            <span className="font-medium text-neutral-700 dark:text-neutral-300">
+              {t("autotoolCfg.pageSizeLabel")}
+            </span>
+            <span className="mt-1 flex flex-wrap items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                max={1000}
+                value={pageSize}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  if (Number.isNaN(v)) return;
+                  setPageSize(Math.max(1, Math.min(1000, v)));
+                  // A new page size regroups the requests; drop stale send state.
+                  setConfirming(false);
+                  setSendError(null);
+                }}
+                className="w-24 rounded-md border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+              />
+              <span className="text-xs text-neutral-500 dark:text-neutral-400">
+                {t("autotoolCfg.pageSizeHint")}
               </span>
             </span>
           </label>
@@ -277,7 +314,10 @@ function PostRequestModal({
           <div>
             <div className="mb-1 flex items-center justify-between">
               <span className="text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
-                {t("autotoolCfg.requestsHeading", { n: data.domain_count })}
+                {t("autotoolCfg.requestsHeading", {
+                  n: data.page_count,
+                  size: data.page_size,
+                })}
               </span>
               {data.requests.length > 0 && (
                 <button
@@ -303,7 +343,11 @@ function PostRequestModal({
                         {r.site}
                       </span>
                       <span className="shrink-0 text-xs text-neutral-400 dark:text-neutral-500">
-                        {t("autotoolCfg.rowsForDomain", { n: r.row_count })}
+                        {t("autotoolCfg.pageRange", {
+                          from: r.start + 1,
+                          to: r.start + r.row_count,
+                          total: r.total,
+                        })}
                       </span>
                     </div>
                     <div className="mt-1 flex items-center gap-2">
@@ -345,52 +389,10 @@ function PostRequestModal({
                 <p className="text-xs text-neutral-500 dark:text-neutral-400">
                   {t("autotoolCfg.sendNeedsConfig")}
                 </p>
-              ) : sendResult ? (
-                <div>
-                  <p
-                    className={
-                      "text-sm font-medium " +
-                      (sendResult.failed === 0
-                        ? "text-green-700 dark:text-green-400"
-                        : "text-amber-700 dark:text-amber-300")
-                    }
-                  >
-                    {t("autotoolCfg.sendResult", {
-                      sent: sendResult.sent,
-                      failed: sendResult.failed,
-                    })}
-                  </p>
-                  <ul className="mt-2 max-h-56 space-y-1 overflow-auto">
-                    {sendResult.items.map((it) => (
-                      <li
-                        key={it.file}
-                        className="flex items-start gap-2 text-xs"
-                        title={it.response_snippet ?? undefined}
-                      >
-                        <span
-                          className={
-                            it.ok
-                              ? "text-green-600 dark:text-green-400"
-                              : "text-red-600 dark:text-red-400"
-                          }
-                        >
-                          {it.ok ? "✓" : "✗"}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate text-neutral-700 dark:text-neutral-300">
-                          {it.site}
-                        </span>
-                        <span className="shrink-0 text-neutral-500 dark:text-neutral-400">
-                          {it.status_code != null ? `HTTP ${it.status_code}` : it.detail}
-                          {it.elapsed_ms != null ? ` · ${it.elapsed_ms}ms` : ""}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
               ) : confirming ? (
                 <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 dark:border-amber-700/60 dark:bg-amber-950/40">
                   <p className="text-xs text-amber-900 dark:text-amber-200">
-                    {t("autotoolCfg.sendConfirmWarn", { n: data.domain_count })}
+                    {t("autotoolCfg.sendConfirmWarn", { n: data.page_count })}
                   </p>
                   <div className="mt-2 flex gap-2">
                     <button
@@ -417,7 +419,7 @@ function PostRequestModal({
                   onClick={() => setConfirming(true)}
                   className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
                 >
-                  {t("autotoolCfg.sendAll", { n: data.domain_count })}
+                  {t("autotoolCfg.startRun", { n: data.page_count })}
                 </button>
               )}
               {sendError && (

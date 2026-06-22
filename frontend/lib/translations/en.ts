@@ -1023,23 +1023,58 @@ export const en = {
   "autotoolCfg.keyMaskedNote":
     "X-Api-Key is masked here; the real key is sent with the request.",
   "autotoolCfg.close": "Close",
-  "autotoolCfg.splitSummary": "{domains} domains · {rows} rows",
+  "autotoolCfg.splitSummary": "{domains} domains · {pages} files · {rows} rows",
   "autotoolCfg.unmatchedWarn":
     "{n} rows have no value in this column and are excluded from every file.",
-  "autotoolCfg.requestsHeading": "{n} requests (one per domain)",
+  "autotoolCfg.requestsHeading": "{n} requests · up to {size} rows each",
   "autotoolCfg.copyAll": "Copy all",
   "autotoolCfg.noDomains":
     "No domains found in the selected column — pick the column that holds the target sites.",
   "autotoolCfg.rowsForDomain": "{n} rows",
+  "autotoolCfg.pageRange": "rows {from}–{to} of {total}",
+  "autotoolCfg.pageStart": "from row {start}",
+  "autotoolCfg.pageSizeLabel": "Rows per request",
+  "autotoolCfg.pageSizeHint":
+    "Each file holds at most this many rows, so the importer finishes inside its window (1–1000).",
   "autotoolCfg.copyCsvLink": "Copy link",
   "autotoolCfg.sendAll": "Send all ({n})",
   "autotoolCfg.sendConfirmWarn":
     "This sends {n} POST requests and publishes those domains to live sites via Autotool. Continue?",
   "autotoolCfg.sendConfirm": "Send now",
-  "autotoolCfg.sending": "Sending…",
-  "autotoolCfg.sendResult": "Sent {sent} · failed {failed}",
+  "autotoolCfg.sending": "Starting…",
   "autotoolCfg.sendNeedsConfig":
     "Set the target URL and API key above before sending.",
+  "autotoolCfg.viewRuns": "Runs →",
+  "autotoolCfg.startRun": "Start run ({n})",
+
+  // autotool runs — list
+  "autotoolRuns.heading": "Autotool runs",
+  "autotoolRuns.toConfig": "← Autotool config",
+  "autotoolRuns.empty": "No runs yet. Start one from a shared table’s POST-request preview.",
+  "autotoolRuns.colRun": "Run",
+  "autotoolRuns.colTable": "Table",
+  "autotoolRuns.colStatus": "Status",
+  "autotoolRuns.colProgress": "Progress",
+  "autotoolRuns.colCreated": "Created",
+
+  // autotool runs — detail
+  "autotoolRun.back": "← All runs",
+  "autotoolRun.runHash": "Run #{id}",
+  "autotoolRun.tableFallback": "Table #{id}",
+  "autotoolRun.pageSizeLabel": "{size} rows/request",
+  "autotoolRun.processed": "{done} / {total} requests",
+  "autotoolRun.sentPrefix": "{count} sent",
+  "autotoolRun.failedPrefix": "{count} failed",
+  "autotoolRun.failedShort": "{count} failed",
+  "autotoolRun.skippedPrefix": "{count} skipped",
+  "autotoolRun.retryFailed": "Retry failed ({count})",
+  "autotoolRun.retryFailedHint": "Re-fire the {count} failed page(s) on this run.",
+  "autotoolRun.colSite": "Site",
+  "autotoolRun.colPage": "Page",
+  "autotoolRun.colStatus": "Status",
+  "autotoolRun.colDetail": "Detail",
+  "autotoolRun.colTime": "Time",
+  "autotoolRun.empty": "No items.",
 
   // domains page
   "domains.title": "Domains",

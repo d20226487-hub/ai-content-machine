@@ -1,3 +1,4 @@
+from app.db.models.autotool_run import AutotoolRun, AutotoolRunItem
 from app.db.models.backup_run import BackupRun
 from app.db.models.bulk_generation_run import BulkGenerationRun
 from app.db.models.bulk_publish import BulkPublishRun, BulkTablePublishMapping
@@ -39,6 +40,8 @@ from app.db.models.user import User
 
 __all__ = [
     "AppSetting",
+    "AutotoolRun",
+    "AutotoolRunItem",
     "BackupRun",
     "BulkGenerationRun",
     "BulkPublishRun",

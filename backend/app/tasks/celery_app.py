@@ -33,6 +33,7 @@ celery_app = Celery(
         "app.tasks.gdocs_import",
         "app.tasks.publish_bulk",
         "app.tasks.publish_single",
+        "app.tasks.autotool_run",
         "app.tasks.backup",
         "app.tasks.trash_cleanup",
     ],
@@ -84,6 +85,13 @@ celery_app.conf.update(
         # run permanently short of its total with no other recovery path.
         "publish-watchdog": {
             "task": "publish.watchdog",
+            "schedule": 120.0,
+        },
+        # Recover Autotool send runs: fail items orphaned by a dead worker
+        # (stuck 'sending') and re-enqueue 'queued' items left by lost messages
+        # in a stalled run. Only touches runs with no recent activity.
+        "autotool-watchdog": {
+            "task": "autotool.watchdog",
             "schedule": 120.0,
         },
     },

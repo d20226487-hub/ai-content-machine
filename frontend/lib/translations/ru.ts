@@ -1066,23 +1066,59 @@ export const ru: Record<keyof typeof en, string> = {
   "autotoolCfg.keyMaskedNote":
     "X-Api-Key здесь скрыт; реальный ключ отправляется с запросом.",
   "autotoolCfg.close": "Закрыть",
-  "autotoolCfg.splitSummary": "доменов: {domains} · строк: {rows}",
+  "autotoolCfg.splitSummary":
+    "доменов: {domains} · файлов: {pages} · строк: {rows}",
   "autotoolCfg.unmatchedWarn":
     "У {n} строк нет значения в этой колонке — они не попадут ни в один файл.",
-  "autotoolCfg.requestsHeading": "запросов: {n} (по одному на домен)",
+  "autotoolCfg.requestsHeading": "запросов: {n} · до {size} строк каждый",
   "autotoolCfg.copyAll": "Копировать все",
   "autotoolCfg.noDomains":
     "В выбранной колонке нет доменов — выберите колонку с целевыми сайтами.",
   "autotoolCfg.rowsForDomain": "строк: {n}",
+  "autotoolCfg.pageRange": "строки {from}–{to} из {total}",
+  "autotoolCfg.pageStart": "со строки {start}",
+  "autotoolCfg.pageSizeLabel": "Строк в одном запросе",
+  "autotoolCfg.pageSizeHint":
+    "В каждом файле не больше этого числа строк, чтобы импортёр успел в своё окно (1–1000).",
   "autotoolCfg.copyCsvLink": "Копировать ссылку",
   "autotoolCfg.sendAll": "Отправить все ({n})",
   "autotoolCfg.sendConfirmWarn":
     "Будет отправлено {n} POST-запросов, и эти домены будут опубликованы на реальные сайты через Autotool. Продолжить?",
   "autotoolCfg.sendConfirm": "Отправить",
-  "autotoolCfg.sending": "Отправка…",
-  "autotoolCfg.sendResult": "Отправлено: {sent} · ошибок: {failed}",
+  "autotoolCfg.sending": "Запуск…",
   "autotoolCfg.sendNeedsConfig":
     "Сначала задайте целевой URL и API-ключ выше.",
+  "autotoolCfg.viewRuns": "Запуски →",
+  "autotoolCfg.startRun": "Запустить ({n})",
+
+  // autotool runs — список
+  "autotoolRuns.heading": "Запуски Autotool",
+  "autotoolRuns.toConfig": "← Настройки Autotool",
+  "autotoolRuns.empty": "Запусков пока нет. Начните из предпросмотра POST-запроса общей таблицы.",
+  "autotoolRuns.colRun": "Запуск",
+  "autotoolRuns.colTable": "Таблица",
+  "autotoolRuns.colStatus": "Статус",
+  "autotoolRuns.colProgress": "Прогресс",
+  "autotoolRuns.colCreated": "Создан",
+
+  // autotool runs — детали
+  "autotoolRun.back": "← Все запуски",
+  "autotoolRun.runHash": "Запуск №{id}",
+  "autotoolRun.tableFallback": "Таблица №{id}",
+  "autotoolRun.pageSizeLabel": "{size} строк/запрос",
+  "autotoolRun.processed": "{done} / {total} запросов",
+  "autotoolRun.sentPrefix": "отправлено: {count}",
+  "autotoolRun.failedPrefix": "ошибок: {count}",
+  "autotoolRun.failedShort": "ошибок: {count}",
+  "autotoolRun.skippedPrefix": "пропущено: {count}",
+  "autotoolRun.retryFailed": "Повторить ошибки ({count})",
+  "autotoolRun.retryFailedHint": "Повторно отправить {count} стр. с ошибками в этом запуске.",
+  "autotoolRun.colSite": "Сайт",
+  "autotoolRun.colPage": "Страница",
+  "autotoolRun.colStatus": "Статус",
+  "autotoolRun.colDetail": "Детали",
+  "autotoolRun.colTime": "Время",
+  "autotoolRun.empty": "Нет элементов.",
 
   // domains page
   "domains.title": "Домены",

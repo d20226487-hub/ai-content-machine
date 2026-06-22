@@ -60,8 +60,16 @@ export interface AutotoolDomainRequest {
   site: string;
   file: string;
   csv_path: string;
+  /** 0-based row offset of this page within the domain. */
+  start: number;
+  /** the domain's full row count (across all pages). */
+  total: number;
+  /** rows in THIS page (<= page size). */
   row_count: number;
-  body: { sites: string[]; data: { file: string } };
+  body: {
+    sites: string[];
+    data: { file: string; start: number; count: number; total: number };
+  };
 }
 
 export interface AutotoolPostPreview {
@@ -71,7 +79,11 @@ export interface AutotoolPostPreview {
   columns: { id: number; name: string }[];
   site_column_id: number | null;
   detected_site_column_id: number | null;
+  /** effective rows-per-request used to page the table (clamped server-side). */
+  page_size: number;
   domain_count: number;
+  /** total POSTs = sum over domains of ceil(rows / page size). */
+  page_count: number;
   total_rows_matched: number;
   table_row_count: number;
   requests: AutotoolDomainRequest[];
@@ -91,41 +103,124 @@ export function listSharedTables(
 export function getPostPreview(
   tableId: number,
   siteColumnId?: number | null,
+  pageSize?: number | null,
 ): Promise<AutotoolPostPreview> {
-  const qs =
-    siteColumnId != null ? `?site_column_id=${siteColumnId}` : "";
+  const qs = new URLSearchParams();
+  if (siteColumnId != null) qs.set("site_column_id", String(siteColumnId));
+  if (pageSize != null) qs.set("page_size", String(pageSize));
+  const s = qs.toString();
   return api<AutotoolPostPreview>(
-    `/autotool/tables/${tableId}/post-preview${qs}`,
+    `/autotool/tables/${tableId}/post-preview${s ? `?${s}` : ""}`,
   );
 }
 
-export interface AutotoolSendItem {
-  site: string;
-  file: string;
-  ok: boolean;
-  status_code: number | null;
-  detail: string;
-  response_snippet: string | null;
-  elapsed_ms: number | null;
-}
+// ----- send runs (background, with a progress page) -----
 
-export interface AutotoolSendResult {
+export type AutotoolRunStatus =
+  | "queued"
+  | "running"
+  | "cancelled"
+  | "done"
+  | "failed";
+
+export type AutotoolItemStatus =
+  | "queued"
+  | "sending"
+  | "sent"
+  | "failed"
+  | "skipped";
+
+export interface AutotoolRun {
+  id: number;
+  table_id: number | null;
+  table_name: string;
+  target_url: string;
+  page_size: number;
+  status: AutotoolRunStatus;
   total: number;
   sent: number;
   failed: number;
-  target_url: string | null;
-  items: AutotoolSendItem[];
+  skipped: number;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
 }
 
-/** Fire one ImportPosts POST per domain. This publishes to live sites — the
- *  caller must confirm with the user first. */
-export function sendToAutotool(
+export interface AutotoolRunItem {
+  id: number;
+  site: string;
+  start: number;
+  total: number;
+  status: AutotoolItemStatus;
+  status_code: number | null;
+  detail: string | null;
+  response_snippet: string | null;
+  elapsed_ms: number | null;
+  created_at: string;
+}
+
+export interface AutotoolRunsPage {
+  items: AutotoolRun[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface AutotoolRunDetail extends AutotoolRun {
+  site_column_id: number | null;
+  error: string | null;
+  items: AutotoolRunItem[];
+  items_total: number;
+  items_page: number;
+  items_page_size: number;
+}
+
+/** Create a background send run and enqueue it. Publishes to live sites — the
+ *  caller must confirm first, then redirect to the run's progress page. */
+export function createAutotoolRun(
   tableId: number,
   siteColumnId?: number | null,
-): Promise<AutotoolSendResult> {
-  const qs = siteColumnId != null ? `?site_column_id=${siteColumnId}` : "";
-  return api<AutotoolSendResult>(
-    `/autotool/tables/${tableId}/send${qs}`,
-    { method: "POST" },
+  pageSize?: number | null,
+): Promise<AutotoolRunDetail> {
+  return api<AutotoolRunDetail>("/autotool/runs", {
+    method: "POST",
+    body: {
+      table_id: tableId,
+      site_column_id: siteColumnId ?? null,
+      page_size: pageSize ?? null,
+    },
+  });
+}
+
+export function listAutotoolRuns(
+  page = 1,
+  pageSize = 20,
+): Promise<AutotoolRunsPage> {
+  return api<AutotoolRunsPage>(
+    `/autotool/runs?page=${page}&page_size=${pageSize}`,
   );
+}
+
+export function getAutotoolRun(
+  runId: number,
+  page = 1,
+  pageSize = 50,
+): Promise<AutotoolRunDetail> {
+  return api<AutotoolRunDetail>(
+    `/autotool/runs/${runId}?page=${page}&page_size=${pageSize}`,
+  );
+}
+
+export function cancelAutotoolRun(runId: number): Promise<AutotoolRunDetail> {
+  return api<AutotoolRunDetail>(`/autotool/runs/${runId}/cancel`, {
+    method: "POST",
+  });
+}
+
+export function retryFailedAutotoolRun(
+  runId: number,
+): Promise<AutotoolRunDetail> {
+  return api<AutotoolRunDetail>(`/autotool/runs/${runId}/retry-failed`, {
+    method: "POST",
+  });
 }

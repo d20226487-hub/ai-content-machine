@@ -66,11 +66,19 @@ class ColumnRef(BaseModel):
 
 
 class AutotoolDomainRequest(BaseModel):
-    """One ImportPosts POST — for a single target site, with that site's file."""
+    """One ImportPosts POST — a single ``PAGE_SIZE``-row page for one site.
+
+    A domain with more rows than the page size produces several of these, one
+    per ``start`` offset. ``total`` is the domain's full row count (so the
+    importer can tell when it has reached the last page); ``row_count`` is the
+    rows in THIS page.
+    """
 
     site: str
     file: str
     csv_path: str
+    start: int
+    total: int
     row_count: int
     body: dict[str, Any]
 
@@ -91,7 +99,9 @@ class AutotoolPostPreview(BaseModel):
     columns: list[ColumnRef] = []
     site_column_id: int | None = None
     detected_site_column_id: int | None = None
+    page_size: int = 50
     domain_count: int = 0
+    page_count: int = 0
     total_rows_matched: int = 0
     table_row_count: int = 0
     requests: list[AutotoolDomainRequest] = []
@@ -99,24 +109,61 @@ class AutotoolPostPreview(BaseModel):
     api_key_configured: bool = False
 
 
-# ----- firing the requests -----
+# ----- send runs (background, with a progress page) -----
 
 
-class AutotoolSendItem(BaseModel):
-    """Outcome of one per-domain ImportPosts POST."""
+class AutotoolRunCreate(BaseModel):
+    table_id: int
+    site_column_id: int | None = None
+    page_size: int | None = None
 
+
+class AutotoolRunItemRead(BaseModel):
+    """One ImportPosts POST within a run — a single (domain, page)."""
+
+    id: int
     site: str
-    file: str
-    ok: bool
+    start: int
+    total: int
+    status: str  # 'queued' | 'sending' | 'sent' | 'failed' | 'skipped'
     status_code: int | None = None
-    detail: str
+    detail: str | None = None
     response_snippet: str | None = None
     elapsed_ms: int | None = None
+    created_at: datetime
 
 
-class AutotoolSendResult(BaseModel):
+class AutotoolRunRead(BaseModel):
+    """A run, as shown in the list."""
+
+    id: int
+    table_id: int | None = None
+    table_name: str
+    target_url: str
+    page_size: int
+    status: str  # 'queued' | 'running' | 'cancelled' | 'done' | 'failed'
     total: int
     sent: int
     failed: int
-    target_url: str | None = None
-    items: list[AutotoolSendItem] = []
+    skipped: int = 0
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class AutotoolRunsPage(BaseModel):
+    items: list[AutotoolRunRead]
+    total: int
+    page: int
+    page_size: int
+
+
+class AutotoolRunDetail(AutotoolRunRead):
+    """A run plus a page of its items (the progress page)."""
+
+    site_column_id: int | None = None
+    error: str | None = None
+    items: list[AutotoolRunItemRead] = []
+    items_total: int = 0
+    items_page: int = 1
+    items_page_size: int = 50

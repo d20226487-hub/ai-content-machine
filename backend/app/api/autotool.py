@@ -25,7 +25,10 @@ from sqlalchemy.orm import selectinload
 
 from app.db.models import BulkTable
 from app.db.session import get_db
-from app.services.autotool_files import decode_file_token, rows_for_domain
+from app.services.autotool_files import (
+    decode_file_token,
+    ordered_row_ids_for_domain,
+)
 from app.services.bulk_csv import build_table_csv
 
 router = APIRouter(prefix="/autotool", tags=["autotool"])
@@ -38,15 +41,16 @@ async def get_autotool_csv(
 ) -> Response:
     """Return the live CSV for ``token``, or 404.
 
-    A plain table token serves the whole table; a composite token
-    (<table_token>~<col_id>~<b64domain>) serves only that domain's rows — one
-    Autotool file per site. Regenerated from the DB on every request.
+    A bare table token serves the whole table; a composite token serves one
+    page (``limit`` rows from ``start``, both carried in the token) of a single
+    domain — one Autotool file per (site, page). Regenerated from the DB on
+    every request.
     """
     decoded = decode_file_token(token)
     if decoded is not None:
-        table_token, column_id, domain = decoded
+        table_token, column_id, domain, start, limit = decoded
     else:
-        table_token, column_id, domain = token, None, None
+        table_token, column_id, domain, start, limit = token, None, None, None, None
 
     t = (
         (
@@ -71,7 +75,10 @@ async def get_autotool_csv(
 
     include_row_ids: set[int] | None = None
     if domain is not None and column_id is not None:
-        include_row_ids = await rows_for_domain(db, t.id, column_id, domain)
+        ordered = await ordered_row_ids_for_domain(db, t.id, column_id, domain)
+        if start is not None and limit is not None:
+            ordered = ordered[start : start + limit]
+        include_row_ids = set(ordered)
 
     # single_line: collapse newlines inside cells so every row is one physical
     # line — the Autotool proxy consumes this directly.
