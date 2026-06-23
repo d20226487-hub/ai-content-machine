@@ -1106,7 +1106,7 @@ export const ru: Record<keyof typeof en, string> = {
   "autotoolRun.runHash": "Запуск №{id}",
   "autotoolRun.tableFallback": "Таблица №{id}",
   "autotoolRun.pageSizeLabel": "{size} строк/запрос",
-  "autotoolRun.jobId": "id Autotool {id}",
+  "autotoolRun.colId": "id Autotool",
   "autotoolRun.processed": "{done} / {total} запросов",
   "autotoolRun.sentPrefix": "отправлено: {count}",
   "autotoolRun.failedPrefix": "ошибок: {count}",

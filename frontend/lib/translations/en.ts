@@ -1062,7 +1062,7 @@ export const en = {
   "autotoolRun.runHash": "Run #{id}",
   "autotoolRun.tableFallback": "Table #{id}",
   "autotoolRun.pageSizeLabel": "{size} rows/request",
-  "autotoolRun.jobId": "Autotool id {id}",
+  "autotoolRun.colId": "Autotool id",
   "autotoolRun.processed": "{done} / {total} requests",
   "autotoolRun.sentPrefix": "{count} sent",
   "autotoolRun.failedPrefix": "{count} failed",

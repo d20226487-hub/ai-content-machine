@@ -115,9 +115,6 @@ export default function AutotoolRunDetailPage() {
             <b>{run.table_name || t("autotoolRun.tableFallback", { id: run.table_id ?? 0 })}</b>
             {" · "}
             {t("autotoolRun.pageSizeLabel", { size: run.page_size })}
-            {run.external_id != null && (
-              <> · {t("autotoolRun.jobId", { id: String(run.external_id) })}</>
-            )}
             {" · "}
             <span className="break-all">{run.target_url}</span>
           </p>
@@ -171,6 +168,7 @@ export default function AutotoolRunDetailPage() {
           <thead className="bg-neutral-50 dark:bg-neutral-900/50">
             <tr className="text-left text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
               <th className="px-3 py-2">{t("autotoolRun.colSite")}</th>
+              <th className="px-3 py-2">{t("autotoolRun.colId")}</th>
               <th className="px-3 py-2">{t("autotoolRun.colPage")}</th>
               <th className="px-3 py-2">{t("autotoolRun.colStatus")}</th>
               <th className="px-3 py-2">{t("autotoolRun.colDetail")}</th>
@@ -180,7 +178,7 @@ export default function AutotoolRunDetailPage() {
           <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
             {run.items.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-3 py-6 text-center text-neutral-500">
+                <td colSpan={6} className="px-3 py-6 text-center text-neutral-500">
                   {t("autotoolRun.empty")}
                 </td>
               </tr>
@@ -189,6 +187,9 @@ export default function AutotoolRunDetailPage() {
               <tr key={it.id}>
                 <td className="px-3 py-2 font-mono text-xs text-neutral-700 dark:text-neutral-300 break-all">
                   {it.site}
+                </td>
+                <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-neutral-600 dark:text-neutral-400">
+                  {it.external_id != null ? String(it.external_id) : "—"}
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 text-xs text-neutral-600 dark:text-neutral-400">
                   {t("autotoolCfg.pageRange", {

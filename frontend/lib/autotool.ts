@@ -138,8 +138,6 @@ export interface AutotoolRun {
   table_name: string;
   target_url: string;
   page_size: number;
-  /** the proxy import id captured from the 1st request (null until then). */
-  external_id: string | number | null;
   status: AutotoolRunStatus;
   total: number;
   sent: number;
@@ -156,6 +154,8 @@ export interface AutotoolRunItem {
   start: number;
   total: number;
   status: AutotoolItemStatus;
+  /** the proxy id for this item's site (null until its leader captures it). */
+  external_id: string | number | null;
   status_code: number | null;
   detail: string | null;
   response_snippet: string | null;

@@ -62,18 +62,19 @@ async def _seed(run_id: int) -> None:
 
 
 async def _send_one(run_id: int, item_id: int) -> str:
-    from app.services.autotool_run import send_one_item
+    from app.services.autotool_run import next_queued_item_id, send_one_item
 
     engine, Session = _make_session()
     try:
         async with Session() as db:
             result = await send_one_item(db, run_id, item_id)
+            nxt = await next_queued_item_id(db, run_id)
     finally:
         await engine.dispose()
-    # The leader captured the proxy id → fan out the rest (they now carry
-    # data.id) by re-running the seed.
-    if result == "fanout":
-        seed_autotool_run.delay(run_id)
+    # Strictly sequential: enqueue the next queued item (next page, then next
+    # domain). next_queued_item_id returns None once the run is terminal.
+    if nxt is not None:
+        send_one_autotool_item.delay(run_id, nxt)
     return result
 
 
@@ -137,32 +138,26 @@ async def _watchdog() -> None:
                 if run.status != "running":
                     continue
 
-                # (b) Stalled run with leftover 'queued' items (lost Celery
-                # messages) → re-enqueue. Guarded by last activity so an
-                # actively-draining run isn't spammed with duplicate tasks; the
-                # 'queued'→'sending' claim makes a re-enqueue harmless anyway.
-                last = (
+                # (b) Resume a stuck sequential chain: a 'running' run with
+                # queued work but nothing in flight (the chain broke — e.g. the
+                # task that should have enqueued the next item was lost). The
+                # 'queued'→'sending' claim makes a re-enqueue harmless if it
+                # races a normal between-items gap.
+                in_flight = (
                     await db.execute(
-                        select(func.max(AutotoolRunItem.updated_at)).where(
-                            AutotoolRunItem.run_id == rid
+                        select(AutotoolRunItem.id)
+                        .where(
+                            AutotoolRunItem.run_id == rid,
+                            AutotoolRunItem.status == "sending",
                         )
+                        .limit(1)
                     )
-                ).scalar_one_or_none()
-                ref = last or run.started_at
-                if ref is not None and ref < cutoff:
-                    has_queued = (
-                        await db.execute(
-                            select(AutotoolRunItem.id)
-                            .where(
-                                AutotoolRunItem.run_id == rid,
-                                AutotoolRunItem.status == "queued",
-                            )
-                            .limit(1)
-                        )
-                    ).first()
-                    if has_queued is not None:
-                        # Re-seed (not enqueue-each) so leader-first ordering is
-                        # respected: only the leader runs until the id is known.
-                        seed_autotool_run.delay(rid)
+                ).first()
+                if in_flight is None:
+                    from app.services.autotool_run import next_queued_item_id
+
+                    nxt = await next_queued_item_id(db, rid)
+                    if nxt is not None:
+                        send_one_autotool_item.delay(rid, nxt)
     finally:
         await engine.dispose()

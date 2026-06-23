@@ -54,11 +54,6 @@ class AutotoolRun(Base):
     site_column_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     page_size: Mapped[int] = mapped_column(Integer, nullable=False, default=50)
 
-    # The id the proxy returns from the FIRST request; echoed in data.id on every
-    # subsequent request so they're grouped into one import job. NULL until the
-    # leader item captures it. JSONB to preserve the id's exact JSON type.
-    external_id: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
-
     # 'queued' | 'running' | 'cancelled' | 'done' | 'failed'
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
     total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -86,6 +81,11 @@ class AutotoolRunItem(Base):
     start: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # domain total
     file_token: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # The proxy id for this item's SITE — captured by the site's first request
+    # (leader) and set on every item of that site, so followers echo it in
+    # data.id. NULL until captured. JSONB preserves the id's exact JSON type.
+    external_id: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
 
     # 'queued' | 'sending' | 'sent' | 'failed' | 'skipped'
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
