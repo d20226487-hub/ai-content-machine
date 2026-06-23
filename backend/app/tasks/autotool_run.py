@@ -67,9 +67,14 @@ async def _send_one(run_id: int, item_id: int) -> str:
     engine, Session = _make_session()
     try:
         async with Session() as db:
-            return await send_one_item(db, run_id, item_id)
+            result = await send_one_item(db, run_id, item_id)
     finally:
         await engine.dispose()
+    # The leader captured the proxy id → fan out the rest (they now carry
+    # data.id) by re-running the seed.
+    if result == "fanout":
+        seed_autotool_run.delay(run_id)
+    return result
 
 
 async def _watchdog() -> None:
@@ -145,19 +150,19 @@ async def _watchdog() -> None:
                 ).scalar_one_or_none()
                 ref = last or run.started_at
                 if ref is not None and ref < cutoff:
-                    queued = (
-                        (
-                            await db.execute(
-                                select(AutotoolRunItem.id).where(
-                                    AutotoolRunItem.run_id == rid,
-                                    AutotoolRunItem.status == "queued",
-                                )
+                    has_queued = (
+                        await db.execute(
+                            select(AutotoolRunItem.id)
+                            .where(
+                                AutotoolRunItem.run_id == rid,
+                                AutotoolRunItem.status == "queued",
                             )
+                            .limit(1)
                         )
-                        .scalars()
-                        .all()
-                    )
-                    for iid in queued:
-                        send_one_autotool_item.delay(rid, iid)
+                    ).first()
+                    if has_queued is not None:
+                        # Re-seed (not enqueue-each) so leader-first ordering is
+                        # respected: only the leader runs until the id is known.
+                        seed_autotool_run.delay(rid)
     finally:
         await engine.dispose()

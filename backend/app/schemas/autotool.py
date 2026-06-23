@@ -141,6 +141,8 @@ class AutotoolRunRead(BaseModel):
     table_name: str
     target_url: str
     page_size: int
+    # the proxy import id captured from the first request (None until then)
+    external_id: Any | None = None
     status: str  # 'queued' | 'running' | 'cancelled' | 'done' | 'failed'
     total: int
     sent: int

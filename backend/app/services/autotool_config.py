@@ -298,6 +298,12 @@ async def build_post_preview(
                 file_token = encode_file_token(
                     table.autotool_token, chosen, domain, start, page_size
                 )
+                # ACM does the row-split, so the proxy only needs the file. The
+                # first request omits id; from the 2nd on, data.id carries the id
+                # the proxy returned from the 1st request.
+                data: dict[str, Any] = {"file": file_token}
+                if requests:
+                    data["id"] = "«returned by the 1st request»"
                 requests.append(
                     AutotoolDomainRequest(
                         site=domain,
@@ -306,15 +312,7 @@ async def build_post_preview(
                         start=start,
                         total=total,
                         row_count=min(page_size, total - start),
-                        body={
-                            "sites": [domain],
-                            "data": {
-                                "file": file_token,
-                                "start": start,
-                                "count": page_size,
-                                "total": total,
-                            },
-                        },
+                        body={"sites": [domain], "data": data},
                     )
                 )
 

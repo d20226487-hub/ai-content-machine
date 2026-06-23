@@ -9,6 +9,8 @@ external POSTs, so there's no pause/resume, just Cancel + Retry-failed.
 """
 from datetime import datetime
 
+from typing import Any
+
 from sqlalchemy import (
     BigInteger,
     DateTime,
@@ -19,6 +21,7 @@ from sqlalchemy import (
     Text,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -50,6 +53,11 @@ class AutotoolRun(Base):
 
     site_column_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     page_size: Mapped[int] = mapped_column(Integer, nullable=False, default=50)
+
+    # The id the proxy returns from the FIRST request; echoed in data.id on every
+    # subsequent request so they're grouped into one import job. NULL until the
+    # leader item captures it. JSONB to preserve the id's exact JSON type.
+    external_id: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
 
     # 'queued' | 'running' | 'cancelled' | 'done' | 'failed'
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")

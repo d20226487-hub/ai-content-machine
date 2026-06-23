@@ -115,6 +115,9 @@ export default function AutotoolRunDetailPage() {
             <b>{run.table_name || t("autotoolRun.tableFallback", { id: run.table_id ?? 0 })}</b>
             {" · "}
             {t("autotoolRun.pageSizeLabel", { size: run.page_size })}
+            {run.external_id != null && (
+              <> · {t("autotoolRun.jobId", { id: String(run.external_id) })}</>
+            )}
             {" · "}
             <span className="break-all">{run.target_url}</span>
           </p>

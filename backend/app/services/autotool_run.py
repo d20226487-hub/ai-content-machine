@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
+from typing import Any
 
 import httpx
 from fastapi import HTTPException, status
@@ -59,6 +60,7 @@ def _run_to_read(run: AutotoolRun) -> AutotoolRunRead:
         table_name=run.table_name,
         target_url=run.target_url,
         page_size=run.page_size,
+        external_id=run.external_id,
         status=run.status,
         total=run.total,
         sent=run.sent,
@@ -231,9 +233,13 @@ async def create_run(
 
 
 async def start_run(db: AsyncSession, run_id: int) -> list[int]:
-    """Flip a queued/running run to 'running' and return its 'queued' item ids
-    for the seed task to enqueue. Returns [] for terminal runs (or finalises a
-    zero-item run)."""
+    """Flip a queued/running run to 'running' and return the item ids to enqueue.
+
+    Leader-first: until the proxy id is known (``external_id`` is None) only the
+    FIRST queued item is returned — it sends the first request, captures the id,
+    then the rest fan out (re-seed) with that id. Once the id is set, all queued
+    items are returned. Returns [] for terminal runs (or finalises a zero-item
+    run)."""
     run = await db.get(AutotoolRun, run_id)
     if run is None or run.status in ("cancelled", "done", "failed"):
         return []
@@ -251,16 +257,21 @@ async def start_run(db: AsyncSession, run_id: int) -> list[int]:
     ids = (
         (
             await db.execute(
-                select(AutotoolRunItem.id).where(
+                select(AutotoolRunItem.id)
+                .where(
                     AutotoolRunItem.run_id == run_id,
                     AutotoolRunItem.status == "queued",
                 )
+                .order_by(AutotoolRunItem.id.asc())
             )
         )
         .scalars()
         .all()
     )
-    return list(ids)
+    if not ids:
+        return []
+    # No id yet → send only the leader; it fans out the rest once it has the id.
+    return [ids[0]] if run.external_id is None else list(ids)
 
 
 async def _bump(db: AsyncSession, *, run_id: int, field: str) -> None:
@@ -284,8 +295,14 @@ async def _bump(db: AsyncSession, *, run_id: int, field: str) -> None:
 
 
 async def send_one_item(db: AsyncSession, run_id: int, item_id: int) -> str:
-    """Fire one item's ImportPosts POST and record the outcome. Idempotent via a
-    guarded 'queued'→'sending' claim, so a Celery redelivery can't double-send."""
+    """Fire one item's ImportPosts POST and record the outcome.
+
+    The body is just ``{file}`` — ACM does the row-splitting, so the proxy
+    doesn't need start/count/total. The leader (``run.external_id`` is None)
+    sends the first request, captures the proxy ``id`` from its response, stores
+    it, and signals a fan-out; every follower adds ``data.id`` so the proxy
+    groups them into one import job. Idempotent via a guarded 'queued'->'sending'
+    claim."""
     run = await db.get(AutotoolRun, run_id)
     if run is None or run.status in ("cancelled", "done", "failed"):
         return "run_terminal"
@@ -301,29 +318,30 @@ async def send_one_item(db: AsyncSession, run_id: int, item_id: int) -> str:
         return "not_queued"
 
     item = await db.get(AutotoolRunItem, item_id)
+    is_leader = run.external_id is None
+    has_followers = run.total > 1
+
+    data: dict[str, Any] = {"file": item.file_token}
+    if not is_leader:
+        data["id"] = run.external_id
+    body = {"sites": [item.site], "data": data}
     api_key = await _read_api_key(db)
     target = run.target_url
-    body = {
-        "sites": [item.site],
-        "data": {
-            "file": item.file_token,
-            "start": item.start,
-            "count": run.page_size,
-            "total": item.total,
-        },
-    }
     headers = {"Content-Type": "application/json", "X-Api-Key": api_key or ""}
 
-    field = "failed"
+    status_code: int | None = None
+    snippet: str | None = None
+    elapsed: int | None = None
+    captured_id: Any | None = None
+    err: str | None = None
+
     if not api_key:
-        item.status = "failed"
-        item.detail = "No API key configured."
+        err = "No API key configured."
     else:
         try:
             validate_public_url(target)
         except UnsafeUrlError as e:
-            item.status = "failed"
-            item.detail = f"Target URL rejected: {e}"
+            err = f"Target URL rejected: {e}"
         else:
             t0 = time.perf_counter()
             try:
@@ -334,22 +352,71 @@ async def send_one_item(db: AsyncSession, run_id: int, item_id: int) -> str:
                 ) as client:
                     resp = await client.post(target, json=body, headers=headers)
             except (UnsafeUrlError, httpx.HTTPError) as e:
-                item.status = "failed"
-                item.detail = f"{type(e).__name__}: {e}"[:200]
+                err = f"{type(e).__name__}: {e}"[:200]
             else:
-                item.elapsed_ms = int((time.perf_counter() - t0) * 1000)
-                item.status_code = resp.status_code
-                item.response_snippet = (resp.text or "")[:_RESPONSE_SNIPPET]
-                if 200 <= resp.status_code < 300:
-                    item.status, item.detail, field = "sent", "Accepted", "sent"
-                else:
-                    item.status = "failed"
-                    item.detail = f"HTTP {resp.status_code}"
+                elapsed = int((time.perf_counter() - t0) * 1000)
+                status_code = resp.status_code
+                snippet = (resp.text or "")[:_RESPONSE_SNIPPET]
+                if is_leader:
+                    captured_id = _extract_id(resp)
 
+    http_ok = status_code is not None and 200 <= status_code < 300
+    # The leader must also yield an id when there are followers to group under it.
+    needs_id = is_leader and has_followers
+    ok = http_ok and (captured_id is not None or not needs_id)
+    if ok:
+        detail = "Accepted"
+    elif not http_ok:
+        detail = err or (f"HTTP {status_code}" if status_code is not None else "Send failed")
+    else:
+        detail = "Autotool returned no id for the first request"
+
+    item.status = "sent" if ok else "failed"
+    item.detail = detail
+    item.status_code = status_code
+    item.response_snippet = snippet
+    item.elapsed_ms = elapsed
     item.updated_at = datetime.now(timezone.utc)
     await db.commit()
-    await _bump(db, run_id=run_id, field=field)
+    await _bump(db, run_id=run_id, field="sent" if ok else "failed")
+
+    if is_leader and captured_id is not None:
+        leader_run = await db.get(AutotoolRun, run_id)
+        if leader_run is not None and leader_run.external_id is None:
+            leader_run.external_id = captured_id
+            await db.commit()
+        return "fanout"
+    if needs_id and captured_id is None:
+        await _fail_run(
+            db,
+            run_id,
+            "Autotool returned no id for the first request, so the remaining "
+            "requests can't be grouped under it.",
+        )
+        return "no_id"
     return item.status
+
+
+def _extract_id(resp: httpx.Response) -> Any | None:
+    """Pull the import id from a response body (e.g. {..., "id": 178}); None if
+    the body isn't JSON or has no ``id``."""
+    try:
+        data = resp.json()
+    except Exception:
+        return None
+    return data.get("id") if isinstance(data, dict) else None
+
+
+async def _fail_run(db: AsyncSession, run_id: int, error: str) -> None:
+    """Terminate a run as 'failed' (e.g. the leader yielded no id)."""
+    await db.execute(
+        text(
+            "UPDATE autotool_runs SET status='failed', finished_at=now(), "
+            "error=:e WHERE id=:id AND status IN ('queued','running')"
+        ),
+        {"e": error[:1000], "id": run_id},
+    )
+    await db.commit()
 
 
 async def _read_api_key(db: AsyncSession) -> str | None:

@@ -68,7 +68,9 @@ export interface AutotoolDomainRequest {
   row_count: number;
   body: {
     sites: string[];
-    data: { file: string; start: number; count: number; total: number };
+    /** ACM does the row-split, so the proxy only needs the file. From the 2nd
+     *  request, `id` (returned by the 1st) groups them into one import job. */
+    data: { file: string; id?: string | number };
   };
 }
 
@@ -136,6 +138,8 @@ export interface AutotoolRun {
   table_name: string;
   target_url: string;
   page_size: number;
+  /** the proxy import id captured from the 1st request (null until then). */
+  external_id: string | number | null;
   status: AutotoolRunStatus;
   total: number;
   sent: number;
