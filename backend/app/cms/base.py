@@ -20,6 +20,16 @@ class TestResult:
 
 
 @dataclass
+class CacheResult:
+    """Outcome of one cache-control request (clear or warm) against a site."""
+
+    ok: bool
+    status_code: int | None
+    detail: str
+    elapsed_ms: int | None = None
+
+
+@dataclass
 class PublishResult:
     ok: bool
     status_code: int | None

@@ -13,6 +13,7 @@ from app.api import (
     backup as backup_router,
     brain as brain_router,
     categories,
+    domain_cache as domain_cache_router,
     domain_folders as domain_folders_router,
     domains as domains_router,
     errors as errors_router,
@@ -107,6 +108,9 @@ app.include_router(library.router)
 app.include_router(autotool_config_router.router)
 app.include_router(errors_router.router)
 app.include_router(domains_router.router)
+# Mounted after domains_router; /domains/cache/* is 3+ segments so it never
+# shadows the /domains/{domain_id} routes.
+app.include_router(domain_cache_router.router)
 app.include_router(domain_folders_router.router)
 app.include_router(publish_router.router)
 app.include_router(publish_bulk_router.router)

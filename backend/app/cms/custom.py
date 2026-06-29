@@ -24,10 +24,18 @@ from typing import Any
 
 import httpx
 
-from app.cms.base import CmsClient, PublishResult, TestResult
+from app.cms.base import CacheResult, CmsClient, PublishResult, TestResult
 from app.core.ssrf import SafeAsyncTransport, UnsafeUrlError, validate_public_url
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][\w\.\- ]*?)\s*\}\}")
+
+# Cache-control endpoints exposed by the Custom CMS on every site, hit via
+# GET against the site's front controller. Clear is a quick flush; warm
+# rebuilds the cache and can take a while, so it carries a longer timeout.
+_CLEAR_CACHE_QUERY = "_clear_cache"
+_WARM_CACHE_QUERY = "__warm_cache"
+_CLEAR_CACHE_TIMEOUT_S = 30.0
+_WARM_CACHE_TIMEOUT_S = 120.0
 
 # Sentinel returned by ``_substitute`` when a bare ``{{key}}`` placeholder
 # resolves to a missing or empty value. The dict/list walkers drop any key
@@ -144,6 +152,57 @@ class CustomCmsClient(CmsClient):
                 detail=f"Network error: {e}",
                 elapsed_ms=elapsed,
             )
+
+    async def clear_cache(self) -> CacheResult:
+        """GET ``{base_url}/index.php?_clear_cache``, reusing the domain's auth."""
+        return await self._cache_request(_CLEAR_CACHE_QUERY, _CLEAR_CACHE_TIMEOUT_S)
+
+    async def warm_cache(self) -> CacheResult:
+        """GET ``{base_url}/index.php?__warm_cache``, reusing the domain's auth.
+
+        Warming rebuilds the cache and can be slow, hence the longer timeout
+        than ``clear_cache``.
+        """
+        return await self._cache_request(_WARM_CACHE_QUERY, _WARM_CACHE_TIMEOUT_S)
+
+    async def _cache_request(self, query: str, timeout: float) -> CacheResult:
+        """Fire one cache-control GET and map the outcome to a CacheResult.
+
+        Same SSRF posture as test/publish: validate the URL up front and route
+        through SafeAsyncTransport (which revalidates each redirect hop), so a
+        site that 302s its cache endpoint can't be used to reach a private
+        address. Any HTTP status < 400 (after following redirects) is success.
+        """
+        url = f"{self.base_url}/index.php?{query}"
+        start = time.perf_counter()
+        try:
+            validate_public_url(url)
+            async with httpx.AsyncClient(
+                timeout=timeout, follow_redirects=True, transport=SafeAsyncTransport()
+            ) as client:
+                resp = await client.get(url, headers=self._auth_header())
+        except UnsafeUrlError as e:
+            return CacheResult(
+                ok=False,
+                status_code=None,
+                detail=f"URL rejected: {e}",
+                elapsed_ms=int((time.perf_counter() - start) * 1000),
+            )
+        except httpx.HTTPError as e:
+            return CacheResult(
+                ok=False,
+                status_code=None,
+                detail=f"Network error: {e}"[:300],
+                elapsed_ms=int((time.perf_counter() - start) * 1000),
+            )
+        elapsed = int((time.perf_counter() - start) * 1000)
+        ok = resp.status_code < 400
+        return CacheResult(
+            ok=ok,
+            status_code=resp.status_code,
+            detail="OK" if ok else f"HTTP {resp.status_code}: {(resp.text or '')[:200]}",
+            elapsed_ms=elapsed,
+        )
 
     async def publish_post(
         self,

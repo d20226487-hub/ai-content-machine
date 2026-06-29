@@ -34,6 +34,7 @@ celery_app = Celery(
         "app.tasks.publish_bulk",
         "app.tasks.publish_single",
         "app.tasks.autotool_run",
+        "app.tasks.domain_cache",
         "app.tasks.backup",
         "app.tasks.trash_cleanup",
     ],
@@ -92,6 +93,13 @@ celery_app.conf.update(
         # in a stalled run. Only touches runs with no recent activity.
         "autotool-watchdog": {
             "task": "autotool.watchdog",
+            "schedule": 120.0,
+        },
+        # Recover domain cache clear/warm runs: fail items orphaned by a dead
+        # worker (stuck 'running') and re-arm a stalled fan-out. Only touches
+        # 'running' runs with no in-flight items.
+        "domain-cache-watchdog": {
+            "task": "domain_cache.watchdog",
             "schedule": 120.0,
         },
     },

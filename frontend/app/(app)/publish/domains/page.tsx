@@ -7,10 +7,12 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { DomainCsvImportModal } from "@/components/DomainCsvImportModal";
 import { DomainJsonImportModal } from "@/components/DomainJsonImportModal";
 import { DomainModal } from "@/components/DomainModal";
+import { CacheActionModal } from "@/components/domains/CacheActionModal";
 import { DomainBreadcrumb } from "@/components/domains/DomainBreadcrumb";
 import { DomainFolderCard } from "@/components/domains/DomainFolderCard";
 import { MoveToFolderModal } from "@/components/domains/MoveToFolderModal";
 import { ApiError } from "@/lib/api";
+import { createDomainCacheRun, type CacheAction } from "@/lib/domainCache";
 import { useAuth } from "@/lib/auth-context";
 import { useT } from "@/lib/i18n-context";
 import {
@@ -40,7 +42,8 @@ type ModalState =
   | { kind: "edit"; domain: Domain }
   | { kind: "import" }
   | { kind: "importJson" }
-  | { kind: "move" };
+  | { kind: "move" }
+  | { kind: "cache" };
 
 /**
  * Parse the `?folder=...` query into a FolderScope. Accepts:
@@ -118,6 +121,8 @@ export default function DomainsPage() {
   const [moving, setMoving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [selectingAll, setSelectingAll] = useState(false);
+  const [cacheBusy, setCacheBusy] = useState(false);
+  const [cacheError, setCacheError] = useState<string | null>(null);
 
   // ---- debounce search ----
   useEffect(() => {
@@ -342,6 +347,28 @@ export default function DomainsPage() {
       alert(err instanceof ApiError ? err.message : t("common.saveFailed"));
     } finally {
       setMoving(false);
+    }
+  }
+
+  // Bulk cache flow: launch a background clear/warm run for the selected
+  // domains. The backend keeps only the Custom-CMS ones (WordPress publishes
+  // via Autotool and has no cache endpoints) and reports the rest as skipped.
+  // On success we navigate to the run's progress page.
+  async function onConfirmCache(action: CacheAction) {
+    if (selectedIds.size === 0 || cacheBusy) return;
+    setCacheBusy(true);
+    setCacheError(null);
+    try {
+      const run = await createDomainCacheRun(Array.from(selectedIds), action);
+      setSelectedIds(new Set());
+      setModal({ kind: "closed" });
+      router.push(`/publish/cache/runs/${run.id}`);
+    } catch (err) {
+      setCacheError(
+        err instanceof ApiError ? err.message : t("common.actionFailed"),
+      );
+    } finally {
+      setCacheBusy(false);
     }
   }
 
@@ -594,6 +621,17 @@ export default function DomainsPage() {
                     className="text-xs text-neutral-500 hover:underline dark:text-neutral-400"
                   >
                     {t("common.clearSelection")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCacheError(null);
+                      setModal({ kind: "cache" });
+                    }}
+                    title={t("domains.bulkCacheHint")}
+                    className="rounded-md border border-neutral-300 bg-white px-3 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                  >
+                    {t("domains.bulkCache")}
                   </button>
                   <button
                     type="button"
@@ -886,6 +924,15 @@ export default function DomainsPage() {
           onClose={() => setModal({ kind: "closed" })}
           onConfirm={(folderId) => void onConfirmMove(folderId)}
           busy={moving}
+        />
+      )}
+      {modal.kind === "cache" && (
+        <CacheActionModal
+          selectedCount={selectedIds.size}
+          busy={cacheBusy}
+          error={cacheError}
+          onClose={() => setModal({ kind: "closed" })}
+          onConfirm={(action) => void onConfirmCache(action)}
         />
       )}
     </main>

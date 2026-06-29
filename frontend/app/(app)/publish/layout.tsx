@@ -11,6 +11,7 @@ const TABS: { href: string; labelKey: TranslationKey }[] = [
   { href: "/publish/autotool", labelKey: "publish.tabAutotool" },
   { href: "/publish/post", labelKey: "publish.tabSingleRuns" },
   { href: "/publish/runs", labelKey: "publish.tabBulkRuns" },
+  { href: "/publish/cache/runs", labelKey: "publish.tabCacheRuns" },
 ];
 
 export default function PublishLayout({ children }: { children: React.ReactNode }) {
