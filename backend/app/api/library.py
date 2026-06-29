@@ -26,6 +26,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -127,7 +128,7 @@ from app.schemas.bulk import (
     TableUpdateResult,
     TrashBulkIds,
 )
-from app.services.bulk_csv import build_table_csv
+from app.services.bulk_csv import build_table_csv, stream_table_csv
 from app.services.provider_cache import get_enabled_providers
 from app.services.find_replace import (
     InvalidPattern,
@@ -1801,7 +1802,7 @@ async def translate_cell(
 # Upload ceiling for a CSV import. The Traefik deployment sets no request-body
 # limit, so this in-app guard is the only gate — keep it sane so an accidental
 # giant upload fails with a clear 400 instead of spiking API memory.
-_MAX_CSV_UPLOAD = 100 * 1024 * 1024  # 100 MB
+_MAX_CSV_UPLOAD = 200 * 1024 * 1024  # 200 MB
 # Cells per bulk INSERT statement — bounds statement + memory size on huge files.
 _CSV_CELL_BATCH = 5000
 
@@ -5530,13 +5531,28 @@ async def export_csv(
     table_id: int,
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> Response:
-    t = await _get_table_or_404(db, table_id, actor, level="read", full=True)
-    csv_text = await build_table_csv(db, t)
+) -> StreamingResponse:
+    """Stream the table to CSV.
+
+    ACL + the (small) column header are resolved here on the request session;
+    the row/cell body is streamed in batches by ``stream_table_csv`` on its own
+    session (see there). Streaming keeps peak memory flat regardless of table
+    size — the old path built the whole CSV + a gzip copy in RAM and tripped the
+    prod api memory cap on large tables.
+    """
+    t = await _get_table_or_404(db, table_id, actor, level="read")
+    col_rows = (
+        await db.execute(
+            select(BulkTableColumn.id, BulkTableColumn.name)
+            .where(BulkTableColumn.table_id == table_id)
+            .order_by(BulkTableColumn.position, BulkTableColumn.id)
+        )
+    ).all()
+    columns = [(c.id, c.name) for c in col_rows]
     safe_name = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in t.name)
-    return Response(
-        content=csv_text,
-        media_type="text/csv",
+    return StreamingResponse(
+        stream_table_csv(table_id, columns),
+        media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{safe_name}.csv"'},
     )
 

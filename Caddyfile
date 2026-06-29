@@ -32,10 +32,12 @@
     # Compression. zstd is preferred when the client supports it.
     encode zstd gzip
 
-    # 50 MiB cap on a single request body. CSV imports are well under this;
-    # protects against accidental giant uploads.
+    # 200 MB cap on a single request body — matches the app's own upload
+    # ceilings (CSV import _MAX_CSV_UPLOAD = 200 MB, gdocs _MAX_GDOCS_UPLOAD =
+    # 200 MB) so the proxy never 413s an upload the app would have accepted.
+    # Still bounded to protect against accidental giant uploads.
     request_body {
-        max_size 50MB
+        max_size 200MB
     }
 
     # Strip the /api prefix and forward to FastAPI.

@@ -529,7 +529,7 @@ export function updateTableCells(
 }
 
 export interface UpdateTableCsvParams {
-  /** Streamed as multipart — the server parses it (same 100 MB cap as import). */
+  /** Streamed as multipart — the server parses it (same 200 MB cap as import). */
   file: File;
   delimiter: string;
   has_header: boolean;

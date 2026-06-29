@@ -13,7 +13,7 @@ import {
 import { detectDelimiter, isBlankRow, parseDelimited } from "@/lib/parseDelimited";
 import type { BulkColumn } from "@/lib/types";
 
-// A file upload streams to the server (parsed there) — same 100 MB ceiling as
+// A file upload streams to the server (parsed there) — same 200 MB ceiling as
 // the create-CSV import. Pasted data is sent as JSON, so it keeps a tighter
 // cap. Only a slice of a file is read in the browser, just for the mapping UI.
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
@@ -128,7 +128,7 @@ export function UpdateTableModal({ tableId, columns, onClose, onUpdated }: Props
 
   const isFile = source === "file";
   // The paste path sends rows as JSON, so it carries the row cap; a file path
-  // streams to the server (no client row limit, only the 100 MB byte cap).
+  // streams to the server (no client row limit, only the 200 MB byte cap).
   const tooManyRows = !isFile && parsed.rows.length > MAX_ROWS;
   const tooLongPaste = !isFile && pasteText.length > MAX_PASTE_CHARS;
   const keyReady =
