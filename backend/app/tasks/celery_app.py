@@ -35,6 +35,7 @@ celery_app = Celery(
         "app.tasks.publish_single",
         "app.tasks.autotool_run",
         "app.tasks.domain_cache",
+        "app.tasks.csv_export",
         "app.tasks.backup",
         "app.tasks.trash_cleanup",
     ],
@@ -65,6 +66,13 @@ celery_app.conf.update(
         "daily-trash-cleanup": {
             "task": "trash.cleanup",
             "schedule": crontab(hour=3, minute=15),
+        },
+        # Drop prepared CSV exports older than the retention window (24h) so the
+        # gzipped blobs don't accumulate in the DB. 03:30 offsets it from the
+        # trash sweep.
+        "daily-csv-export-cleanup": {
+            "task": "csv_export.cleanup",
+            "schedule": crontab(hour=3, minute=30),
         },
         # Resume link-check runs whose crawl has stalled (worker death / lost
         # message). The task itself only touches runs with no progress in the

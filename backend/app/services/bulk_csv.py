@@ -12,9 +12,10 @@ export leaves cells untouched (RFC 4180 multi-line quoted fields, exact
 content).
 """
 import csv
+import gzip
 import io
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -91,6 +92,56 @@ def _csv_chunk(rows: list[list[str]]) -> str:
     return buf.getvalue()
 
 
+async def _csv_body_chunks(
+    db: AsyncSession,
+    table_id: int,
+    col_ids: list[int],
+    batch_rows: int,
+) -> AsyncIterator[tuple[str, int]]:
+    """Yield ``(csv_fragment, rows_in_fragment)`` for the table BODY (no header).
+
+    Walks rows by keyset on ``(position, id)`` — both NOT NULL — so paging stays
+    index-friendly and deterministic, matching the on-screen order (the ``rows``
+    relationship orders by ``position``). Cells are fetched one batch at a time
+    as plain ``(row_id, column_id, value)`` tuples (not full ORM objects).
+    Shared by the HTTP streamer and the background-export gzip builder.
+    """
+    last_pos: int | None = None
+    last_id: int | None = None
+    while True:
+        q = select(BulkTableRow.id, BulkTableRow.position).where(
+            BulkTableRow.table_id == table_id
+        )
+        if last_id is not None:
+            q = q.where(
+                tuple_(BulkTableRow.position, BulkTableRow.id)
+                > tuple_(last_pos, last_id)
+            )
+        q = q.order_by(BulkTableRow.position, BulkTableRow.id).limit(batch_rows)
+        batch = (await db.execute(q)).all()
+        if not batch:
+            break
+
+        row_ids = [r.id for r in batch]
+        cells = (
+            await db.execute(
+                select(
+                    BulkTableCell.row_id,
+                    BulkTableCell.column_id,
+                    BulkTableCell.value,
+                ).where(BulkTableCell.row_id.in_(row_ids))
+            )
+        ).all()
+        lookup = {(rid, cid): (val or "") for rid, cid, val in cells}
+        yield (
+            _csv_chunk(
+                [[lookup.get((rid, cid), "") for cid in col_ids] for rid in row_ids]
+            ),
+            len(batch),
+        )
+        last_pos, last_id = batch[-1].position, batch[-1].id
+
+
 async def stream_table_csv(
     table_id: int,
     columns: list[tuple[int, str]],
@@ -99,56 +150,44 @@ async def stream_table_csv(
 ) -> AsyncIterator[str]:
     """Stream a bulk table to CSV in row-batches, keeping memory flat.
 
-    Backs the authenticated export endpoint for tables too large to build in
-    memory (the old path loaded every row + cell + the whole string + a gzip
-    copy, blowing past the prod api memory cap above ~70 MB). ``columns`` is the
-    ordered ``[(column_id, name), ...]`` header, already resolved by the caller
-    from the request session.
-
-    Opens its OWN session (``SessionLocal`` on the shared engine): a
-    ``StreamingResponse`` body is consumed AFTER the endpoint returns, by which
-    point the request-scoped session is closed. Rows are walked by keyset on
-    ``(position, id)`` — both NOT NULL — so paging stays index-friendly and
-    deterministic, matching the on-screen order (the ``rows`` relationship
-    orders by ``position``). Cells are fetched one batch at a time as plain
-    ``(row_id, column_id, value)`` tuples (not full ORM objects).
+    Backs the authenticated export endpoint. ``columns`` is the ordered
+    ``[(column_id, name), ...]`` header, resolved by the caller. Opens its OWN
+    session (``SessionLocal``): a ``StreamingResponse`` body is consumed AFTER
+    the endpoint returns, when the request-scoped session is already closed.
     """
     col_ids = [cid for cid, _ in columns]
-    # Header row first — bytes start flowing immediately, so the reverse proxy
-    # sees data within its read/write timeout instead of waiting for the whole
-    # response to be built.
+    # Header first — bytes start flowing immediately.
     yield _csv_chunk([[name for _, name in columns]])
-
     async with SessionLocal() as db:
-        last_pos: int | None = None
-        last_id: int | None = None
-        while True:
-            q = select(BulkTableRow.id, BulkTableRow.position).where(
-                BulkTableRow.table_id == table_id
-            )
-            if last_id is not None:
-                q = q.where(
-                    tuple_(BulkTableRow.position, BulkTableRow.id)
-                    > tuple_(last_pos, last_id)
-                )
-            q = q.order_by(BulkTableRow.position, BulkTableRow.id).limit(batch_rows)
-            batch = (await db.execute(q)).all()
-            if not batch:
-                break
+        async for chunk, _n in _csv_body_chunks(db, table_id, col_ids, batch_rows):
+            yield chunk
 
-            row_ids = [r.id for r in batch]
-            cells = (
-                await db.execute(
-                    select(
-                        BulkTableCell.row_id,
-                        BulkTableCell.column_id,
-                        BulkTableCell.value,
-                    ).where(BulkTableCell.row_id.in_(row_ids))
-                )
-            ).all()
-            lookup = {(rid, cid): (val or "") for rid, cid, val in cells}
 
-            yield _csv_chunk(
-                [[lookup.get((rid, cid), "") for cid in col_ids] for rid in row_ids]
-            )
-            last_pos, last_id = batch[-1].position, batch[-1].id
+async def build_table_csv_gzip(
+    db: AsyncSession,
+    table_id: int,
+    columns: list[tuple[int, str]],
+    *,
+    batch_rows: int = _EXPORT_BATCH_ROWS,
+    on_progress: Callable[[int], Awaitable[None]] | None = None,
+) -> tuple[bytes, int]:
+    """Build the full table CSV and return ``(gzipped_bytes, rows_written)``.
+
+    Used by the background-export worker. Memory stays bounded: rows are pulled
+    one batch at a time and fed into an incremental gzip stream, so only the
+    growing COMPRESSED buffer (~1/5 of the CSV) plus one batch is held. Calls
+    ``on_progress(rows_written)`` after each batch (the caller throttles how
+    often it persists). Uses the caller's session (the worker owns its lifecycle).
+    """
+    col_ids = [cid for cid, _ in columns]
+    buf = io.BytesIO()
+    gz = gzip.GzipFile(fileobj=buf, mode="wb")
+    gz.write(_csv_chunk([[name for _, name in columns]]).encode("utf-8"))
+    rows_written = 0
+    async for chunk, n in _csv_body_chunks(db, table_id, col_ids, batch_rows):
+        gz.write(chunk.encode("utf-8"))
+        rows_written += n
+        if on_progress is not None:
+            await on_progress(rows_written)
+    gz.close()
+    return buf.getvalue(), rows_written

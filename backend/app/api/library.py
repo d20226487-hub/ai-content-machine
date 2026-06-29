@@ -128,7 +128,10 @@ from app.schemas.bulk import (
     TableUpdateResult,
     TrashBulkIds,
 )
+from app.schemas.csv_export import CsvExportJobRead
+from app.services import csv_export as csv_export_svc
 from app.services.bulk_csv import build_table_csv, stream_table_csv
+from app.tasks.csv_export import build_csv_export
 from app.services.provider_cache import get_enabled_providers
 from app.services.find_replace import (
     InvalidPattern,
@@ -5554,6 +5557,62 @@ async def export_csv(
         stream_table_csv(table_id, columns),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{safe_name}.csv"'},
+    )
+
+
+# ----- background CSV export (build in a worker, download the prepared blob) ---
+#
+# The synchronous export.csv above is fine for small/medium tables, but a single
+# long HTTP download of a very large table trips the response timeout of the
+# proxy/CDN in front of prod. These three endpoints decouple it: queue a build,
+# poll status, then download the pre-built (gzipped) blob in a fast request.
+
+
+@router.post(
+    "/tables/{table_id}/export-jobs",
+    response_model=CsvExportJobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def create_export_job(
+    table_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> CsvExportJobRead:
+    """Queue a background CSV export (ACL = table read). Poll
+    ``GET /library/export-jobs/{id}`` until status == 'done', then download."""
+    table = await _get_table_or_404(db, table_id, actor, level="read")
+    job = await csv_export_svc.create_job(db, table, actor)
+    build_csv_export.delay(job.id)
+    return csv_export_svc.to_read(job)
+
+
+@router.get("/export-jobs/{job_id}", response_model=CsvExportJobRead)
+async def get_export_job(
+    job_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> CsvExportJobRead:
+    job = await csv_export_svc.get_job(db, job_id, actor)
+    return csv_export_svc.to_read(job)
+
+
+@router.get("/export-jobs/{job_id}/download")
+async def download_export_job(
+    job_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Serve the pre-built gzipped CSV. No generation happens here, so it can't
+    hit the proxy timeout. We send the stored bytes as-is with
+    ``Content-Encoding: gzip``; the browser decompresses to a plain .csv."""
+    blob, filename = await csv_export_svc.load_blob_for_download(db, job_id, actor)
+    return Response(
+        content=blob,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Encoding": "gzip",
+        },
     )
 
 
