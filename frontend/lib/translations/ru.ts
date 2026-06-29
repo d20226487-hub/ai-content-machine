@@ -694,6 +694,10 @@ export const ru: Record<keyof typeof en, string> = {
   // table detail
   "libraryTable.back": "← Библиотека",
   "libraryTable.exportCsv": "Экспорт CSV",
+  "libraryTable.exportPreparing": "Подготовка…",
+  "libraryTable.exportPreparingPct": "Подготовка… {pct}%",
+  "libraryTable.exportDownloading": "Загрузка…",
+  "libraryTable.exportFailed": "Не удалось экспортировать. {error}",
   "libraryTable.updateTable": "Обновить таблицу",
 
   // ---- Обновление таблицы из CSV / вставки ----

@@ -19,11 +19,16 @@ import { UpdateTableModal } from "@/components/UpdateTableModal";
 import { useT } from "@/lib/i18n-context";
 import {
   deleteTable,
-  downloadCsv,
   duplicateTable,
   getTable,
   renameTable,
 } from "@/lib/library";
+import {
+  createExportJob,
+  downloadExportJob,
+  getExportJob,
+  type CsvExportStatus,
+} from "@/lib/csvExport";
 import type { BulkTable } from "@/lib/types";
 
 export default function LibraryTablePage() {
@@ -40,6 +45,11 @@ export default function LibraryTablePage() {
 
   const [saving, setSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<number | null>(null);
+  // Background CSV export progress (null = idle). Drives the Export button label.
+  const [exportState, setExportState] = useState<{
+    status: CsvExportStatus;
+    pct: number;
+  } | null>(null);
 
   // ---- Server-side pagination state ----
   const [pageIndex, setPageIndex] = useState(0);
@@ -153,12 +163,38 @@ export default function LibraryTablePage() {
     }
   }
 
+  // Export runs as a background job: the worker builds + gzips the CSV (no long
+  // HTTP stream that would trip the proxy/CDN timeout on big tables), we poll
+  // for progress, then download the prepared blob.
   async function onExport() {
-    if (!table) return;
+    if (!table || exportState) return; // guard double-click while in flight
+    setExportState({ status: "queued", pct: 0 });
     try {
-      await downloadCsv(table.id, `${table.name}.csv`);
+      const job = await createExportJob(table.id);
+      let cur = job;
+      while (cur.status === "queued" || cur.status === "running") {
+        const pct =
+          cur.rows_total > 0
+            ? Math.round((100 * cur.rows_done) / cur.rows_total)
+            : 0;
+        setExportState({ status: cur.status, pct });
+        await new Promise((r) => setTimeout(r, 1500));
+        cur = await getExportJob(job.id);
+      }
+      if (cur.status === "done") {
+        setExportState({ status: "done", pct: 100 });
+        await downloadExportJob(cur.id, cur.filename || `${table.name}.csv`);
+      } else {
+        alert(t("libraryTable.exportFailed", { error: cur.error ?? "" }));
+      }
     } catch (e) {
-      console.error("[LibraryTable] export failed", e);
+      alert(
+        e instanceof Error
+          ? e.message
+          : t("libraryTable.exportFailed", { error: "" }),
+      );
+    } finally {
+      setExportState(null);
     }
   }
 
@@ -234,9 +270,16 @@ export default function LibraryTablePage() {
         <div className="flex shrink-0 gap-2">
           <button
             onClick={onExport}
-            className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+            disabled={exportState !== null}
+            className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-60 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
           >
-            {t("libraryTable.exportCsv")}
+            {exportState === null
+              ? t("libraryTable.exportCsv")
+              : exportState.status === "done"
+                ? t("libraryTable.exportDownloading")
+                : exportState.status === "running" && exportState.pct > 0
+                  ? t("libraryTable.exportPreparingPct", { pct: exportState.pct })
+                  : t("libraryTable.exportPreparing")}
           </button>
           <button
             onClick={() => setUpdateOpen(true)}

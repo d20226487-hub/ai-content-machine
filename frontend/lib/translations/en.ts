@@ -674,6 +674,10 @@ export const en = {
   // table detail
   "libraryTable.back": "← Library",
   "libraryTable.exportCsv": "Export CSV",
+  "libraryTable.exportPreparing": "Preparing…",
+  "libraryTable.exportPreparingPct": "Preparing… {pct}%",
+  "libraryTable.exportDownloading": "Downloading…",
+  "libraryTable.exportFailed": "Export failed. {error}",
   "libraryTable.updateTable": "Update table",
 
   // ---- Update table from CSV / paste ----
