@@ -139,20 +139,20 @@ async def create_bulk_publish_run(
                     ),
                 )
         if payload.operation == "update" and domain.cms_type == "custom":
-            # Custom CMS update needs the upstream post id in the outgoing
-            # body. Two payload shapes are accepted to keep saved mappings
-            # from the old UI working:
-            #   * NEW: lookup_kind="id" + lookup_column_id pointing at the
-            #     column with the id. Mirrors WP's shape so the frontend
-            #     can render one "Find existing posts by" picker.
-            #   * LEGACY: field_to_column["id"] = <column> (no lookup_*).
-            #     This was the only option before 2026-05-23 and lives on
-            #     in saved mappings.
-            # The bridge that normalizes the two shapes to a single
-            # `field_to_column["id"]` runs unconditionally below (after
-            # the mode-specific block) so multi-mode runs benefit too.
+            # Custom CMS update needs the existing page's identifier in the
+            # outgoing body — `id` for id-lookup or `slug` for slug-lookup —
+            # which the upstream resolves server-side (action=update). Accepted
+            # payload shapes:
+            #   * NEW: lookup_kind="id"|"slug" + lookup_column_id pointing at
+            #     the column holding that identifier. Mirrors WP's shape so the
+            #     frontend renders one "Find existing posts by" picker.
+            #   * LEGACY: field_to_column["id"] = <column> (no lookup_*), from
+            #     saved mappings predating 2026-05-23.
+            # `id` is bridged into field_to_column["id"] by the unconditional
+            # block below; `slug` is bridged here, where we know it's Custom CMS.
             has_lookup = (
-                payload.lookup_kind == "id" and payload.lookup_column_id is not None
+                payload.lookup_kind in ("id", "slug")
+                and payload.lookup_column_id is not None
             )
             has_legacy_id = "id" in payload.field_to_column
             if not has_lookup and not has_legacy_id:
@@ -160,23 +160,13 @@ async def create_bulk_publish_run(
                     status_code=400,
                     detail=(
                         "Custom CMS Update mode requires picking the column "
-                        "that holds each row's upstream post id (use the "
-                        "'Find existing posts by' panel)."
+                        "that holds each row's upstream post id or slug "
+                        "(use the 'Find existing posts by' panel)."
                     ),
                 )
-            if payload.lookup_kind not in (None, "id"):
-                # WP supports slug-based lookup, Custom CMS doesn't (the
-                # upstream `__add_content=1` finder doesn't accept an
-                # old_slug parameter). Reject early with a clear hint
-                # rather than letting the run fail row-by-row.
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "Custom CMS Update can only look up by 'id' for now. "
-                        "Looking up by slug needs upstream support that the "
-                        "current __add_content endpoint doesn't expose."
-                    ),
-                )
+            # (The lookup → body bridge — `id`→field_to_column['id'],
+            # `slug`→field_to_column['slug'] — runs unconditionally below so it
+            # covers multi-mode/per-row runs too.)
     else:
         # Multi mode: domain_column_id required (Pydantic enforced). The
         # profile column is optional — it's only consumed for WordPress
@@ -237,23 +227,26 @@ async def create_bulk_publish_run(
                 detail="lookup_column_id does not belong to this table",
             )
 
-    # Custom-CMS-bridge: when the user supplies lookup_kind="id" +
-    # lookup_column_id (the new unified UI), mirror that into the legacy
-    # field_to_column["id"] so the existing Custom CMS worker path keeps
-    # working without changes. Multi-mode runs can target both WP and
-    # Custom rows — the extra `id` key on WP rows is harmless (WP REST
-    # ignores unknown body keys, and WP Update reads its lookup straight
-    # from lookup_column_id, not from the body).
+    # Custom-CMS bridge: mirror the lookup column into the outgoing body under
+    # the key the upstream resolves an update on — `id` for id-lookup, `slug`
+    # for slug-lookup. Runs for BOTH single and multi mode, so a multi-mode run
+    # (domain-per-row, possibly mixed WP+Custom) works too:
+    #   * Custom rows read the identifier straight from the body.
+    #   * WP rows are unaffected in practice — WP Update finds its post via
+    #     lookup_column_id (find_post); an `id` body key is ignored by WP REST,
+    #     and a `slug` body key just re-asserts the post's existing slug.
+    # An explicit user mapping for the key (e.g. a slug rename) is respected.
     if (
         payload.operation == "update"
-        and payload.lookup_kind == "id"
+        and payload.lookup_kind in ("id", "slug")
         and payload.lookup_column_id is not None
-        and "id" not in payload.field_to_column
     ):
-        payload.field_to_column = {
-            **payload.field_to_column,
-            "id": payload.lookup_column_id,
-        }
+        _bridge_key = payload.lookup_kind  # "id" or "slug" — the body field name
+        if _bridge_key not in payload.field_to_column:
+            payload.field_to_column = {
+                **payload.field_to_column,
+                _bridge_key: payload.lookup_column_id,
+            }
 
     run = BulkPublishRun(
         table_id=table.id,

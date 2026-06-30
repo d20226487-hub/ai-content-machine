@@ -15,8 +15,8 @@ import type { BulkColumn } from "@/lib/types";
  *
  * Per-action requirements (enforced at submit time by the parent):
  *   - Create  → slug + title + content mandatory
- *   - Update  → "Find existing posts by" panel — pick the id column
- *               (slug-lookup not supported by the upstream yet, see hint)
+ *   - Update  → "Find existing posts by" panel — pick the id OR slug column
+ *               (the upstream resolves an update by either, with action=update)
  *   - Upsert  → slug + title + content mandatory  (CRM upsert falls back
  *               to create when the slug doesn't exist; on the existing-
  *               page path, the CRM treats this like an update by slug)
@@ -37,9 +37,9 @@ export function CustomCmsActionPanel({
 }: {
   operation: PublishOperation;
   onOperationChange: (op: PublishOperation) => void;
-  /** Update-mode only. Today the upstream only supports `id`; the UI
-   *  keeps the same prop shape as WP so the two panels can share the
-   *  parent state without a special-case. */
+  /** Update-mode only. id or slug — the upstream resolves an update by the
+   *  identifier carried in the body. Same prop shape as the WP panel so the
+   *  two panels share parent state. */
   lookupKind: PublishLookupKind;
   onLookupKindChange: (k: PublishLookupKind) => void;
   lookupColumnId: number | "";
@@ -97,35 +97,23 @@ export function CustomCmsActionPanel({
           <div className="grid grid-cols-2 gap-3">
             <PanelField label={t("bulkPub.lookupKind")}>
               <div className="inline-flex rounded-md border border-neutral-300 bg-white p-0.5 dark:border-neutral-700 dark:bg-neutral-900">
-                {(["id", "slug"] as const).map((k) => {
-                  // Custom CMS upstream doesn't accept an old_slug
-                  // parameter on `__add_content=1`, so slug-lookup is
-                  // disabled with a tooltip. Operator can still rename
-                  // the slug — they just need an id column to find
-                  // each row's existing post.
-                  const disabled = k === "slug";
-                  return (
-                    <button
-                      key={k}
-                      type="button"
-                      onClick={() => !disabled && onLookupKindChange(k)}
-                      disabled={disabled}
-                      title={disabled ? t("bulkPub.customLookupSlugDisabled") : ""}
-                      className={
-                        "rounded px-3 py-1 text-xs font-medium transition-colors " +
-                        (lookupKind === k
-                          ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
-                          : disabled
-                          ? "cursor-not-allowed text-neutral-400 dark:text-neutral-600"
-                          : "text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100")
-                      }
-                    >
-                      {k === "id"
-                        ? t("bulkPub.lookupKindId")
-                        : t("bulkPub.lookupKindSlug")}
-                    </button>
-                  );
-                })}
+                {(["id", "slug"] as const).map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => onLookupKindChange(k)}
+                    className={
+                      "rounded px-3 py-1 text-xs font-medium transition-colors " +
+                      (lookupKind === k
+                        ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                        : "text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100")
+                    }
+                  >
+                    {k === "id"
+                      ? t("bulkPub.lookupKindId")
+                      : t("bulkPub.lookupKindSlug")}
+                  </button>
+                ))}
               </div>
             </PanelField>
             <PanelField label={t("bulkPub.lookupColumn")}>
