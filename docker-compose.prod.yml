@@ -108,10 +108,18 @@ services:
       migrate:
         condition: service_completed_successfully
     # Override the dev `--reload` command. Workers configurable via env.
+    #
+    # Run `alembic upgrade head` before serving so the api can never lag behind
+    # the code's schema — even on a partial deploy that rebuilds only `api` and
+    # therefore doesn't re-run the one-shot `migrate` service (this bit us: a
+    # missing table 500'd every CSV export on prod). Idempotent: a no-op when
+    # already at head. SAFE because we run a single api container; if you ever
+    # scale to multiple api replicas, drop this line and rely on the `migrate`
+    # one-shot to avoid concurrent `alembic upgrade` races.
     command:
       - sh
       - -c
-      - exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-2} --proxy-headers --forwarded-allow-ips=*
+      - alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-2} --proxy-headers --forwarded-allow-ips=*
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
