@@ -21,7 +21,7 @@ class TestResult:
 
 @dataclass
 class CacheResult:
-    """Outcome of one cache-control request (clear or warm) against a site."""
+    """Outcome of one cache-clear request against a site."""
 
     ok: bool
     status_code: int | None

@@ -12,7 +12,7 @@ import { DomainBreadcrumb } from "@/components/domains/DomainBreadcrumb";
 import { DomainFolderCard } from "@/components/domains/DomainFolderCard";
 import { MoveToFolderModal } from "@/components/domains/MoveToFolderModal";
 import { ApiError } from "@/lib/api";
-import { createDomainCacheRun, type CacheAction } from "@/lib/domainCache";
+import { createDomainCacheRun } from "@/lib/domainCache";
 import { useAuth } from "@/lib/auth-context";
 import { useT } from "@/lib/i18n-context";
 import {
@@ -350,16 +350,16 @@ export default function DomainsPage() {
     }
   }
 
-  // Bulk cache flow: launch a background clear/warm run for the selected
+  // Bulk cache flow: launch a background cache-clear run for the selected
   // domains. The backend keeps only the Custom-CMS ones (WordPress publishes
   // via Autotool and has no cache endpoints) and reports the rest as skipped.
   // On success we navigate to the run's progress page.
-  async function onConfirmCache(action: CacheAction) {
+  async function onConfirmCache() {
     if (selectedIds.size === 0 || cacheBusy) return;
     setCacheBusy(true);
     setCacheError(null);
     try {
-      const run = await createDomainCacheRun(Array.from(selectedIds), action);
+      const run = await createDomainCacheRun(Array.from(selectedIds));
       setSelectedIds(new Set());
       setModal({ kind: "closed" });
       router.push(`/publish/cache/runs/${run.id}`);
@@ -932,7 +932,7 @@ export default function DomainsPage() {
           busy={cacheBusy}
           error={cacheError}
           onClose={() => setModal({ kind: "closed" })}
-          onConfirm={(action) => void onConfirmCache(action)}
+          onConfirm={() => void onConfirmCache()}
         />
       )}
     </main>

@@ -1,4 +1,4 @@
-"""Bulk Custom-CMS cache clear/warm runs.
+"""Bulk Custom-CMS cache-clear runs.
 
 A run is created from a set of selected domain ids + an action; only active
 Custom-CMS domains become items (WordPress publishes via Autotool and has no
@@ -314,12 +314,6 @@ async def process_one_item(db: AsyncSession, run_id: int, item_id: int) -> str:
         await _bump(db, run_id=run_id, field="failed")
         return item.status
 
-    clear_code: int | None = None
-    warm_code: int | None = None
-    elapsed_total = 0
-    parts: list[str] = []
-    ok = True
-
     try:
         client = get_cms_client(domain)
     except UnsupportedCms as e:
@@ -330,24 +324,17 @@ async def process_one_item(db: AsyncSession, run_id: int, item_id: int) -> str:
         await _bump(db, run_id=run_id, field="failed")
         return item.status
 
-    if run.action in ("clear", "clear_and_warm"):
-        cr = await client.clear_cache()
-        clear_code = cr.status_code
-        elapsed_total += cr.elapsed_ms or 0
-        parts.append(f"clear: {cr.detail}")
-        ok = ok and cr.ok
-    if run.action in ("warm", "clear_and_warm"):
-        wr = await client.warm_cache()
-        warm_code = wr.status_code
-        elapsed_total += wr.elapsed_ms or 0
-        parts.append(f"warm: {wr.detail}")
-        ok = ok and wr.ok
+    # Warm was removed (warming overloaded sites under bulk runs); every run
+    # now just clears. Historical 'warm' / 'clear_and_warm' runs, if retried,
+    # also clear — warming no longer happens anywhere.
+    cr = await client.clear_cache()
+    ok = cr.ok
 
     item.status = "done" if ok else "failed"
-    item.clear_status_code = clear_code
-    item.warm_status_code = warm_code
-    item.detail = "; ".join(parts) if parts else None
-    item.elapsed_ms = elapsed_total or None
+    item.clear_status_code = cr.status_code
+    item.warm_status_code = None
+    item.detail = f"clear: {cr.detail}"
+    item.elapsed_ms = cr.elapsed_ms or None
     item.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await _bump(db, run_id=run_id, field="done" if ok else "failed")

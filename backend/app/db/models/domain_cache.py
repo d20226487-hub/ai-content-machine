@@ -1,8 +1,10 @@
-"""Domain cache runs — background bulk clear/warm of Custom-CMS site caches.
+"""Domain cache runs — background bulk cache-clear of Custom-CMS site caches.
 
-The Custom CMS exposes two cache-control endpoints on each site:
-  * ``/index.php?_clear_cache``  — flush the cache
-  * ``/index.php?__warm_cache``  — rebuild (warm) the cache
+The Custom CMS exposes a cache-clear endpoint on each site:
+  * ``/index.php?__clear_cache``  — flush the cache
+
+(A warm endpoint ``?__warm_cache`` used to be supported but was removed —
+warming overloaded sites under bulk runs. Historical runs may still show it.)
 
 This model backs a background job (with a progress page, like Bulk Runs and
 Autotool Runs) that fans out one ``domain_cache_run_items`` row per selected
@@ -46,7 +48,8 @@ class DomainCacheRun(Base):
         DateTime(timezone=True), nullable=True
     )
 
-    # 'clear' | 'warm' | 'clear_and_warm'
+    # New runs are always 'clear' (warm was removed — it overloaded sites).
+    # Older rows may still hold 'warm' / 'clear_and_warm'; kept for history.
     action: Mapped[str] = mapped_column(String(20), nullable=False)
 
     # 'queued' | 'running' | 'cancelled' | 'done' | 'failed'
@@ -93,10 +96,10 @@ class DomainCacheRunItem(Base):
 
     # 'queued' | 'running' | 'done' | 'failed' | 'skipped'
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
-    # HTTP status of each sub-step. NULL when the action didn't run that step
-    # (e.g. warm_status_code stays NULL for a 'clear'-only run) or the request
-    # never completed (network error — see ``detail``).
+    # HTTP status of the clear request. NULL when the request never completed
+    # (network error — see ``detail``).
     clear_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Historical only — warming was removed; new runs always leave this NULL.
     warm_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     elapsed_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)

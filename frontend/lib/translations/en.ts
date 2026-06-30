@@ -990,18 +990,16 @@ export const en = {
   "publish.tabAutotool": "Autotool",
   "publish.tabCacheRuns": "Cache Runs",
 
-  // domain cache — bulk clear/warm for Custom CMS sites
-  "domains.bulkCache": "Cache…",
-  "domains.bulkCacheHint": "Clear and/or warm the cache for the selected Custom CMS domains",
-  "cacheModal.title": "Clear / warm cache",
+  // domain cache — bulk cache-clear for Custom CMS sites
+  "domains.bulkCache": "Clear cache…",
+  "domains.bulkCacheHint": "Clear the cache for the selected Custom CMS domains",
+  "cacheModal.title": "Clear cache",
   "cacheModal.subtitle": "{count} domain(s) selected",
   "cacheModal.customOnlyNote": "Only Custom CMS domains are affected. WordPress and unavailable domains in your selection are skipped automatically.",
   "cacheModal.action_clear": "Clear cache",
   "cacheModal.action_warm": "Warm cache",
   "cacheModal.action_clear_and_warm": "Clear, then warm",
-  "cacheModal.actionHint_clear": "Flush each site's cache (/index.php?_clear_cache).",
-  "cacheModal.actionHint_warm": "Rebuild each site's cache (/index.php?__warm_cache).",
-  "cacheModal.actionHint_clear_and_warm": "Flush, then rebuild — both run in sequence per site.",
+  "cacheModal.actionHint_clear": "Flush each site's cache (/index.php?__clear_cache).",
   "cacheModal.run": "Run",
   "cacheRuns.heading": "Cache runs",
   "cacheRuns.toDomains": "← Domains",

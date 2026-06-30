@@ -1,4 +1,4 @@
-"""Celery wrappers for bulk Custom-CMS cache clear/warm runs.
+"""Celery wrappers for bulk Custom-CMS cache-clear runs.
 
 Fresh async engine + session per task (NullPool), per the codebase pattern in
 app.tasks.publish_bulk / app.tasks.autotool_run. The seed fans out one
@@ -18,7 +18,7 @@ from app.core.config import get_settings
 from app.tasks.celery_app import celery_app
 
 # An item stuck in 'running' past this is an orphan — its worker died before the
-# request finished. Comfortably above the 120s warm-cache timeout.
+# request finished. Comfortably above the 30s clear-cache request timeout.
 _STALE_RUNNING_MINUTES = 5
 
 

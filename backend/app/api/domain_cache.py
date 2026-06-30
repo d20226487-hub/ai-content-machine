@@ -1,4 +1,4 @@
-"""Bulk Custom-CMS cache clear/warm runs (admin + manager).
+"""Bulk Custom-CMS cache-clear runs (admin + manager).
 
 Mounted at ``/domains/cache/*`` (three+ path segments, so it never collides
 with the ``/domains/{domain_id}`` routes on the domains router). Mirrors the

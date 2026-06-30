@@ -1,11 +1,13 @@
 import { api } from "./api";
 
 /**
- * Bulk Custom-CMS cache clear/warm runs. Only Custom-CMS domains are
- * processed; WordPress / unavailable domains in a selection are excluded
- * server-side and reported via ``skipped_unsupported``.
+ * Bulk Custom-CMS cache-clear runs. Only Custom-CMS domains are processed;
+ * WordPress / unavailable domains in a selection are excluded server-side and
+ * reported via ``skipped_unsupported``.
  */
 
+// New runs are always "clear" (warming was removed — it overloaded sites).
+// "warm" / "clear_and_warm" remain only so historical runs still render.
 export type CacheAction = "clear" | "warm" | "clear_and_warm";
 
 export type CacheRunStatus =
@@ -65,15 +67,15 @@ export interface DomainCacheRunDetail extends DomainCacheRun {
   items_page_size: number;
 }
 
-/** Create a background cache run and enqueue it. Returns the run's detail so
- *  the caller can redirect to its progress page. */
+/** Create a background cache-clear run and enqueue it. Returns the run's detail
+ *  so the caller can redirect to its progress page. (Clear is the only action —
+ *  warming was removed.) */
 export function createDomainCacheRun(
   domainIds: number[],
-  action: CacheAction,
 ): Promise<DomainCacheRunDetail> {
   return api<DomainCacheRunDetail>("/domains/cache/runs", {
     method: "POST",
-    body: { domain_ids: domainIds, action },
+    body: { domain_ids: domainIds, action: "clear" },
   });
 }
 

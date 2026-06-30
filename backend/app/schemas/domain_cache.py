@@ -1,4 +1,4 @@
-"""Schemas for bulk Custom-CMS cache clear/warm runs.
+"""Schemas for bulk Custom-CMS cache-clear runs.
 
 A run targets a set of domains by id + an action; only Custom-CMS domains
 become items (WordPress publishes via Autotool and has no cache endpoints).
@@ -12,13 +12,17 @@ from pydantic import BaseModel, field_validator
 # selections before doing any work.
 MAX_CACHE_RUN_DOMAINS = 5000
 
-_ACTIONS = {"clear", "warm", "clear_and_warm"}
+# Only 'clear' can be created now — warming was removed because it overloaded
+# sites under bulk runs. Historical runs may still carry 'warm' /
+# 'clear_and_warm' in the DB, so the READ schemas below keep ``action`` a plain
+# str (they don't validate against this set).
+_ACTIONS = {"clear"}
 
 
 class DomainCacheRunCreate(BaseModel):
     domain_ids: list[int]
-    # 'clear' | 'warm' | 'clear_and_warm'
-    action: str
+    # Always 'clear' (warm removed). Defaulted so callers can omit it.
+    action: str = "clear"
 
     @field_validator("action")
     @classmethod

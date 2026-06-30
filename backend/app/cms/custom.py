@@ -29,13 +29,11 @@ from app.core.ssrf import SafeAsyncTransport, UnsafeUrlError, validate_public_ur
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][\w\.\- ]*?)\s*\}\}")
 
-# Cache-control endpoints exposed by the Custom CMS on every site, hit via
-# GET against the site's front controller. Clear is a quick flush; warm
-# rebuilds the cache and can take a while, so it carries a longer timeout.
-_CLEAR_CACHE_QUERY = "_clear_cache"
-_WARM_CACHE_QUERY = "__warm_cache"
+# Cache-clear endpoint exposed by the Custom CMS on every site, hit via a GET
+# against the site's front controller. A quick flush. (A separate warm endpoint
+# used to exist but was removed — warming overloaded sites under bulk runs.)
+_CLEAR_CACHE_QUERY = "__clear_cache"
 _CLEAR_CACHE_TIMEOUT_S = 30.0
-_WARM_CACHE_TIMEOUT_S = 120.0
 
 # Sentinel returned by ``_substitute`` when a bare ``{{key}}`` placeholder
 # resolves to a missing or empty value. The dict/list walkers drop any key
@@ -154,16 +152,8 @@ class CustomCmsClient(CmsClient):
             )
 
     async def clear_cache(self) -> CacheResult:
-        """GET ``{base_url}/index.php?_clear_cache``, reusing the domain's auth."""
+        """GET ``{base_url}/index.php?__clear_cache``, reusing the domain's auth."""
         return await self._cache_request(_CLEAR_CACHE_QUERY, _CLEAR_CACHE_TIMEOUT_S)
-
-    async def warm_cache(self) -> CacheResult:
-        """GET ``{base_url}/index.php?__warm_cache``, reusing the domain's auth.
-
-        Warming rebuilds the cache and can be slow, hence the longer timeout
-        than ``clear_cache``.
-        """
-        return await self._cache_request(_WARM_CACHE_QUERY, _WARM_CACHE_TIMEOUT_S)
 
     async def _cache_request(self, query: str, timeout: float) -> CacheResult:
         """Fire one cache-control GET and map the outcome to a CacheResult.

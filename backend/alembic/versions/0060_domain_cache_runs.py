@@ -5,7 +5,7 @@ Revises: 0059
 Create Date: 2026-06-27
 
 Backs a background job that bulk-hits the Custom CMS cache endpoints
-(/index.php?_clear_cache and ?__warm_cache) across selected domains, with a
+(/index.php?__clear_cache and ?__warm_cache) across selected domains, with a
 progress page like Bulk Runs / Autotool Runs. One ``domain_cache_run_items`` row
 per selected Custom-CMS domain; a Celery worker fires the chosen endpoint(s)
 reusing the domain's stored credentials and bumps the run counters.
