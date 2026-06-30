@@ -291,6 +291,28 @@ export function replaceTranslationLinks(
   );
 }
 
+/** One crawl violation picked to strip: its row, the scanned column it was
+ *  flagged in, and the link itself. */
+export interface StripLinkItem {
+  row_id: number;
+  column_id: number;
+  link: string;
+}
+
+/** Remove each selected crawl (HTTP-status) link from the cell it was flagged
+ *  in — drop the `<a>` wrapper (or markdown link), keep the anchor text.
+ *  Recorded as a revertable link-fix run (method='strip'); returns that run so
+ *  the caller can open its detail page alongside the AI / replace corrections. */
+export function stripCrawlLinks(
+  runId: number,
+  items: StripLinkItem[],
+): Promise<LinkFixRun> {
+  return api<LinkFixRun>(
+    `/library/link-check-runs/${runId}/strip-links`,
+    { method: "POST", body: { items } },
+  );
+}
+
 export function cancelLinkCheckRun(runId: number): Promise<LinkCheckRun> {
   return api<LinkCheckRun>(`/library/link-check-runs/${runId}/cancel`, {
     method: "POST",

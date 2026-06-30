@@ -154,7 +154,9 @@ export default function LinkFixRunPage({
               t(
                 run?.method === "replace"
                   ? "breadcrumb.replace"
-                  : "breadcrumb.fix",
+                  : run?.method === "strip"
+                    ? "breadcrumb.strip"
+                    : "breadcrumb.fix",
                 { id: rid },
               ),
           },
@@ -181,7 +183,9 @@ export default function LinkFixRunPage({
                 {t(
                   run.method === "replace"
                     ? "linkFixRun.replaceTitle"
-                    : "linkFixRun.title",
+                    : run.method === "strip"
+                      ? "linkFixRun.stripTitle"
+                      : "linkFixRun.title",
                   { id: run.id },
                 )}
               </h1>
@@ -283,14 +287,20 @@ export default function LinkFixRunPage({
             <Counter label={t("linkFixRun.skipped")} value={run.skipped} accent="neutral" />
             <Counter label={t("linkFixRun.total")} value={run.total} accent="neutral" />
           </div>
-          {run.method === "replace" && run.links_changed != null && (
-            <p className="mt-2 text-xs text-neutral-600 dark:text-neutral-300">
-              {t("linkFixRun.linksReplacedNote", {
-                links: run.links_changed,
-                cells: run.done,
-              })}
-            </p>
-          )}
+          {(run.method === "replace" || run.method === "strip") &&
+            run.links_changed != null && (
+              <p className="mt-2 text-xs text-neutral-600 dark:text-neutral-300">
+                {t(
+                  run.method === "strip"
+                    ? "linkFixRun.linksStrippedNote"
+                    : "linkFixRun.linksReplacedNote",
+                  {
+                    links: run.links_changed,
+                    cells: run.done,
+                  },
+                )}
+              </p>
+            )}
 
           {/* The fix re-verifies in place — point the user back to the source
               check run to see what's now Solved / Unsolved. */}

@@ -109,6 +109,7 @@ from app.schemas.bulk import (
     StructureFormatPreview,
     StructureFormatPreviewCell,
     StructureFormatRequest,
+    StripLinksRequest,
     StructureFormatRunDetail,
     StructureFormatRunRead,
     TableBulkMove,
@@ -4780,6 +4781,133 @@ async def replace_translation_links(
     return fix_run
 
 
+@router.post(
+    "/link-check-runs/{run_id}/strip-links",
+    response_model=LinkFixRunRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def strip_crawl_links(
+    run_id: int,
+    payload: StripLinksRequest,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LinkFixRun:
+    """Deterministically remove each selected crawl (HTTP-status) link from the
+    cell it was flagged in — drop the ``<a>`` wrapper (or markdown link) and
+    keep the anchor text — recorded as a revertable ``link_fix_runs`` job
+    (``method='strip'``) so it sits beside the AI / replace corrections in the
+    same history, with before/after snapshots and a Revert button.
+
+    Unlike the translation replace there's no expected link to swap to (a broken
+    link has none), so the action is a pure unwrap. Runs as a distributed,
+    revertable background job (one pending cell per row+column fanned out to the
+    ``linkfix.strip_cell`` worker); each done cell stamps the source run's
+    matching crawl violations ``solved`` so the run page strikes them through."""
+    from app.tasks.link_fix import strip_cell as strip_cell_task
+
+    run = await _get_link_check_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    if not run.check_crawl:
+        raise HTTPException(
+            status_code=400,
+            detail="Stripping links is only available for crawl (HTTP-status) runs.",
+        )
+
+    # Selected links grouped by (row, column); only the run's scanned columns
+    # are touchable (the items come from this run's violations, but never trust
+    # the client to name an arbitrary cell).
+    scanned = {int(c) for c in (run.column_ids or [])}
+    by_cell: dict[tuple[int, int], set[str]] = defaultdict(set)
+    for it in payload.items:
+        if it.link.strip() and (not scanned or it.column_id in scanned):
+            by_cell[(it.row_id, it.column_id)].add(it.link)
+    if not by_cell:
+        raise HTTPException(status_code=400, detail="No links selected to strip.")
+
+    col_ids = sorted({c for _r, c in by_cell})
+    row_ids = sorted({r for r, _c in by_cell})
+    col_names = dict(
+        (
+            await db.execute(
+                select(BulkTableColumn.id, BulkTableColumn.name).where(
+                    BulkTableColumn.id.in_(col_ids)
+                )
+            )
+        ).all()
+    )
+    row_positions = dict(
+        (
+            await db.execute(
+                select(BulkTableRow.id, BulkTableRow.position).where(
+                    BulkTableRow.id.in_(row_ids)
+                )
+            )
+        ).all()
+    )
+    # Snapshot each touched cell's current value as its source_value.
+    cell_vals = {
+        (r, c): v
+        for r, c, v in (
+            await db.execute(
+                select(
+                    BulkTableCell.row_id,
+                    BulkTableCell.column_id,
+                    BulkTableCell.value,
+                ).where(
+                    BulkTableCell.row_id.in_(row_ids),
+                    BulkTableCell.column_id.in_(col_ids),
+                )
+            )
+        ).all()
+    }
+
+    fix_run = LinkFixRun(
+        table_id=run.table_id,
+        source_run_id=run.id,
+        created_by_id=actor.id,
+        status="running",
+        method="strip",
+        target_column_id=None,  # overwrite the scanned column in place
+        column_ids=col_ids,
+        expected_column_ids=[],
+        total=len(by_cell),
+        started_at=datetime.now(timezone.utc),
+        last_progress_at=datetime.now(timezone.utc),
+    )
+    db.add(fix_run)
+    await db.flush()  # fix_run.id
+
+    fix_cells = [
+        LinkFixCell(
+            run_id=fix_run.id,
+            row_id=rid,
+            row_position=row_positions.get(rid, 0),
+            column_id=cid,
+            column_name=col_names.get(cid, "—"),
+            state="pending",
+            source_value=cell_vals.get((rid, cid)),
+            violations=[
+                {
+                    "problem": "broken",
+                    "link": link,
+                    "detail_code": None,
+                    "status_code": None,
+                }
+                for link in sorted(links)
+            ],
+        )
+        for (rid, cid), links in by_cell.items()
+    ]
+    db.add_all(fix_cells)
+    await db.commit()
+
+    for c in fix_cells:
+        strip_cell_task.delay(fix_run.id, c.id)
+
+    await db.refresh(fix_run)
+    return fix_run
+
+
 @router.post("/link-check-runs/{run_id}/cancel", response_model=LinkCheckRunRead)
 async def cancel_link_check_run(
     run_id: int,
@@ -5171,11 +5299,11 @@ async def get_link_fix_run(
         .all()
     )
 
-    # For replace runs, report how many individual links were actually changed
-    # (the unit the user selected), not just how many cells — each done cell's
-    # `violations` holds the links it applied.
+    # For replace / strip runs, report how many individual links were actually
+    # changed (the unit the user selected), not just how many cells — each done
+    # cell's `violations` holds the links it applied.
     links_changed: int | None = None
-    if run.method == "replace":
+    if run.method in ("replace", "strip"):
         applied = (
             await db.execute(
                 select(LinkFixCell.violations).where(

@@ -60,6 +60,8 @@ class LinkFixRun(Base):
     #   ai      — the Brain ``fix_links`` LLM rewrites the links.
     #   replace — a deterministic swap of each wrong translation link for its
     #             computed expected link (no model call).
+    #   strip   — a deterministic unwrap of each selected crawl/HTTP-status link
+    #             (drop the ``<a>`` wrapper, keep the anchor text; no model call).
     method: Mapped[str] = mapped_column(
         String(12), nullable=False, default="ai", server_default="ai"
     )

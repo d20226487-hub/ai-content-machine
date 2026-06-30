@@ -1966,6 +1966,7 @@ export const ru: Record<keyof typeof en, string> = {
   "breadcrumb.run": "Запуск #{id}",
   "breadcrumb.fix": "ИИ-исправление #{id}",
   "breadcrumb.replace": "Замена ссылок #{id}",
+  "breadcrumb.strip": "Удаление ссылок #{id}",
 
   "linkCheck.backToTable": "← Назад к таблице",
   "linkCheck.title": "Проверка ссылок",
@@ -2079,6 +2080,11 @@ export const ru: Record<keyof typeof en, string> = {
   "linkCheckRun.fixSelectedAi": "Исправить с ИИ ({n})",
   "linkCheckRun.confirmReplace":
     "Заменить неверные ссылки перевода на ожидаемые в выбранных элементах ({n})? Это изменит переведённый контент и будет записано как откатываемая задача.",
+  "linkCheckRun.stripSelected": "Удалить ссылки ({n})",
+  "linkCheckRun.stripSelectedCount": "Выбрано ссылок: {n}",
+  "linkCheckRun.stripRowHint": "Выбрать эту ссылку для удаления (текст ссылки останется)",
+  "linkCheckRun.confirmStrip":
+    "Удалить выбранные ссылки ({n}) — убрать тег <a>, оставив текст? Это изменит содержимое ячейки и будет записано как откатываемая задача.",
   "linkCheckRun.rawLegendOk": "Совпадает с ожидаемой",
   "linkCheckRun.rawLegendDiscrepancy": "Несоответствие",
   "linkCheckRun.rawLegendInvented": "Выдуманная",
@@ -2147,6 +2153,7 @@ export const ru: Record<keyof typeof en, string> = {
   "linkFix.fixedBadge": "Исправлено",
   "linkFix.runLabel": "ИИ-исправление #{id}",
   "linkFix.replaceRunLabel": "Замена ссылок #{id}",
+  "linkFix.stripRunLabel": "Удаление ссылок #{id}",
   "linkFixRun.revertedBadge": "откачено",
   // Общие действия переименования/удаления запусков
   "runs.rename": "Переименовать",
@@ -2158,6 +2165,7 @@ export const ru: Record<keyof typeof en, string> = {
     "Для исправления ИИ нужна колонка с ожидаемыми ссылками. Перезапустите проверку с включённым «Сравнить с ожидаемыми ссылками», чтобы ИИ знал правильные ссылки.",
   "linkFixRun.title": "ИИ-исправление ссылок #{id}",
   "linkFixRun.replaceTitle": "Замена ссылок #{id}",
+  "linkFixRun.stripTitle": "Удаление ссылок #{id}",
   "linkFixRun.confirmCancel": "Остановить это ИИ-исправление?",
   "linkFixRun.confirmRevert":
     "Вернуть все изменённые этим запуском ячейки к значению до исправления? Ячейки, отредактированные после, не трогаются.",
@@ -2175,6 +2183,7 @@ export const ru: Record<keyof typeof en, string> = {
   "linkFixRun.skipped": "Пропущено",
   "linkFixRun.total": "Всего",
   "linkFixRun.linksReplacedNote": "Заменено ссылок: {links} (в {cells} строках — по одной ячейке на строку).",
+  "linkFixRun.linksStrippedNote": "Удалено ссылок: {links} (в {cells} ячейках — текст ссылок сохранён).",
   "linkFixRun.viewRecheck": "Что теперь Решено / Не решено — на странице проверки →",
   "linkFixRun.before": "До",
   "linkFixRun.after": "После",

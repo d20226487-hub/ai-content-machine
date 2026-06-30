@@ -917,6 +917,23 @@ class DismissRequest(BaseModel):
     items: list[DismissItem] = Field(default_factory=list)
 
 
+class StripItem(BaseModel):
+    """One crawl violation the user picked to strip: which row, which scanned
+    column it was found in, and the link itself."""
+
+    row_id: int
+    column_id: int
+    link: str
+
+
+class StripLinksRequest(BaseModel):
+    """Bulk-strip selected crawl (HTTP-status) links: remove each ``<a>``
+    wrapper (or markdown link) in place, keeping the anchor text. Carries the
+    column so a link is only stripped from the cell it was flagged in."""
+
+    items: list[StripItem] = Field(default_factory=list)
+
+
 class AlignedRow(BaseModel):
     """An expected link paired with the WRONG translation link it should have
     been (``wrong`` None = correct/omitted). For invented links ``expected`` is
@@ -1008,9 +1025,10 @@ class LinkFixRunRead(BaseModel):
     recheck_run_id: int | None
     target_column_id: int | None = None
     prompt: str | None = None
-    # 'ai' (LLM rewrite) | 'replace' (deterministic link swap). Drives the
-    # run's display name so the two job kinds read distinctly in the history.
-    method: Literal["ai", "replace"] = "ai"
+    # 'ai' (LLM rewrite) | 'replace' (deterministic translation-link swap) |
+    # 'strip' (deterministic <a>-unwrap of crawl/HTTP-status links). Drives the
+    # run's display name so the job kinds read distinctly in the history.
+    method: Literal["ai", "replace", "strip"] = "ai"
     status: LinkFixStatus
     column_ids: list[int]
     expected_column_ids: list[int]
@@ -1060,9 +1078,9 @@ class LinkFixRunDetail(LinkFixRunRead):
     page: int
     page_size: int
     total_cells: int
-    # For 'replace' runs: how many individual links were actually swapped/stripped
-    # across all done cells (the unit the user selected). None for 'ai' runs,
-    # where the LLM rewrites whole cells rather than per-link.
+    # For 'replace' / 'strip' runs: how many individual links were actually
+    # swapped/stripped across all done cells (the unit the user selected). None
+    # for 'ai' runs, where the LLM rewrites whole cells rather than per-link.
     links_changed: int | None = None
     items: list[LinkFixCellRead]
 

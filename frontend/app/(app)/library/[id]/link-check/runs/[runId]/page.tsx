@@ -17,6 +17,8 @@ import {
   cancelLinkCheckRun,
   getLinkCheckRun,
   resumeLinkCheckRun,
+  stripCrawlLinks,
+  type StripLinkItem,
   type LinkCheckRunDetail,
   type LinkProblem,
   type LinkResolution,
@@ -50,6 +52,11 @@ export default function LinkCheckRunPage({
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
   const [startingFix, setStartingFix] = useState(false);
   const [fixError, setFixError] = useState<string | null>(null);
+  // Crawl (HTTP-status) links picked to strip — keyed `row:col:link` so the
+  // selection is per-violation and (like the AI-fix rows) persists across
+  // pages/filters since the keys are globally unique.
+  const [selectedStrip, setSelectedStrip] = useState<Set<string>>(new Set());
+  const [stripping, setStripping] = useState(false);
   // Which fix was requested (rows scope). null = modal closed.
   const [fixScope, setFixScope] = useState<{
     rowIds: number[] | null;
@@ -257,6 +264,38 @@ export default function LinkCheckRunPage({
     });
   }
 
+  function toggleStrip(v: LinkViolation) {
+    setSelectedStrip((cur) => {
+      const next = new Set(cur);
+      const k = stripKey(v);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  }
+
+  // Deterministically strip the selected crawl links (drop the <a>, keep the
+  // anchor) as a revertable link-fix run, then open its detail page — mirrors
+  // the Translation "replace" flow.
+  async function onStrip() {
+    if (!run || stripping || selectedStrip.size === 0) return;
+    if (
+      !window.confirm(t("linkCheckRun.confirmStrip", { n: selectedStrip.size }))
+    )
+      return;
+    setStripping(true);
+    setFixError(null);
+    try {
+      const items: StripLinkItem[] = Array.from(selectedStrip).map(parseStripKey);
+      const fix = await stripCrawlLinks(run.id, items);
+      setSelectedStrip(new Set());
+      router.push(`/library/${tableId}/link-fix/runs/${fix.id}`);
+    } catch (e) {
+      setFixError(e instanceof ApiError ? e.message : String(e));
+      setStripping(false);
+    }
+  }
+
   async function startFix(
     rowIds: number[] | null,
     target: FixTargetChoice,
@@ -301,6 +340,10 @@ export default function LinkCheckRunPage({
     !isActive &&
     (run.expected_column_ids.length > 0 || isTranslation) &&
     fixableCount > 0;
+  // Strip (drop the <a>, keep the anchor) is offered for crawl (HTTP-status)
+  // violations of a finished run that actually crawled. Per-violation
+  // checkboxes carry the selection; the action bar shows once any are picked.
+  const canStrip = !!run && !isActive && run.check_crawl;
   // Without expected columns there's nothing to fix typos against — surface
   // why the fix buttons aren't offered. Translation runs recompute expected
   // links server-side, so they're never blocked for this reason.
@@ -514,6 +557,34 @@ export default function LinkCheckRunPage({
             </p>
           )}
 
+          {/* Strip-links action bar — crawl (HTTP-status) mode. Shows once any
+              links are picked via the per-violation checkboxes below. Drops each
+              selected link's <a> wrapper (keeping the anchor text) as a
+              revertable job, mirroring the Translation "replace" flow. */}
+          {canStrip && selectedStrip.size > 0 && (
+            <div className="mt-4 flex flex-wrap items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm dark:border-emerald-900/40 dark:bg-emerald-950/20">
+              <span className="text-emerald-800 dark:text-emerald-200">
+                {t("linkCheckRun.stripSelectedCount", { n: selectedStrip.size })}
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedStrip(new Set())}
+                disabled={stripping}
+                className="text-xs font-medium text-emerald-700 underline-offset-2 hover:underline disabled:opacity-60 dark:text-emerald-300"
+              >
+                {t("linkCheckRun.clearSelection")}
+              </button>
+              <button
+                type="button"
+                onClick={onStrip}
+                disabled={stripping}
+                className="ml-auto rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+              >
+                {t("linkCheckRun.stripSelected", { n: selectedStrip.size })}
+              </button>
+            </div>
+          )}
+
           {/* Translation runs replace the materialized violations table with
               the raw translation-links table, filtered to just the problem
               links. Crawl/juxtapose runs keep the violations table below. */}
@@ -642,7 +713,7 @@ export default function LinkCheckRunPage({
                 <table className="w-full text-left text-sm">
                   <thead className="bg-neutral-50 text-xs uppercase tracking-wide text-neutral-500 dark:bg-neutral-900 dark:text-neutral-400">
                     <tr>
-                      {canFix && <th className="w-8 px-3 py-2" />}
+                      {(canFix || canStrip) && <th className="w-8 px-3 py-2" />}
                       <th className="px-3 py-2 font-medium">{t("linkCheckRun.colRow")}</th>
                       <th className="px-3 py-2 font-medium">{t("linkCheckRun.colColumn")}</th>
                       <th className="px-3 py-2 font-medium">{t("linkCheckRun.colProblem")}</th>
@@ -663,16 +734,33 @@ export default function LinkCheckRunPage({
                             : "")
                         }
                       >
-                        {canFix && (
+                        {(canFix || canStrip) && (
                           <td className="px-3 py-2 [&]:no-underline">
-                            {v.problem !== "ok" && !solved && (
+                            {/* Partition by violation type so a row never shows
+                                two checkboxes: crawl links (broken/ok) get the
+                                deterministic STRIP checkbox; omitted/hallucinated
+                                get the AI-fix row checkbox. */}
+                            {canStrip && isCrawlViolation(v) && !solved ? (
                               <input
                                 type="checkbox"
-                                checked={selectedRows.has(v.row_id)}
-                                onChange={() => toggleRow(v.row_id)}
-                                title={t("linkFix.selectRowHint")}
+                                checked={selectedStrip.has(stripKey(v))}
+                                onChange={() => toggleStrip(v)}
+                                title={t("linkCheckRun.stripRowHint")}
                                 className="h-3.5 w-3.5 rounded border-neutral-300 dark:border-neutral-600"
                               />
+                            ) : (
+                              canFix &&
+                              !isCrawlViolation(v) &&
+                              v.problem !== "ok" &&
+                              !solved && (
+                                <input
+                                  type="checkbox"
+                                  checked={selectedRows.has(v.row_id)}
+                                  onChange={() => toggleRow(v.row_id)}
+                                  title={t("linkFix.selectRowHint")}
+                                  className="h-3.5 w-3.5 rounded border-neutral-300 dark:border-neutral-600"
+                                />
+                              )
                             )}
                           </td>
                         )}
@@ -750,7 +838,9 @@ export default function LinkCheckRunPage({
                           t(
                             fr.method === "replace"
                               ? "linkFix.replaceRunLabel"
-                              : "linkFix.runLabel",
+                              : fr.method === "strip"
+                                ? "linkFix.stripRunLabel"
+                                : "linkFix.runLabel",
                             { id: fr.id },
                           )}
                         <span className="ml-2 text-xs text-neutral-400">
@@ -922,6 +1012,33 @@ function detailText(
     default:
       return v.detail_code ?? "";
   }
+}
+
+/** A crawl-origin violation: an actual `<a href>` present in the cell (so it
+ *  can be stripped). Juxtapose "omitted" links are missing — nothing to strip;
+ *  "hallucinated" keeps the AI/replace paths. */
+function isCrawlViolation(v: LinkViolation): boolean {
+  return v.problem === "broken" || v.problem === "ok";
+}
+
+/** Stable per-violation key for the strip selection. The link may contain ":",
+ *  so the two leading numeric ids are sliced off by position, not split. */
+function stripKey(v: {
+  row_id: number;
+  column_id: number;
+  link: string;
+}): string {
+  return `${v.row_id}:${v.column_id}:${v.link}`;
+}
+
+function parseStripKey(k: string): StripLinkItem {
+  const i = k.indexOf(":");
+  const j = k.indexOf(":", i + 1);
+  return {
+    row_id: Number(k.slice(0, i)),
+    column_id: Number(k.slice(i + 1, j)),
+    link: k.slice(j + 1),
+  };
 }
 
 function producedRows(run: LinkCheckRunDetail): boolean {

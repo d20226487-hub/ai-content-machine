@@ -26,7 +26,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
-from app.db.models import BulkTableCell, LinkCheckRun, LinkFixCell, LinkFixRun
+from app.db.models import (
+    BulkTableCell,
+    LinkCheckRun,
+    LinkCheckViolation,
+    LinkFixCell,
+    LinkFixRun,
+)
 from app.providers.base import ProviderError
 from app.providers.registry import ProviderNotConfigured
 from app.services.brain import fix_links_text
@@ -70,6 +76,17 @@ def replace_cell(run_id: int, cell_id: int) -> dict:
     runs: swap each seeded wrong link for its (re-derived) expected link in
     place. Same fan-out / progress / finalize machinery — no LLM call."""
     asyncio.run(_with_session(lambda db: _replace_cell(db, run_id, cell_id)))
+    return {"run_id": run_id, "cell_id": cell_id, "ok": True}
+
+
+@celery_app.task(name="linkfix.strip_cell")
+def strip_cell(run_id: int, cell_id: int) -> dict:
+    """Deterministic per-cell sibling of ``fix_cell`` for ``method='strip'``
+    runs: remove each seeded crawl/HTTP-status link's ``<a>`` wrapper in place,
+    keeping the anchor text. Same fan-out / progress / finalize machinery — no
+    LLM call, and no expected-link derivation (a broken link has no
+    replacement)."""
+    asyncio.run(_with_session(lambda db: _strip_cell(db, run_id, cell_id)))
     return {"run_id": run_id, "cell_id": cell_id, "ok": True}
 
 
@@ -336,6 +353,107 @@ async def _replace_cell(db: AsyncSession, run_id: int, cell_id: int) -> None:
     await _finalize_if_done(db, run_id)
 
 
+async def _strip_cell(db: AsyncSession, run_id: int, cell_id: int) -> None:
+    """Deterministic in-place ``<a>``-unwrap for one seeded crawl cell. The links
+    to strip were stored on the cell's ``violations`` at seed time. Unlike
+    ``_replace_cell`` there's no config / expected-link derivation — a broken
+    link is simply removed, anchor text kept. Mirrors the idempotency, cancel
+    handling, progress bump and finalize of its siblings; on success it stamps
+    the source check run's matching crawl violations ``solved`` so the run page
+    strikes them through (and Revert can clear that)."""
+    from app.services.translation_links import strip_link_in_text
+
+    cell = await db.get(LinkFixCell, cell_id)
+    if cell is None or cell.state != "pending":
+        return  # already processed / redelivery
+    run = await db.get(LinkFixRun, run_id)
+    if run is None or run.status in ("done", "failed"):
+        return
+    if run.status == "cancelled":
+        cell.state = "skipped"
+        await _bump(db, run_id, "skipped")
+        await db.commit()
+        await _finalize_if_done(db, run_id)
+        return
+
+    want_links = [
+        str(v["link"])
+        for v in (cell.violations or [])
+        if isinstance(v, dict) and v.get("link")
+    ]
+    try:
+        old_value = (
+            await db.execute(
+                select(BulkTableCell.value).where(
+                    BulkTableCell.row_id == cell.row_id,
+                    BulkTableCell.column_id == cell.column_id,
+                )
+            )
+        ).scalar_one_or_none()
+
+        new_value = old_value or ""
+        applied: list[dict] = []
+        for link in want_links:
+            if not new_value:
+                break
+            new_value, n = strip_link_in_text(new_value, link)
+            if n > 0:
+                applied.append(
+                    {
+                        "problem": "broken",
+                        "link": link,
+                        "detail_code": None,
+                        "status_code": None,
+                    }
+                )
+
+        changed = new_value != (old_value or "")
+        cell.source_value = old_value
+        cell.old_value = old_value
+        cell.violations = applied
+        if changed:
+            # Preserve the cell's status (a targeted strip isn't a regeneration),
+            # but drop any cached translation — it no longer matches the source.
+            await db.execute(
+                update(BulkTableCell)
+                .where(
+                    BulkTableCell.row_id == cell.row_id,
+                    BulkTableCell.column_id == cell.column_id,
+                )
+                .values(value=new_value, translations=None)
+            )
+            cell.new_value = new_value
+            cell.state = "done"
+            await _bump(db, run_id, "done")
+            # Stamp the originating crawl violations 'solved' for the links we
+            # actually removed (struck through on the run page; Revert clears).
+            if run.source_run_id is not None and applied:
+                await db.execute(
+                    update(LinkCheckViolation)
+                    .where(
+                        LinkCheckViolation.run_id == run.source_run_id,
+                        LinkCheckViolation.row_id == cell.row_id,
+                        LinkCheckViolation.column_id == cell.column_id,
+                        LinkCheckViolation.link.in_([a["link"] for a in applied]),
+                    )
+                    .values(resolution="solved")
+                )
+        else:
+            cell.new_value = None
+            cell.state = "skipped"
+            await _bump(db, run_id, "skipped")
+        await db.commit()
+    except Exception as e:  # noqa: BLE001 — never strand the run on bad data
+        await db.rollback()
+        cell = await db.get(LinkFixCell, cell_id)
+        if cell is not None and cell.state == "pending":
+            cell.state = "failed"
+            cell.error = str(e)[:500]
+            await _bump(db, run_id, "failed")
+            await db.commit()
+    await _finalize_if_done(db, run_id)
+
+
 async def _bump(db: AsyncSession, run_id: int, field: str) -> None:
     """Atomic counter bump + progress stamp. ``field`` is a trusted literal."""
     if field not in ("done", "failed", "skipped"):
@@ -378,8 +496,12 @@ async def _finalize_if_done(db: AsyncSession, run_id: int) -> None:
     # Re-verify IN PLACE (no new job): re-juxtapose each corrected cell and
     # stamp the SOURCE check run's matching violations 'solved' / 'unsolved'
     # so the original run page shows what the fix did. We re-juxtapose only
-    # (the AI corrector runs in juxtapose mode), never crawl.
-    await reverify_in_place(db, run)
+    # (the AI corrector runs in juxtapose mode), never crawl. Strip runs target
+    # crawl violations and already stamped them per-link in the worker — a
+    # juxtapose re-verify here would mislabel a combined run's omitted/
+    # hallucinated violations, so skip it for them.
+    if run.method != "strip":
+        await reverify_in_place(db, run)
 
     await db.commit()
 
@@ -410,6 +532,6 @@ async def _resume(db: AsyncSession, run_id: int) -> None:
     if not pending:
         await _finalize_if_done(db, run_id)
         return
-    task = replace_cell if run.method == "replace" else fix_cell
+    task = {"replace": replace_cell, "strip": strip_cell}.get(run.method, fix_cell)
     for cid in pending:
         task.delay(run_id, cid)

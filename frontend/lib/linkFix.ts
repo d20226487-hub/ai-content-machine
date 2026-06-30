@@ -30,10 +30,11 @@ export interface LinkFixRequest {
   prompt?: string | null;
 }
 
-/** How a correction run rewrote the links: an LLM rewrite ("ai") or a
+/** How a correction run rewrote the links: an LLM rewrite ("ai"), a
  *  deterministic swap of each wrong translation link for its expected one
- *  ("replace"). Drives the run's display name. */
-export type LinkFixMethod = "ai" | "replace";
+ *  ("replace"), or a deterministic unwrap of each selected crawl/HTTP-status
+ *  link ("strip" — drop the `<a>`, keep the anchor). Drives the display name. */
+export type LinkFixMethod = "ai" | "replace" | "strip";
 
 export interface LinkFixRun {
   id: number;

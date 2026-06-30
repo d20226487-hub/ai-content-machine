@@ -1902,6 +1902,7 @@ export const en = {
   "breadcrumb.run": "Run #{id}",
   "breadcrumb.fix": "AI fix #{id}",
   "breadcrumb.replace": "Link replace #{id}",
+  "breadcrumb.strip": "Strip links #{id}",
 
   "linkCheck.backToTable": "← Back to table",
   "linkCheck.title": "Link checker",
@@ -2013,6 +2014,11 @@ export const en = {
   "linkCheckRun.fixSelectedAi": "Fix with AI ({n})",
   "linkCheckRun.confirmReplace":
     "Replace the wrong translation link(s) with the expected link in {n} selected item(s)? This edits the translated content and is recorded as a revertable job.",
+  "linkCheckRun.stripSelected": "Strip ({n})",
+  "linkCheckRun.stripSelectedCount": "{n} link(s) selected",
+  "linkCheckRun.stripRowHint": "Select this link to remove (the anchor text stays)",
+  "linkCheckRun.confirmStrip":
+    "Remove the {n} selected link(s) — drop the <a> tag and keep the anchor text? This edits the cell content and is recorded as a revertable job.",
   "linkCheckRun.rawLegendOk": "Matches expected",
   "linkCheckRun.rawLegendDiscrepancy": "Discrepancy",
   "linkCheckRun.rawLegendInvented": "Made-up",
@@ -2081,6 +2087,7 @@ export const en = {
   "linkFix.fixedBadge": "Fixed by a correction",
   "linkFix.runLabel": "AI fix #{id}",
   "linkFix.replaceRunLabel": "Link replace #{id}",
+  "linkFix.stripRunLabel": "Strip links #{id}",
   "linkFixRun.revertedBadge": "reverted",
   // Shared run rename/delete actions
   "runs.rename": "Rename",
@@ -2092,6 +2099,7 @@ export const en = {
     "AI fixing needs an expected-links column. Re-run the check with “Compare to expected links” on so it knows the correct links.",
   "linkFixRun.title": "AI link fix #{id}",
   "linkFixRun.replaceTitle": "Link replace #{id}",
+  "linkFixRun.stripTitle": "Strip links #{id}",
   "linkFixRun.confirmCancel": "Stop this AI fix run?",
   "linkFixRun.confirmRevert":
     "Restore every cell this run changed to its value before the fix? Cells edited since are left as-is.",
@@ -2109,6 +2117,7 @@ export const en = {
   "linkFixRun.skipped": "Skipped",
   "linkFixRun.total": "Total",
   "linkFixRun.linksReplacedNote": "{links} links replaced across {cells} cells (one cell per row).",
+  "linkFixRun.linksStrippedNote": "{links} link(s) removed across {cells} cell(s) (the anchor text was kept).",
   "linkFixRun.viewRecheck": "See what's now Solved / Unsolved on the check run →",
   "linkFixRun.before": "Before",
   "linkFixRun.after": "After",
