@@ -41,7 +41,7 @@ CUSTOM_PAGE_TYPES: tuple[str, ...] = (ORDINARY, MATCH)
 # here on purpose: it's dropped on create / supplied on update.
 _MATCH_KEEP_EMPTY: tuple[str, ...] = (
     "lang", "slug", "title", "seo_title", "seo_description", "date", "time",
-    "venue", "group", "odds_home", "odds_draw", "odds_away", "content",
+    "venue", "group", "stage", "odds_home", "odds_draw", "odds_away", "content",
 )
 
 # Fields the upstream expects as a JSON boolean, not a string — their table

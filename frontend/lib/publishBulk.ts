@@ -48,6 +48,7 @@ export const MATCH_PAGE_FIELDS = [
   "time",
   "venue",
   "group",
+  "stage",
   "odds_home",
   "odds_draw",
   "odds_away",
