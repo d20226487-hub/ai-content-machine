@@ -325,6 +325,15 @@ export function resumeLinkCheckRun(runId: number): Promise<LinkCheckRun> {
   });
 }
 
+/** Re-crawl only the failed links (4xx/5xx/network errors) of a finished crawl
+ *  run, in place — resets those targets, drops their broken violations, and
+ *  flips the run back to running. Healthy links are left untouched. */
+export function retryFailedLinkCheckRun(runId: number): Promise<LinkCheckRun> {
+  return api<LinkCheckRun>(`/library/link-check-runs/${runId}/retry-failed`, {
+    method: "POST",
+  });
+}
+
 export function renameLinkCheckRun(
   runId: number,
   name: string | null,

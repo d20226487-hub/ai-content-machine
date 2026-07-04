@@ -4949,6 +4949,106 @@ async def resume_link_check_run(
     return run
 
 
+@router.post(
+    "/link-check-runs/{run_id}/retry-failed", response_model=LinkCheckRunRead
+)
+async def retry_failed_link_check(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LinkCheckRun:
+    """Re-crawl ONLY the failed links of a finished crawl run, in place.
+
+    Resets every target that came back not-OK (4xx / 5xx / network error) to
+    ``pending``, drops the ``broken`` violations it produced, re-baselines the
+    counters, flips the run back to ``running`` and re-enqueues the crawl. So a
+    transient failure (timeout, momentary 5xx, DNS blip) can be re-checked
+    without re-crawling the healthy links or starting a fresh run. Healthy
+    (``ok``) links and any juxtapose violations are untouched. 400 if the run
+    never crawled or has no failed links; 409 while it's still active."""
+    run = await _get_link_check_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    if not run.check_crawl:
+        raise HTTPException(
+            status_code=400,
+            detail="Retry failed is only available for crawl (HTTP-status) runs.",
+        )
+    if run.status not in ("done", "failed", "cancelled"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Run is {run.status}; wait for it to finish before retrying.",
+        )
+
+    failed = (
+        await db.execute(
+            select(func.count())
+            .select_from(LinkCheckCrawlTarget)
+            .where(
+                LinkCheckCrawlTarget.run_id == run_id,
+                LinkCheckCrawlTarget.ok.is_(False),
+            )
+        )
+    ).scalar_one()
+    if failed == 0:
+        raise HTTPException(status_code=400, detail="No failed links to retry.")
+
+    # Reset the failed targets and drop the broken violations they produced —
+    # the re-crawl writes fresh ones. A 'broken' violation always maps to an
+    # ok=False target, so that's the exact set to clear; 'ok' violations
+    # (healthy links, include_ok mode) are left alone.
+    await db.execute(
+        update(LinkCheckCrawlTarget)
+        .where(
+            LinkCheckCrawlTarget.run_id == run_id,
+            LinkCheckCrawlTarget.ok.is_(False),
+        )
+        .values(state="pending", ok=None, status_code=None, detail_code=None)
+    )
+    await db.execute(
+        delete(LinkCheckViolation).where(
+            LinkCheckViolation.run_id == run_id,
+            LinkCheckViolation.problem == "broken",
+        )
+    )
+
+    # Re-baseline the crawl counters from the still-done targets; the re-crawl
+    # bumps them back up and finalize recomputes authoritative totals.
+    done_ct = (
+        await db.execute(
+            select(func.count())
+            .select_from(LinkCheckCrawlTarget)
+            .where(
+                LinkCheckCrawlTarget.run_id == run_id,
+                LinkCheckCrawlTarget.state == "done",
+            )
+        )
+    ).scalar_one()
+    ok_ct = (
+        await db.execute(
+            select(func.count())
+            .select_from(LinkCheckCrawlTarget)
+            .where(
+                LinkCheckCrawlTarget.run_id == run_id,
+                LinkCheckCrawlTarget.state == "done",
+                LinkCheckCrawlTarget.ok.is_(True),
+            )
+        )
+    ).scalar_one()
+    run.crawled = int(done_ct)
+    run.ok_count = int(ok_ct)
+    run.broken_count = int(done_ct) - int(ok_ct)
+    run.status = "running"
+    run.error = None
+    run.finished_at = None
+    run.last_progress_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    # Fan the reset (pending) chunks back out via the resume task.
+    resume_link_check.delay(run_id)
+    await db.refresh(run)
+    return run
+
+
 # ---------- AI link fix (content tool) ----------
 
 _FIXABLE_PROBLEMS = ("omitted", "broken", "hallucinated")

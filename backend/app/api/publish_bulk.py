@@ -40,6 +40,7 @@ from app.schemas.publish import (
     BulkRunListResponse,
     BulkRunSummary,
     ByDomainStat,
+    PublishedUrls,
     PublishMapping,
     RunRename,
 )
@@ -347,6 +348,35 @@ async def get_run(run_id: int, db: AsyncSession = Depends(get_db)) -> BulkRunDet
     if run is None:
         raise HTTPException(status_code=404, detail="Not found")
     return await _to_detail(db, run)
+
+
+@router.get("/runs/{run_id}/published-urls", response_model=PublishedUrls)
+async def get_published_urls(
+    run_id: int, db: AsyncSession = Depends(get_db)
+) -> PublishedUrls:
+    """Every published post URL for a run (posted jobs that carry a URL), in
+    row order — backs the run page's one-click "copy all URLs". Returns all of
+    them (not paginated) so the copy covers the whole run in one request."""
+    run = await db.get(BulkPublishRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    urls = (
+        (
+            await db.execute(
+                select(PublishJob.cms_post_url)
+                .where(
+                    PublishJob.source_kind == "bulk_row",
+                    PublishJob.source_ref["run_id"].astext == str(run_id),
+                    PublishJob.status == "posted",
+                    PublishJob.cms_post_url.isnot(None),
+                )
+                .order_by(PublishJob.id.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return PublishedUrls(urls=[u for u in urls if u])
 
 
 @router.patch("/runs/{run_id}", response_model=BulkRunDetail)

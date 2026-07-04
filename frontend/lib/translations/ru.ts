@@ -1438,6 +1438,10 @@ export const ru: Record<keyof typeof en, string> = {
   "bulkRun.rerunFailedHint":
     "Запустить новый прогон только для строк с ошибкой ({count})",
   "bulkRun.rerunFailedFailed": "Перезапуск не удался",
+  "bulkRun.copyUrls": "Копировать URL",
+  "bulkRun.copyUrlsHint": "Скопировать все опубликованные URL ({count}) в буфер обмена",
+  "bulkRun.copiedUrls": "Скопировано: {count}",
+  "bulkRun.noUrls": "Пока нет опубликованных URL.",
   "bulkRun.failedToLoad": "Не удалось загрузить запуск",
   "bulkRun.processed": "{done} / {total} обработано",
   "bulkRun.donePrefix": "✓ {count} готово",
@@ -2038,6 +2042,11 @@ export const ru: Record<keyof typeof en, string> = {
   "linkCheckRun.resume": "Возобновить",
   "linkCheckRun.resumeHint":
     "Повторно поставить в очередь оставшиеся ссылки, если обход завис (также происходит автоматически).",
+  "linkCheckRun.retryFailed": "Повторить неудачные ({n})",
+  "linkCheckRun.retryFailedHint":
+    "Повторно обойти только неудачные ссылки ({n}) — рабочие ссылки не перепроверяются.",
+  "linkCheckRun.confirmRetryFailed":
+    "Повторно обойти неудачные ссылки ({n})? Временные ошибки (таймауты, 5xx) могут пройти; рабочие ссылки не затрагиваются.",
   "linkCheckRun.confirmCancel": "Остановить проверку ссылок?",
   "linkCheckRun.crawling": "Обход {done} / {total} ссылок…",
   "linkCheckRun.preparing": "Подготовка…",

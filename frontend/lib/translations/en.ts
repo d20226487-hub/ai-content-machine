@@ -1377,6 +1377,10 @@ export const en = {
   "bulkRun.rerunFailedHint":
     "Start a new run targeting just the {count} failed row(s)",
   "bulkRun.rerunFailedFailed": "Rerun failed",
+  "bulkRun.copyUrls": "Copy URLs",
+  "bulkRun.copyUrlsHint": "Copy all {count} published post URLs to the clipboard",
+  "bulkRun.copiedUrls": "Copied {count}",
+  "bulkRun.noUrls": "No published URLs yet.",
   "bulkRun.failedToLoad": "Failed to load run",
   "bulkRun.processed": "{done} / {total} processed",
   "bulkRun.donePrefix": "✓ {count} done",
@@ -1972,6 +1976,11 @@ export const en = {
   "linkCheckRun.resume": "Resume",
   "linkCheckRun.resumeHint":
     "Re-enqueue any pending links if the crawl looks stuck (also happens automatically).",
+  "linkCheckRun.retryFailed": "Retry failed ({n})",
+  "linkCheckRun.retryFailedHint":
+    "Re-crawl only the {n} failed link(s) — healthy links aren't re-checked.",
+  "linkCheckRun.confirmRetryFailed":
+    "Re-crawl the {n} failed link(s) in place? Transient errors (timeouts, 5xx) may now pass; healthy links are left as-is.",
   "linkCheckRun.confirmCancel": "Stop this link check?",
   "linkCheckRun.crawling": "Crawling {done} / {total} links…",
   "linkCheckRun.preparing": "Preparing…",

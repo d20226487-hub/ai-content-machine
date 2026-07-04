@@ -212,6 +212,12 @@ export function rerunFailedRows(id: number) {
   });
 }
 
+/** Every published post URL for a run (posted jobs with a URL), in row order —
+ *  backs the run page's one-click "copy all URLs". */
+export function getPublishedUrls(id: number) {
+  return api<{ urls: string[] }>(`/publish/runs/${id}/published-urls`);
+}
+
 export function deleteBulkRun(id: number) {
   return api<void>(`/publish/runs/${id}`, { method: "DELETE" });
 }

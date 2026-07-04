@@ -16,6 +16,7 @@ import {
 import {
   cancelBulkRun,
   getBulkRun,
+  getPublishedUrls,
   pauseBulkRun,
   rerunFailedRows,
   resumeBulkRun,
@@ -47,6 +48,10 @@ export default function RunDetailPage() {
   const [pageSize, setPageSize] = useState(50);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // One-click "copy all published URLs". copiedUrls holds the count for a brief
+  // "Copied N" confirmation.
+  const [copyingUrls, setCopyingUrls] = useState(false);
+  const [copiedUrls, setCopiedUrls] = useState<number | null>(null);
 
   // Multi-mode filters: by domain id (null = "(unresolved)") and by job status.
   const [filterDomain, setFilterDomain] = useState<string>("all");
@@ -163,6 +168,24 @@ export default function RunDetailPage() {
     }
   }
 
+  async function onCopyUrls() {
+    setCopyingUrls(true);
+    try {
+      const { urls } = await getPublishedUrls(id);
+      if (urls.length === 0) {
+        alert(t("bulkRun.noUrls"));
+        return;
+      }
+      await navigator.clipboard.writeText(urls.join("\n"));
+      setCopiedUrls(urls.length);
+      setTimeout(() => setCopiedUrls(null), 2000);
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : t("common.actionFailed"));
+    } finally {
+      setCopyingUrls(false);
+    }
+  }
+
   return (
     <main className="mx-auto max-w-7xl px-5 py-6">
       <button
@@ -241,6 +264,18 @@ export default function RunDetailPage() {
           >
             {run.status}
           </span>
+          {run.done > 0 && (
+            <button
+              onClick={onCopyUrls}
+              disabled={copyingUrls}
+              title={t("bulkRun.copyUrlsHint", { count: run.done })}
+              className="rounded-md border border-neutral-300 px-2.5 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
+            >
+              {copiedUrls != null
+                ? t("bulkRun.copiedUrls", { count: copiedUrls })
+                : t("bulkRun.copyUrls")}
+            </button>
+          )}
           {canPause && (
             <button
               onClick={() => action(pauseBulkRun)}

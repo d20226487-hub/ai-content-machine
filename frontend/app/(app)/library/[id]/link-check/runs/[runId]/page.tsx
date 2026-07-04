@@ -17,6 +17,7 @@ import {
   cancelLinkCheckRun,
   getLinkCheckRun,
   resumeLinkCheckRun,
+  retryFailedLinkCheckRun,
   stripCrawlLinks,
   type StripLinkItem,
   type LinkCheckRunDetail,
@@ -72,6 +73,7 @@ export default function LinkCheckRunPage({
   const [error, setError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [resuming, setResuming] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [columns, setColumns] = useState<BulkColumn[]>([]);
   const [cellValues, setCellValues] = useState<Map<string, string>>(new Map());
   const [editing, setEditing] = useState<LinkViolation | null>(null);
@@ -211,6 +213,24 @@ export default function LinkCheckRunPage({
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {
       setResuming(false);
+    }
+  }
+
+  // Re-crawl just the failed links (transient 5xx / timeout / DNS) in place;
+  // the run flips back to running, so restart polling.
+  async function onRetryFailed() {
+    if (!run || retrying) return;
+    if (!window.confirm(t("linkCheckRun.confirmRetryFailed", { n: run.broken_count })))
+      return;
+    setRetrying(true);
+    try {
+      await retryFailedLinkCheckRun(run.id);
+      stoppedRef.current = false;
+      await tick(page);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setRetrying(false);
     }
   }
 
@@ -413,6 +433,19 @@ export default function LinkCheckRunPage({
                 >
                   {t("linkCheckRun.rerunWithChanges")}
                 </Link>
+              )}
+              {!isActive && run.check_crawl && run.broken_count > 0 && (
+                <button
+                  type="button"
+                  onClick={onRetryFailed}
+                  disabled={retrying}
+                  title={t("linkCheckRun.retryFailedHint", { n: run.broken_count })}
+                  className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-60 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                >
+                  {retrying
+                    ? t("common.loading")
+                    : t("linkCheckRun.retryFailed", { n: run.broken_count })}
+                </button>
               )}
               {isActive && run.check_crawl && (
                 <button

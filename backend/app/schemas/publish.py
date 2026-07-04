@@ -193,6 +193,13 @@ class BulkRunListResponse(BaseModel):
     page_size: int
 
 
+class PublishedUrls(BaseModel):
+    """Every published post URL for one bulk run (posted jobs with a URL), in
+    row order — backs the run page's one-click "copy all URLs"."""
+
+    urls: list[str]
+
+
 class PublishMapping(BaseModel):
     field_to_column: dict[str, int] = Field(default_factory=dict)
     back_fill: dict[str, int] = Field(default_factory=dict)
