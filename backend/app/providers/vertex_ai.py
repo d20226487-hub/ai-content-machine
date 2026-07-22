@@ -299,7 +299,18 @@ class VertexAIProvider(BaseProvider):
             max_retries=0,
         )
         try:
-            msg = await client.messages.create(**kwargs)
+            # Streamed, not messages.create(): the SDK refuses a non-streaming
+            # request whose max_tokens it estimates could outlast the 10-minute
+            # HTTP timeout, and article-length ceilings cross that line
+            # ("Streaming is required for operations that may take longer than
+            # 10 minutes"). Streaming also keeps the connection alive rather
+            # than sitting idle while a long generation runs.
+            #
+            # We don't need the individual deltas — get_final_message()
+            # accumulates them into the same Message that create() returns, so
+            # everything below is unchanged.
+            async with client.messages.stream(**kwargs) as stream:
+                msg = await stream.get_final_message()
         except Exception as e:  # noqa: BLE001 — normalised to ProviderError below
             raise _anthropic_error(e, chosen_model) from e
         finally:
