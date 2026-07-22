@@ -8,6 +8,7 @@ import { TranslationPanel } from "@/components/TranslationPanel";
 import { ApiError } from "@/lib/api";
 import { translateCell } from "@/lib/brain";
 import { useT } from "@/lib/i18n-context";
+import { getCellCost, type CellCost } from "@/lib/library";
 import type { UnifiedSegment } from "@/lib/linkFix";
 import {
   createCellShareLink,
@@ -51,13 +52,32 @@ interface Props {
   defaultMode?: Mode;
   /** Provided only for output cells with a saved value. */
   translation?: TranslationContext;
-  /** Identifies the cell so it can be shared publicly. When set (and the cell
-   *  has content) a "Share" action appears, minting a read-only link anyone
-   *  can open without an ACM account. */
-  share?: { tableId: number; rowId: number; columnId: number };
+  /** Identifies which cell this is, enabling the cell-scoped extras: the
+   *  public "Share" action and the generation-cost readout. Omitted on
+   *  surfaces that edit text without a backing table cell. */
+  cell?: { tableId: number; rowId: number; columnId: number };
   /** When set (cell corrected by an AI link-fix), enables a "Changes" view
    *  highlighting only the spans that changed. Opens there by default. */
   diff?: UnifiedSegment[];
+}
+
+/**
+ * Per-text generation costs are fractions of a cent, so a plain 2-decimal
+ * format would render every cell as "$0.00". Scale the precision to the
+ * magnitude, then trim trailing zeros so "$0.000100" reads as "$0.0001".
+ */
+function formatUsd(raw: string): string {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return raw;
+  if (n === 0) return "$0";
+  const decimals = n < 0.01 ? 6 : n < 1 ? 4 : 2;
+  return (
+    "$" +
+    n
+      .toFixed(decimals)
+      .replace(/(\.\d*?)0+$/, "$1")
+      .replace(/\.$/, "")
+  );
 }
 
 export function CellEditorModal({
@@ -67,7 +87,7 @@ export function CellEditorModal({
   onClose,
   defaultMode = "edit",
   translation,
-  share,
+  cell,
   diff,
 }: Props) {
   const { t } = useT();
@@ -92,9 +112,9 @@ export function CellEditorModal({
   // Look up an existing link on open so the button reads "Shared" rather than
   // silently minting a second one.
   useEffect(() => {
-    if (!share) return;
+    if (!cell) return;
     let cancelled = false;
-    getCellShareLink(share.tableId, share.rowId, share.columnId)
+    getCellShareLink(cell.tableId, cell.rowId, cell.columnId)
       .then((l) => {
         if (!cancelled) setShareLink(l);
       })
@@ -104,17 +124,34 @@ export function CellEditorModal({
     return () => {
       cancelled = true;
     };
-  }, [share?.tableId, share?.rowId, share?.columnId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cell?.tableId, cell?.rowId, cell?.columnId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---- generation cost (latest bulk_cell usage event for this cell) ----
+  const [cost, setCost] = useState<CellCost | null>(null);
+  useEffect(() => {
+    if (!cell) return;
+    let cancelled = false;
+    getCellCost(cell.tableId, cell.rowId, cell.columnId)
+      .then((c) => {
+        if (!cancelled) setCost(c);
+      })
+      .catch(() => {
+        /* non-fatal — cost is informational */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cell?.tableId, cell?.rowId, cell?.columnId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function onShare() {
-    if (!share || shareBusy) return;
+    if (!cell || shareBusy) return;
     setSharePanelOpen(true);
     if (shareLink) return; // already shared — the panel just reveals the URL
     setShareBusy(true);
     setShareError(null);
     try {
       setShareLink(
-        await createCellShareLink(share.tableId, share.rowId, share.columnId),
+        await createCellShareLink(cell.tableId, cell.rowId, cell.columnId),
       );
     } catch (err) {
       setShareError(err instanceof ApiError ? err.message : String(err));
@@ -154,7 +191,7 @@ export function CellEditorModal({
   const canTranslate =
     !!translation && draft.trim().length > 0 && mode === "preview";
   // Sharing an empty cell would just publish a blank page.
-  const canShare = !!share && draft.trim().length > 0;
+  const canShare = !!cell && draft.trim().length > 0;
 
   async function commit() {
     if (!dirty) {
@@ -412,6 +449,23 @@ export function CellEditorModal({
       <div className="mt-4 flex items-center justify-between border-t border-neutral-200 pt-4 dark:border-neutral-800">
         <p className="text-xs text-neutral-500 dark:text-neutral-400">
           {dirty ? t("cellEditor.unsavedChanges") : t("cellEditor.noChanges")}
+          {/* What generating THIS text cost. Absent for hand-typed/imported
+              cells; "not priced" when the model had no configured rate. */}
+          {cost && (
+            <span
+              className="ml-3 tabular-nums"
+              title={t("cellCost.hint", {
+                model: `${cost.provider_code}:${cost.model}`,
+                inTok: cost.prompt_tokens ?? "—",
+                outTok: cost.completion_tokens ?? "—",
+                when: new Date(cost.generated_at).toLocaleString(),
+              })}
+            >
+              {cost.cost_usd != null
+                ? t("cellCost.value", { usd: formatUsd(cost.cost_usd) })
+                : t("cellCost.notPriced")}
+            </span>
+          )}
           <span className="ml-3 hidden sm:inline">
             <kbd className="rounded border border-neutral-300 px-1.5 py-0.5 font-mono text-[10px] text-neutral-600 dark:border-neutral-700 dark:text-neutral-400">
               {typeof navigator !== "undefined" && /Mac/i.test(navigator.platform)

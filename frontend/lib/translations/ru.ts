@@ -1742,6 +1742,11 @@ export const ru: Record<keyof typeof en, string> = {
   "htmlViewer.openInWindow": "открыть в новом окне",
   "htmlViewer.copyAction": "скопировать",
 
+  // ---------- стоимость генерации текста ----------
+  "cellCost.value": "{usd} за генерацию",
+  "cellCost.notPriced": "тариф для модели не задан",
+  "cellCost.hint": "{model} · токенов: {inTok} вход / {outTok} выход · {when}",
+
   // ---------- публичные ссылки для просмотра ----------
   "share.button": "Поделиться",
   "share.buttonShared": "Ссылка создана",

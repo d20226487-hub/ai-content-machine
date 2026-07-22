@@ -619,3 +619,27 @@ export async function downloadCsv(tableId: number, filename: string): Promise<vo
   a.remove();
   window.URL.revokeObjectURL(url);
 }
+
+/** What generating one cell's CURRENT text cost (latest `bulk_cell` usage
+ *  event). `null` = the cell was never AI-generated. A returned object with
+ *  `cost_usd: null` means it WAS generated but no pricing rate was configured
+ *  for that provider:model at the time — cost is frozen at write time, so that
+ *  never fills in later. */
+export interface CellCost {
+  cost_usd: string | null;
+  provider_code: string;
+  model: string;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  generated_at: string;
+}
+
+export function getCellCost(
+  tableId: number,
+  rowId: number,
+  columnId: number,
+): Promise<CellCost | null> {
+  return api<CellCost | null>(
+    `/library/tables/${tableId}/cells/${rowId}/${columnId}/cost`,
+  );
+}

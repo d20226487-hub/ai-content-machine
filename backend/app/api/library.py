@@ -62,6 +62,7 @@ from app.schemas.bulk import (
     AutotoolState,
     BulkGenerationRunDetail,
     BulkGenerationRunRead,
+    CellCostRead,
     CellsBatchUpsert,
     CellUpsert,
     ClearValuesRequest,
@@ -1861,6 +1862,58 @@ async def import_csv(
     # The client only needs the id to navigate (the table page re-fetches), so
     # return a light first page instead of echoing every cell back as JSON.
     return await _table_to_read_paginated(db, fresh, 1, 25)
+
+
+@router.get(
+    "/tables/{table_id}/cells/{row_id}/{column_id}/cost",
+    response_model=CellCostRead | None,
+)
+async def get_cell_generation_cost(
+    table_id: int,
+    row_id: int,
+    column_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """What generating this cell's CURRENT text cost, or ``null``.
+
+    The LATEST ``bulk_cell`` usage event for the cell — so a regenerated cell
+    reports the price of the text that's actually there rather than the sum of
+    every discarded attempt. ``null`` means the cell was never AI-generated
+    (hand-typed, imported, or produced before usage tracking existed).
+
+    Note the event may carry ``cost_usd = None``: cost is computed at write time
+    from the pricing table, so a provider:model with no configured rate is
+    recorded unpriced — permanently, since rates are never applied
+    retroactively. The caller shows "not priced" rather than "$0" in that case.
+    """
+    from app.db.models import UsageEvent
+
+    await _get_table_or_404(db, table_id, actor, level="read")
+    await _verify_cell_in_table(db, table_id, row_id, column_id)
+
+    ev = (
+        await db.execute(
+            select(UsageEvent)
+            .where(
+                UsageEvent.source == "bulk_cell",
+                UsageEvent.source_ref["row_id"].astext == str(row_id),
+                UsageEvent.source_ref["column_id"].astext == str(column_id),
+            )
+            .order_by(UsageEvent.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if ev is None:
+        return None
+    return CellCostRead(
+        cost_usd=ev.cost_usd,
+        provider_code=ev.provider_code,
+        model=ev.model,
+        prompt_tokens=ev.prompt_tokens,
+        completion_tokens=ev.completion_tokens,
+        generated_at=ev.created_at,
+    )
 
 
 # ---------- public cell share links ----------

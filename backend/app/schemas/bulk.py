@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -97,6 +98,28 @@ class CellsBatchUpsert(BaseModel):
 
 
 # ----- Tables -----
+
+
+class CellCostRead(BaseModel):
+    """What generating one cell's CURRENT text cost.
+
+    Sourced from the latest ``source='bulk_cell'`` usage event for the cell, so
+    retries/overwrites don't inflate it — this is the price of the text that's
+    actually there, not everything ever spent on the slot.
+
+    ``cost_usd`` is None when the event exists but no pricing rate was
+    configured for that provider:model at generation time. Cost is frozen at
+    write time, so that stays None even if the rate is added later — the
+    frontend distinguishes "not priced" from "free" using ``model`` /
+    ``provider_code``, which are always present.
+    """
+
+    cost_usd: Decimal | None = None
+    provider_code: str
+    model: str
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    generated_at: datetime
 
 
 class CsvIngestResult(BaseModel):

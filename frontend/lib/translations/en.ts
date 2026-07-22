@@ -1678,6 +1678,11 @@ export const en = {
   "htmlViewer.openInWindow": "open in a new window",
   "htmlViewer.copyAction": "copy",
 
+  // ---------- per-text generation cost ----------
+  "cellCost.value": "{usd} to generate",
+  "cellCost.notPriced": "no rate for this model",
+  "cellCost.hint": "{model} · {inTok} in / {outTok} out tokens · {when}",
+
   // ---------- public share links ----------
   "share.button": "Share",
   "share.buttonShared": "Shared",

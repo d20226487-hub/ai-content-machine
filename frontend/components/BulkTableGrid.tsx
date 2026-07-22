@@ -1170,8 +1170,9 @@ export function BulkTableGrid({
                 }
               : undefined
           }
-          // Public share link — the modal gates it on the cell having content.
-          share={{
+          // Cell identity — enables the public share link and the per-text
+          // generation cost readout.
+          cell={{
             tableId: table.id,
             rowId: viewing.row.id,
             columnId: viewing.column.id,
