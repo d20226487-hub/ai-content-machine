@@ -95,7 +95,8 @@ services:
       --debounce-interval=0.5
       --debug-force-polling
       --
-      celery -A app.tasks.celery_app worker --beat --loglevel=info --concurrency=8
+      celery -A app.tasks.celery_app worker --beat --loglevel=info
+      --concurrency=${WORKER_CONCURRENCY:-8}
     healthcheck:
       # `inspect ping` round-trips a control message through the broker to a
       # live worker. Exits 0 only if at least one worker replies. Catches
