@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 
 import { useT } from "@/lib/i18n-context";
+import { useTheme } from "@/lib/theme-context";
 
 type Mode = "preview" | "raw";
 
@@ -51,6 +52,13 @@ function countWords(content: string): number {
 
 export function HtmlViewer({ content, title, height = "h-96", compact = false }: Props) {
   const { t } = useT();
+  // The iframe is a separate document in an opaque origin, so the app's `.dark`
+  // class can't reach it and `prefers-color-scheme` inside it tracks the OS —
+  // which is wrong whenever the user overrides the theme (app dark + OS light
+  // rendered a white preview). Drive its palette from the RESOLVED app theme
+  // instead; "system" still resolves to the OS, so public visitors are fine.
+  const { resolved } = useTheme();
+  const dark = resolved === "dark";
   const [mode, setMode] = useState<Mode>("preview");
   const oversize = content.length > MAX_INLINE_BYTES;
 
@@ -74,16 +82,13 @@ export function HtmlViewer({ content, title, height = "h-96", compact = false }:
       ? renderWpSelfClosingBlocks(content)
       : `<pre style="white-space:pre-wrap;word-wrap:break-word;font-family:ui-monospace,SFMono-Regular,monospace;font-size:13px;margin:0;">${escapeHtml(content)}</pre>`;
     return `<!doctype html><html><head><meta charset="utf-8"><style>
-      :root { color-scheme: light dark; }
+      :root { color-scheme: ${dark ? "dark" : "light"}; }
       html, body { margin: 0; padding: 16px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; line-height: 1.55; }
-      body { color: #111; background: #fff; }
-      @media (prefers-color-scheme: dark) {
-        body { color: #f5f5f5; background: #0a0a0a; }
-      }
+      body { color: ${dark ? "#f5f5f5" : "#111"}; background: ${dark ? "#0a0a0a" : "#fff"}; }
       img { max-width: 100%; height: auto; }
       pre, code { background: rgba(127,127,127,0.12); padding: 0.1em 0.3em; border-radius: 4px; }
       pre { padding: 12px; overflow: auto; }
-      a { color: #2563eb; }
+      a { color: ${dark ? "#60a5fa" : "#2563eb"}; }
       h1, h2, h3 { line-height: 1.25; }
       .wp-block-placeholder {
         margin: 10px 0;
@@ -100,10 +105,7 @@ export function HtmlViewer({ content, title, height = "h-96", compact = false }:
         padding: 4px 10px;
         text-transform: uppercase;
         letter-spacing: 0.04em;
-        color: #444;
-      }
-      @media (prefers-color-scheme: dark) {
-        .wp-block-placeholder__head { color: #d0d0d0; }
+        color: ${dark ? "#d0d0d0" : "#444"};
       }
       .wp-block-placeholder__data {
         margin: 0;
@@ -113,15 +115,13 @@ export function HtmlViewer({ content, title, height = "h-96", compact = false }:
         line-height: 1.45;
         white-space: pre-wrap;
         word-break: break-word;
-        color: #555;
+        color: ${dark ? "#a8a8a8" : "#555"};
         background: transparent;
         border-radius: 0;
       }
-      @media (prefers-color-scheme: dark) {
-        .wp-block-placeholder__data { color: #a8a8a8; }
-      }
     </style></head><body>${body}</body></html>`;
-  }, [content, looksLikeHtml, oversize]);
+    // `dark` is a dep: flipping the app theme must rebuild the iframe document.
+  }, [content, looksLikeHtml, oversize, dark]);
 
   function copy() {
     void navigator.clipboard.writeText(content);
@@ -142,11 +142,15 @@ export function HtmlViewer({ content, title, height = "h-96", compact = false }:
     const innerBody = /<\/?[a-z][\s\S]*>/i.test(content)
       ? renderWpSelfClosingBlocks(content)
       : `<pre style="white-space:pre-wrap;word-wrap:break-word;font-family:ui-monospace,SFMono-Regular,monospace;font-size:13px;margin:0;">${escapeHtml(content)}</pre>`;
+    // Same theme rule as the inline iframe — the popup used to be hard-coded
+    // white, so opening a preview from a dark app flashed a white page.
     const innerDoc =
       `<!doctype html><html><head><meta charset="utf-8"><base target="_blank">` +
-      `<style>html,body{margin:0;padding:16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;line-height:1.55;}` +
+      `<style>:root{color-scheme:${dark ? "dark" : "light"};}` +
+      `html,body{margin:0;padding:16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;line-height:1.55;}` +
+      `body{color:${dark ? "#f5f5f5" : "#111"};background:${dark ? "#0a0a0a" : "#fff"};}` +
       `img{max-width:100%;height:auto;}pre,code{background:rgba(127,127,127,0.12);padding:0.1em 0.3em;border-radius:4px;}` +
-      `pre{padding:12px;overflow:auto;}a{color:#2563eb;}</style>` +
+      `pre{padding:12px;overflow:auto;}a{color:${dark ? "#60a5fa" : "#2563eb"};}</style>` +
       `</head><body>${innerBody}</body></html>`;
 
     const innerBlob = new Blob([innerDoc], { type: "text/html" });
@@ -158,7 +162,7 @@ export function HtmlViewer({ content, title, height = "h-96", compact = false }:
     // localStorage.
     const wrapper =
       `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title ?? "Output")}</title>` +
-      `<style>html,body{margin:0;padding:0;height:100%;background:#fff;}iframe{display:block;width:100%;height:100%;border:0;}</style>` +
+      `<style>html,body{margin:0;padding:0;height:100%;background:${dark ? "#0a0a0a" : "#fff"};}iframe{display:block;width:100%;height:100%;border:0;}</style>` +
       `</head><body><iframe sandbox="allow-popups allow-popups-to-escape-sandbox" src="${innerUrl}"></iframe></body></html>`;
 
     const wrapperBlob = new Blob([wrapper], { type: "text/html" });
