@@ -1,10 +1,12 @@
+import secrets
 from collections.abc import Iterable
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.security import JWTError, decode_access_token
 from app.db.models import User
 from app.db.session import get_db
@@ -59,3 +61,30 @@ def require_role(*allowed: str):
 
 def require_any_of(roles: Iterable[str]):
     return require_role(*roles)
+
+
+async def require_ingest_api_key(
+    x_api_key: str | None = Header(default=None, alias="X-Api-Key"),
+    authorization: str | None = Header(default=None),
+) -> None:
+    """Static shared-secret auth for the machine-to-machine ingest endpoints.
+
+    Accepts the key via ``X-Api-Key: <key>`` or ``Authorization: Bearer <key>``.
+    Disabled (503) until ``CSV_INGEST_API_KEY`` is configured, so the feature is
+    off by default. Constant-time compare avoids leaking the key via timing.
+    """
+    expected = get_settings().CSV_INGEST_API_KEY
+    if not expected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="CSV ingest is not configured (set CSV_INGEST_API_KEY).",
+        )
+    provided = x_api_key
+    if not provided and authorization and authorization.lower().startswith("bearer "):
+        provided = authorization[7:].strip()
+    if not provided or not secrets.compare_digest(provided, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API key.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )

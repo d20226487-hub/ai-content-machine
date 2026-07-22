@@ -32,6 +32,23 @@ interface Props {
  * cookies, storage — anything that could harm the host app — even if the model
  * outputs malicious tags.
  */
+/**
+ * Words in the VISIBLE text. Script/style bodies, HTML comments (which is how
+ * WordPress block markers arrive) and the tags themselves are dropped first, so
+ * markup can't inflate the number — an entity collapses to a single character
+ * rather than splitting its word.
+ */
+function countWords(content: string): number {
+  if (!content) return 0;
+  const text = content
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&(?:[a-z]+|#\d+);/gi, "e");
+  return (text.match(/\S+/g) ?? []).length;
+}
+
 export function HtmlViewer({ content, title, height = "h-96", compact = false }: Props) {
   const { t } = useT();
   const [mode, setMode] = useState<Mode>("preview");
@@ -39,6 +56,13 @@ export function HtmlViewer({ content, title, height = "h-96", compact = false }:
 
   const looksLikeHtml = useMemo(
     () => (oversize ? false : /<\/?[a-z][\s\S]*>/i.test(content)),
+    [content, oversize],
+  );
+
+  // Skipped when oversize, for the same reason the srcDoc build is: several
+  // regex passes over a runaway multi-MB cell would jank the tab.
+  const wordCount = useMemo(
+    () => (oversize ? null : countWords(content)),
     [content, oversize],
   );
 
@@ -161,8 +185,10 @@ export function HtmlViewer({ content, title, height = "h-96", compact = false }:
        *  The mode tabs live on the LEFT next to the title so the primary
        *  view-mode action sits adjacent to what it controls. Copy / Open
        *  stay on the right since they're "send out" actions. */}
-      <header className="flex items-center justify-between border-b border-neutral-200 px-4 py-2 dark:border-neutral-800">
-        <div className="flex items-center gap-3">
+      {/* flex-wrap so the toolbar stacks instead of overflowing on a phone —
+          this viewer is also the public share page's reader. */}
+      <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-neutral-200 px-4 py-2 dark:border-neutral-800">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
           {!compact && (
             <div className="flex rounded-md border border-neutral-200 p-0.5 text-xs dark:border-neutral-700">
               <button
@@ -203,6 +229,15 @@ export function HtmlViewer({ content, title, height = "h-96", compact = false }:
           {looksLikeHtml && !compact && (
             <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
               HTML
+            </span>
+          )}
+          {/* Counts the visible text, not the markup — see countWords. */}
+          {wordCount != null && (
+            <span
+              title={t("htmlViewer.wordsHint")}
+              className="whitespace-nowrap text-xs tabular-nums text-neutral-500 dark:text-neutral-400"
+            >
+              {t("htmlViewer.words", { n: wordCount.toLocaleString() })}
             </span>
           )}
         </div>

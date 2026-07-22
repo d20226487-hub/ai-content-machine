@@ -10,6 +10,7 @@ from app.db.models.bulk_table import (
     BulkTableRow,
 )
 from app.db.models.category import Category
+from app.db.models.cell_share_link import CellShareLink
 from app.db.models.csv_export import CsvExportBlob, CsvExportJob
 from app.db.models.domain import Domain
 from app.db.models.domain_cache import DomainCacheRun, DomainCacheRunItem
@@ -54,6 +55,7 @@ __all__ = [
     "BulkTablePublishMapping",
     "BulkTableRow",
     "Category",
+    "CellShareLink",
     "CsvExportBlob",
     "CsvExportJob",
     "Domain",

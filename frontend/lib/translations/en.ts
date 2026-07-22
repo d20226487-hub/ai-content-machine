@@ -1671,10 +1671,29 @@ export const en = {
   "htmlViewer.title": "Output",
   "htmlViewer.preview": "Preview",
   "htmlViewer.raw": "Raw",
+  "htmlViewer.words": "{n} words",
+  "htmlViewer.wordsHint": "Words in the visible text (HTML tags and comments excluded)",
   "htmlViewer.openWindow": "Open in a new window",
   "htmlViewer.tooLarge": "Content too large for inline preview.",
   "htmlViewer.openInWindow": "open in a new window",
   "htmlViewer.copyAction": "copy",
+
+  // ---------- public share links ----------
+  "share.button": "Share",
+  "share.buttonShared": "Shared",
+  "share.buttonHint":
+    "Create a read-only link anyone can open — no account needed",
+  "share.panelHint":
+    "Anyone with this link can read this content until {date}. It always shows the current version.",
+  "share.revoke": "Revoke",
+  "share.confirmRevoke":
+    "Revoke this link? Anyone holding it loses access immediately.",
+  "share.pageEyebrow": "Shared preview",
+  "share.rowNumber": "· row {n}",
+  "share.notFound":
+    "This link is no longer available. It may have expired or been revoked.",
+  "share.loadFailed": "Couldn't load this preview. Please try again.",
+  "share.footerNote": "Read-only shared preview · link expires {date}",
 
   // user chip
   "userChip.tooltip": "Created by {name}",

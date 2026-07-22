@@ -98,6 +98,17 @@ class CellsBatchUpsert(BaseModel):
 
 # ----- Tables -----
 
+
+class CsvIngestResult(BaseModel):
+    """Result of a machine-to-machine CSV ingest — enough to locate the new
+    table (``/library/{table_id}``) without echoing every cell back."""
+
+    table_id: int
+    name: str
+    columns: int
+    rows: int
+
+
 class TableListItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

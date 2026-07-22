@@ -51,6 +51,20 @@ class Settings(BaseSettings):
     # 0 disables tracing entirely (errors still ship).
     SENTRY_TRACES_SAMPLE_RATE: float = 0.0
 
+    # ----- CSV ingest API (machine-to-machine) -----
+    # Static shared secret for POST /ingest/csv-tables (sent as `X-Api-Key` or
+    # `Authorization: Bearer`). When UNSET the endpoint is disabled (503), so
+    # the feature is off until an operator sets a key. Generate one with e.g.
+    #   python -c "import secrets; print(secrets.token_urlsafe(32))"
+    CSV_INGEST_API_KEY: str | None = None
+    # Optional user id that owns tables created via the ingest endpoint (so they
+    # show up for that user in the Library; admins/managers see them regardless).
+    # Unset → no owner (visible to admins/managers only). A missing/ deleted id
+    # falls back to no owner.
+    CSV_INGEST_OWNER_ID: int | None = None
+    # Optional Library folder id ingested tables land in. Unset / missing → root.
+    CSV_INGEST_FOLDER_ID: int | None = None
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]

@@ -130,6 +130,7 @@ from app.schemas.bulk import (
     TrashBulkIds,
 )
 from app.schemas.csv_export import CsvExportJobRead
+from app.schemas.share import ShareLinkRead
 from app.services import csv_export as csv_export_svc
 from app.services.bulk_csv import build_table_csv, stream_table_csv
 from app.tasks.csv_export import build_csv_export
@@ -1830,8 +1831,12 @@ async def import_csv(
     of timing out the proxy (502). Empty cells are skipped; fields beyond the
     header count are ignored. ``folder_id`` lands the new table in a folder
     (same as a blank create) — omit for the implicit root.
+
+    The parse + build is shared with the machine-to-machine ingest endpoint
+    (``app/services/csv_import.py``); this route only adds auth, folder
+    verification, and the paginated response.
     """
-    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from app.services.csv_import import CsvImportError, build_table_from_csv
 
     table_name = (name or "").strip()
     if not table_name:
@@ -1839,101 +1844,164 @@ async def import_csv(
     if folder_id is not None:
         await _verify_folder(db, folder_id)
 
-    # The delimiter <select> sends an escaped tab as the literal two chars "\t".
-    if delimiter in ("\\t", "\t"):
-        delimiter = "\t"
-    if len(delimiter) != 1:
-        raise HTTPException(
-            status_code=400, detail="Delimiter must be a single character."
-        )
-
-    raw = await file.read()
-    if not raw:
-        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
-    if len(raw) > _MAX_CSV_UPLOAD:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File too large (max {_MAX_CSV_UPLOAD // (1024 * 1024)} MB).",
-        )
     try:
-        text_data = raw.decode("utf-8-sig")  # tolerate a UTF-8 BOM
-    except UnicodeDecodeError:
-        try:
-            text_data = raw.decode("latin-1")
-        except UnicodeDecodeError:
-            raise HTTPException(status_code=400, detail="The file is not valid text.")
-
-    reader = csv.reader(io.StringIO(text_data), delimiter=delimiter)
-    rows = [r for r in reader]
-    if not rows:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CSV is empty")
-
-    if has_header:
-        headers = [h.strip() or f"Column {i + 1}" for i, h in enumerate(rows[0])]
-        data_rows = rows[1:]
-    else:
-        col_count = max(len(r) for r in rows)
-        headers = [f"Column {i + 1}" for i in range(col_count)]
-        data_rows = rows
-
-    t = BulkTable(name=table_name, created_by_id=actor.id, folder_id=folder_id)
-    db.add(t)
-    await db.flush()
-
-    column_objs: list[BulkTableColumn] = [
-        BulkTableColumn(table_id=t.id, position=i, name=h, kind="input")
-        for i, h in enumerate(headers)
-    ]
-    db.add_all(column_objs)
-    await db.flush()  # one round-trip populates every column id
-
-    if data_rows:
-        # Bulk-insert the rows in one statement, then read their ids back by
-        # position — versus a flush PER row (the old behaviour that timed out).
-        await db.execute(
-            pg_insert(BulkTableRow).values(
-                [{"table_id": t.id, "position": ri} for ri in range(len(data_rows))]
-            )
+        t = await build_table_from_csv(
+            db,
+            name=table_name,
+            raw=await file.read(),
+            delimiter=delimiter,
+            has_header=has_header,
+            folder_id=folder_id,
+            created_by_id=actor.id,
         )
-        id_by_pos = {
-            pos: rid
-            for rid, pos in (
-                await db.execute(
-                    select(BulkTableRow.id, BulkTableRow.position).where(
-                        BulkTableRow.table_id == t.id
-                    )
-                )
-            ).all()
-        }
-        col_ids = [c.id for c in column_objs]
-        cell_payload: list[dict] = []
-        for ri, row_values in enumerate(data_rows):
-            rid = id_by_pos[ri]
-            for ci, val in enumerate(row_values):
-                if ci >= len(col_ids):
-                    break  # ignore extra fields
-                value = (val or "").strip()
-                if value == "":
-                    continue
-                cell_payload.append(
-                    {
-                        "row_id": rid,
-                        "column_id": col_ids[ci],
-                        "value": value,
-                        "status": "manual",
-                    }
-                )
-        # Batch the cell inserts to bound statement + memory size.
-        for i in range(0, len(cell_payload), _CSV_CELL_BATCH):
-            await db.execute(
-                pg_insert(BulkTableCell).values(cell_payload[i : i + _CSV_CELL_BATCH])
-            )
+    except CsvImportError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-    await db.commit()
     fresh = await _get_owned_table_or_404(db, t.id, actor, full=True)
     # The client only needs the id to navigate (the table page re-fetches), so
     # return a light first page instead of echoing every cell back as JSON.
     return await _table_to_read_paginated(db, fresh, 1, 25)
+
+
+# ---------- public cell share links ----------
+
+
+async def _verify_cell_in_table(
+    db: AsyncSession, table_id: int, row_id: int, column_id: int
+) -> tuple[BulkTableRow, BulkTableColumn]:
+    """Load the row + column, asserting BOTH belong to ``table_id``.
+
+    Load-bearing for security: without it, a user with access to table A could
+    mint a PUBLIC link for a cell in table B just by passing its ids.
+    """
+    row = (
+        await db.execute(
+            select(BulkTableRow).where(
+                BulkTableRow.id == row_id, BulkTableRow.table_id == table_id
+            )
+        )
+    ).scalar_one_or_none()
+    col = (
+        await db.execute(
+            select(BulkTableColumn).where(
+                BulkTableColumn.id == column_id,
+                BulkTableColumn.table_id == table_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None or col is None:
+        raise HTTPException(status_code=404, detail="Cell not found in this table.")
+    return row, col
+
+
+async def _active_share_link(
+    db: AsyncSession, table_id: int, row_id: int, column_id: int
+) -> "CellShareLink | None":
+    from app.db.models import CellShareLink
+
+    now = datetime.now(timezone.utc)
+    return (
+        await db.execute(
+            select(CellShareLink)
+            .where(
+                CellShareLink.table_id == table_id,
+                CellShareLink.row_id == row_id,
+                CellShareLink.column_id == column_id,
+                CellShareLink.revoked_at.is_(None),
+                CellShareLink.expires_at > now,
+            )
+            .order_by(CellShareLink.id.desc())
+        )
+    ).scalars().first()
+
+
+@router.get(
+    "/tables/{table_id}/cells/{row_id}/{column_id}/share",
+    response_model=ShareLinkRead | None,
+)
+async def get_cell_share_link(
+    table_id: int,
+    row_id: int,
+    column_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The cell's active share link, or ``null`` when it isn't shared — lets the
+    cell editor show "already shared" without creating one as a side effect."""
+    await _get_table_or_404(db, table_id, actor, level="read")
+    await _verify_cell_in_table(db, table_id, row_id, column_id)
+    return await _active_share_link(db, table_id, row_id, column_id)
+
+
+@router.post(
+    "/tables/{table_id}/cells/{row_id}/{column_id}/share",
+    response_model=ShareLinkRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_cell_share_link(
+    table_id: int,
+    row_id: int,
+    column_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mint (or re-use) a public read-only link to this cell's preview.
+
+    Idempotent: while an active link exists, sharing again returns the SAME URL
+    rather than littering the table with tokens. Requires WRITE access — putting
+    content on a public URL is a publishing action, not a read.
+
+    The link is LIVE (renders the cell's current value) and expires after
+    ``SHARE_LINK_TTL_DAYS``; ``DELETE`` revokes it sooner.
+    """
+    import secrets
+    from datetime import timedelta
+
+    from app.db.models import CellShareLink
+    from app.db.models.cell_share_link import SHARE_LINK_TTL_DAYS
+
+    await _get_table_or_404(db, table_id, actor, level="write")
+    await _verify_cell_in_table(db, table_id, row_id, column_id)
+
+    existing = await _active_share_link(db, table_id, row_id, column_id)
+    if existing is not None:
+        return existing
+
+    link = CellShareLink(
+        token=secrets.token_urlsafe(32),
+        table_id=table_id,
+        row_id=row_id,
+        column_id=column_id,
+        created_by_id=actor.id,
+        expires_at=datetime.now(timezone.utc)
+        + timedelta(days=SHARE_LINK_TTL_DAYS),
+    )
+    db.add(link)
+    await db.commit()
+    await db.refresh(link)
+    return link
+
+
+@router.delete("/share-links/{link_id}", status_code=204, response_class=Response)
+async def revoke_cell_share_link(
+    link_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Revoke a share link immediately (the public URL 404s from here on).
+
+    Kept as a soft revoke rather than a delete so the row survives as an audit
+    trail of what was once public."""
+    from app.db.models import CellShareLink
+
+    link = await db.get(CellShareLink, link_id)
+    if link is None:
+        raise HTTPException(status_code=404, detail="Share link not found")
+    await _get_table_or_404(db, link.table_id, actor, level="write")
+    if link.revoked_at is None:
+        link.revoked_at = datetime.now(timezone.utc)
+        await db.commit()
+    return Response(status_code=204)
 
 
 async def _apply_cell_update(

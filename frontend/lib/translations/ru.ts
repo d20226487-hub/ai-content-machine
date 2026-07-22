@@ -1734,11 +1734,31 @@ export const ru: Record<keyof typeof en, string> = {
   "htmlViewer.title": "Вывод",
   "htmlViewer.preview": "Предпросмотр",
   "htmlViewer.raw": "Сырой текст",
+  "htmlViewer.words": "слов: {n}",
+  "htmlViewer.wordsHint": "Количество слов в видимом тексте (без HTML-тегов и комментариев)",
   "htmlViewer.openWindow": "Открыть в новом окне",
   "htmlViewer.tooLarge":
     "Содержимое слишком велико для встроенного предпросмотра.",
   "htmlViewer.openInWindow": "открыть в новом окне",
   "htmlViewer.copyAction": "скопировать",
+
+  // ---------- публичные ссылки для просмотра ----------
+  "share.button": "Поделиться",
+  "share.buttonShared": "Ссылка создана",
+  "share.buttonHint":
+    "Создать ссылку только для чтения — аккаунт не нужен",
+  "share.panelHint":
+    "Любой, у кого есть эта ссылка, сможет прочитать текст до {date}. Всегда показывается актуальная версия.",
+  "share.revoke": "Отозвать",
+  "share.confirmRevoke":
+    "Отозвать ссылку? Все, у кого она есть, сразу потеряют доступ.",
+  "share.pageEyebrow": "Общий просмотр",
+  "share.rowNumber": "· строка {n}",
+  "share.notFound":
+    "Ссылка больше недоступна — возможно, истёк срок действия или её отозвали.",
+  "share.loadFailed": "Не удалось загрузить просмотр. Попробуйте ещё раз.",
+  "share.footerNote":
+    "Просмотр только для чтения · ссылка действует до {date}",
 
   // user chip
   "userChip.tooltip": "Создал: {name}",

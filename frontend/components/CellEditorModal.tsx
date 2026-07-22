@@ -5,9 +5,17 @@ import { useEffect, useState } from "react";
 import { HtmlViewer } from "@/components/HtmlViewer";
 import { Modal } from "@/components/Modal";
 import { TranslationPanel } from "@/components/TranslationPanel";
+import { ApiError } from "@/lib/api";
 import { translateCell } from "@/lib/brain";
 import { useT } from "@/lib/i18n-context";
 import type { UnifiedSegment } from "@/lib/linkFix";
+import {
+  createCellShareLink,
+  getCellShareLink,
+  revokeCellShareLink,
+  shareUrl,
+  type ShareLink,
+} from "@/lib/share";
 import type { CellTranslation } from "@/lib/types";
 
 type Mode = "edit" | "preview" | "changes";
@@ -43,6 +51,10 @@ interface Props {
   defaultMode?: Mode;
   /** Provided only for output cells with a saved value. */
   translation?: TranslationContext;
+  /** Identifies the cell so it can be shared publicly. When set (and the cell
+   *  has content) a "Share" action appears, minting a read-only link anyone
+   *  can open without an ACM account. */
+  share?: { tableId: number; rowId: number; columnId: number };
   /** When set (cell corrected by an AI link-fix), enables a "Changes" view
    *  highlighting only the spans that changed. Opens there by default. */
   diff?: UnifiedSegment[];
@@ -55,6 +67,7 @@ export function CellEditorModal({
   onClose,
   defaultMode = "edit",
   translation,
+  share,
   diff,
 }: Props) {
   const { t } = useT();
@@ -64,10 +77,74 @@ export function CellEditorModal({
   const [saving, setSaving] = useState(false);
   const [translateOpen, setTranslateOpen] = useState(false);
 
+  // ---- public share link ----
+  const [shareLink, setShareLink] = useState<ShareLink | null>(null);
+  const [sharePanelOpen, setSharePanelOpen] = useState(false);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const [shareCopied, setShareCopied] = useState(false);
+
   useEffect(() => {
     setDraft(initialValue);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Look up an existing link on open so the button reads "Shared" rather than
+  // silently minting a second one.
+  useEffect(() => {
+    if (!share) return;
+    let cancelled = false;
+    getCellShareLink(share.tableId, share.rowId, share.columnId)
+      .then((l) => {
+        if (!cancelled) setShareLink(l);
+      })
+      .catch(() => {
+        /* non-fatal — the Share button still works */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [share?.tableId, share?.rowId, share?.columnId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function onShare() {
+    if (!share || shareBusy) return;
+    setSharePanelOpen(true);
+    if (shareLink) return; // already shared — the panel just reveals the URL
+    setShareBusy(true);
+    setShareError(null);
+    try {
+      setShareLink(
+        await createCellShareLink(share.tableId, share.rowId, share.columnId),
+      );
+    } catch (err) {
+      setShareError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  async function onRevokeShare() {
+    if (!shareLink || shareBusy) return;
+    if (!window.confirm(t("share.confirmRevoke"))) return;
+    setShareBusy(true);
+    setShareError(null);
+    try {
+      await revokeCellShareLink(shareLink.id);
+      setShareLink(null);
+      setSharePanelOpen(false);
+    } catch (err) {
+      setShareError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  function copyShareUrl() {
+    if (!shareLink) return;
+    void navigator.clipboard?.writeText(shareUrl(shareLink.token));
+    setShareCopied(true);
+    setTimeout(() => setShareCopied(false), 1500);
+  }
 
   const dirty = draft !== initialValue;
   // Translation is a read-side action — it doesn't make sense to offer
@@ -76,6 +153,8 @@ export function CellEditorModal({
   // typing into the textarea.
   const canTranslate =
     !!translation && draft.trim().length > 0 && mode === "preview";
+  // Sharing an empty cell would just publish a blank page.
+  const canShare = !!share && draft.trim().length > 0;
 
   async function commit() {
     if (!dirty) {
@@ -168,7 +247,18 @@ export function CellEditorModal({
           </div>
         )}
         {!translateOpen && (
-          <div className="col-span-3 flex shrink-0 items-center justify-end sm:col-span-1">
+          <div className="col-span-3 flex shrink-0 flex-wrap items-center justify-end gap-2 sm:col-span-1">
+            {canShare && (
+              <button
+                type="button"
+                onClick={() => void onShare()}
+                disabled={shareBusy}
+                title={t("share.buttonHint")}
+                className="rounded-md border border-neutral-300 px-3 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-60 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+              >
+                {shareLink ? t("share.buttonShared") : t("share.button")}
+              </button>
+            )}
             {canTranslate && (
               <button
                 type="button"
@@ -182,6 +272,51 @@ export function CellEditorModal({
           </div>
         )}
       </div>
+
+      {/* Public share panel. The URL is the only credential, so the copy is
+          explicit about what it means — and the expiry is always visible. */}
+      {sharePanelOpen && canShare && (
+        <div className="mt-3 rounded-md border border-blue-200 bg-blue-50 p-3 text-xs dark:border-blue-900/40 dark:bg-blue-950/20">
+          {shareError ? (
+            <p className="text-red-700 dark:text-red-300">{shareError}</p>
+          ) : !shareLink ? (
+            <p className="text-blue-900 dark:text-blue-200">
+              {t("common.loading")}
+            </p>
+          ) : (
+            <>
+              <p className="mb-2 text-blue-900 dark:text-blue-200">
+                {t("share.panelHint", {
+                  date: new Date(shareLink.expires_at).toLocaleDateString(),
+                })}
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  readOnly
+                  value={shareUrl(shareLink.token)}
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="min-w-0 flex-1 rounded border border-neutral-300 bg-white px-2 py-1 font-mono text-[11px] text-neutral-800 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
+                />
+                <button
+                  type="button"
+                  onClick={copyShareUrl}
+                  className="rounded-md bg-neutral-900 px-3 py-1 font-medium text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900"
+                >
+                  {shareCopied ? t("common.copied") : t("common.copy")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onRevokeShare()}
+                  disabled={shareBusy}
+                  className="rounded-md border border-red-300 px-3 py-1 font-medium text-red-700 hover:bg-red-50 disabled:opacity-60 dark:border-red-800/60 dark:text-red-400 dark:hover:bg-red-950/40"
+                >
+                  {t("share.revoke")}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       <div
         className={

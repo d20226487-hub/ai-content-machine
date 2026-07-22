@@ -20,12 +20,14 @@ from app.api import (
     generate,
     generations as generations_router,
     health,
+    ingest as ingest_router,
     library,
     prompts,
     publish as publish_router,
     publish_bulk as publish_bulk_router,
     publish_languages as publish_languages_router,
     settings as settings_router,
+    share as share_router,
     tags,
     users as users_module,
 )
@@ -104,6 +106,9 @@ app.include_router(prompts.router)
 app.include_router(generate.router)
 app.include_router(generations_router.router)
 app.include_router(library.router)
+app.include_router(ingest_router.router)
+# Public + unauthenticated on purpose — see app/api/share.py.
+app.include_router(share_router.router)
 # Autotool connection config (admin + manager) — backs the /publish Autotool tab.
 app.include_router(autotool_config_router.router)
 app.include_router(errors_router.router)

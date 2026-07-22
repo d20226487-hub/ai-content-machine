@@ -1170,6 +1170,12 @@ export function BulkTableGrid({
                 }
               : undefined
           }
+          // Public share link — the modal gates it on the cell having content.
+          share={{
+            tableId: table.id,
+            rowId: viewing.row.id,
+            columnId: viewing.column.id,
+          }}
           onClose={() => setViewing(null)}
           onSave={async (next) => {
             // Push directly through the same upsert path the inline
