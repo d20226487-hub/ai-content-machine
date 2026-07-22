@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import { BackupCard } from "@/components/BackupCard";
 import { BrainCard } from "@/components/BrainCard";
+import { GenerationDefaultsCard } from "@/components/GenerationDefaultsCard";
 import { PricingCard } from "@/components/PricingCard";
 import { TrashRetentionCard } from "@/components/TrashRetentionCard";
 import { ProviderCard } from "@/components/ProviderCard";
@@ -17,6 +18,7 @@ import type { Provider } from "@/lib/types";
 
 type TabKey =
   | "providers"
+  | "generation"
   | "publishing"
   | "pricing"
   | "backups"
@@ -25,6 +27,7 @@ type TabKey =
 
 const TABS: { key: TabKey; labelKey: TranslationKey }[] = [
   { key: "providers", labelKey: "settings.tab.providers" },
+  { key: "generation", labelKey: "settings.tab.generation" },
   { key: "publishing", labelKey: "settings.tab.publishing" },
   { key: "pricing", labelKey: "settings.tab.pricing" },
   { key: "backups", labelKey: "settings.tab.backups" },
@@ -150,6 +153,7 @@ export default function SettingsPage() {
           </>
         )}
 
+        {tab === "generation" && <GenerationDefaultsCard />}
         {tab === "publishing" && <PublishDefaultsCard />}
         {tab === "pricing" && <PricingCard />}
         {tab === "backups" && <BackupCard />}

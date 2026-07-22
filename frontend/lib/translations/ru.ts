@@ -223,6 +223,7 @@ export const ru: Record<keyof typeof en, string> = {
   "settings.loadingProviders": "Загрузка провайдеров…",
   "settings.tabsAria": "Разделы настроек",
   "settings.tab.providers": "Провайдеры",
+  "settings.tab.generation": "Генерация",
   "settings.tab.publishing": "Публикация",
   "settings.tab.pricing": "Цены",
   "settings.tab.backups": "Бэкапы",
@@ -312,6 +313,18 @@ export const ru: Record<keyof typeof en, string> = {
   "settings.backoffJitter": "Случайный разброс отката (мс)",
   "settings.respectRetryAfter": "Учитывать заголовок Retry-After",
   "settings.saveFailed": "Не удалось сохранить",
+  "settings.generationDefaults": "Параметры генерации по умолчанию",
+  "settings.generationDefaultsHint":
+    "Применяются ко всем генерациям, где не задано иное. Отдельная колонка может задать свой лимит в редакторе колонки.",
+  "settings.maxOutputTokens": "Максимум токенов ответа",
+  "settings.maxOutputTokensHint":
+    "Жёсткий предел длины ответа модели. Слишком маленькое значение обрезает длинные статьи на середине фразы — примерно 1000 токенов на 700 слов HTML.",
+  "settings.thinkingBudgetEnable": "Управлять бюджетом рассуждений",
+  "settings.thinkingBudgetHint":
+    "Некоторые модели (Gemini 2.5, Claude Sonnet 5) тратят часть лимита на внутренние рассуждения перед ответом, из-за чего ответ каждый раз укорачивается по-разному. Оставьте выключенным, чтобы использовать поведение модели по умолчанию.",
+  "settings.thinkingBudget": "Токены на рассуждения",
+  "settings.thinkingBudgetZeroHint":
+    "0 отключает рассуждения — весь лимит уходит на ответ.",
   "settings.publishDefaults": "Параметры публикации по умолчанию",
   "settings.publishDefaultsHint":
     "Глобальные лимиты запросов, применяемые ко всем доменам, если у домена нет собственного значения (задаётся в Редактирование домена → Лимиты запросов).",
@@ -800,6 +813,9 @@ export const ru: Record<keyof typeof en, string> = {
   "bulkGrid.openViewerHint":
     "Двойной щелчок откроет средство просмотра",
   "bulkGrid.openViewer": "Открыть средство просмотра",
+  "bulkGrid.truncated": "обрезано",
+  "bulkGrid.truncatedHint":
+    "Модель достигла лимита токенов ответа, поэтому текст неполный. Увеличьте «Максимум токенов ответа» для этой колонки (или в Настройки → Генерация) и сгенерируйте заново.",
   "bulkGrid.outputPlaceholder": "(вывод ИИ)",
   "bulkGrid.generating": "Генерация…",
   "bulkGrid.failedClickToSee":
@@ -865,6 +881,10 @@ export const ru: Record<keyof typeof en, string> = {
   "colCfg.useProviderDefault": "(использовать модель провайдера)",
   "colCfg.inheritHint":
     "Оставьте оба поля пустыми, чтобы использовать первый включённый провайдер из Настроек.",
+  "colCfg.maxOutputTokens": "Максимум токенов ответа",
+  "colCfg.maxOutputTokensPlaceholder": "Наследовать общее значение",
+  "colCfg.maxOutputTokensHint":
+    "Предел длины ответа для этой колонки. Увеличьте для полных статей, уменьшите для заголовков и мета-описаний. Пусто — берётся из Настройки → Генерация.",
   "colCfg.preview": "Предпросмотр",
   "colCfg.previewLoading": "(загрузка или нечего показать)",
   "colCfg.unfilledVarsForRow":
@@ -898,6 +918,9 @@ export const ru: Record<keyof typeof en, string> = {
   "queue.onlyFailed": "Только с ошибкой",
   "queue.onlyFailedHint":
     "Повторяет ячейки, в которых последний запуск завершился ошибкой.",
+  "queue.onlyTruncated": "Только обрезанные ячейки",
+  "queue.onlyTruncatedHint":
+    "Повторяет ячейки, которые достигли лимита токенов и вернулись неполными. Сначала увеличьте «Максимум токенов ответа», иначе они обрежутся снова.",
   "queue.allCells": "Все ячейки (перезаписать)",
   "queue.allCellsHint":
     "Запускает заново для каждой выбранной ячейки, заменяя существующие значения.",

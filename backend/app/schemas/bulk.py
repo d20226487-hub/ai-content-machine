@@ -22,6 +22,7 @@ class ColumnRead(BaseModel):
     variable_map: dict[str, int]
     provider_code: str | None
     model: str | None
+    max_output_tokens: int | None = None
 
 
 class ColumnCreate(BaseModel):
@@ -33,6 +34,8 @@ class ColumnCreate(BaseModel):
     variable_map: dict[str, int] = Field(default_factory=dict)
     provider_code: str | None = None
     model: str | None = None
+    # null = use the global default from Settings → Generation.
+    max_output_tokens: int | None = Field(default=None, ge=1, le=200000)
 
 
 class ColumnUpdate(BaseModel):
@@ -44,6 +47,7 @@ class ColumnUpdate(BaseModel):
     variable_map: dict[str, int] | None = None
     provider_code: str | None = None
     model: str | None = None
+    max_output_tokens: int | None = Field(default=None, ge=1, le=200000)
 
 
 # ----- Rows -----
@@ -78,6 +82,11 @@ class CellRead(BaseModel):
     model_used: str | None
     generated_at: datetime | None
     updated_at: datetime
+    # Raw provider stop reason for the last generation, and the derived
+    # "was this cut off at the token ceiling?" flag. Computed server-side so
+    # the client doesn't have to know each provider's spelling of it.
+    finish_reason: str | None = None
+    truncated: bool = False
     # Lowercase language tag → CellTranslation. Absent when no
     # translation has ever been requested for this cell.
     translations: dict[str, CellTranslation] | None = None
@@ -305,9 +314,12 @@ class GenerateRequest(BaseModel):
     If `column_ids` is omitted, every output column with a prompt is targeted.
 
     `mode` decides which cells in the row×column matrix are eligible:
-      * 'empty'  — cells with no existing 'generated' value (default)
-      * 'failed' — only cells whose status is 'failed'
-      * 'all'    — every cell, overwriting whatever was there
+      * 'empty'     — cells with no existing 'generated' value (default)
+      * 'failed'    — only cells whose status is 'failed'
+      * 'truncated' — only cells cut off at the output-token ceiling. These
+        are status='generated' (the partial is kept), so no other mode but
+        'all' would catch them, and 'all' would redo the complete ones too.
+      * 'all'       — every cell, overwriting whatever was there
 
     The legacy `overwrite=True` flag is still accepted; it now means mode='all'.
     """
@@ -318,7 +330,7 @@ class GenerateRequest(BaseModel):
     # when row_ids is provided.
     row_range: RowRange | None = None
     column_ids: list[int] | None = None
-    mode: Literal["empty", "failed", "all"] = "empty"
+    mode: Literal["empty", "failed", "truncated", "all"] = "empty"
     # Deprecated alias kept for back-compat. Prefer `mode`.
     overwrite: bool = False
 

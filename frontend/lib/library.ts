@@ -246,6 +246,8 @@ export interface UpdateColumnPayload {
   variable_map?: Record<string, number>;
   provider_code?: string | null;
   model?: string | null;
+  /** Null clears the override so the column inherits the global default. */
+  max_output_tokens?: number | null;
 }
 
 export function updateColumn(
@@ -305,7 +307,10 @@ export function upsertCells(
 
 // ----- Generation -----
 
-export type GenerateMode = "empty" | "failed" | "all";
+/** "truncated" targets cells cut off at the output-token ceiling. They're
+ *  status="generated" (the partial is kept), so only "all" would otherwise
+ *  catch them — and that would redo the complete cells too. */
+export type GenerateMode = "empty" | "failed" | "truncated" | "all";
 
 export interface RowRange {
   /** 1-based inclusive ordinal positions (the grid's visible "#" numbers). */

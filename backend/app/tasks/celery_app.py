@@ -96,6 +96,16 @@ celery_app.conf.update(
             "task": "publish.watchdog",
             "schedule": 120.0,
         },
+        # Same for bulk generation: lost broker messages strand cells at
+        # 'generating' (which no generate mode can recover, since they're
+        # neither 'failed' nor 'empty') and the run never finalizes. Keys off
+        # run-level progress, not per-cell age — cells are marked 'generating'
+        # at enqueue, so on a large run the tail sits queued for hours by
+        # design.
+        "bulk-generation-watchdog": {
+            "task": "bulk_generation.watchdog",
+            "schedule": 120.0,
+        },
         # Recover Autotool send runs: fail items orphaned by a dead worker
         # (stuck 'sending') and re-enqueue 'queued' items left by lost messages
         # in a stalled run. Only touches runs with no recent activity.

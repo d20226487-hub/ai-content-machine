@@ -993,6 +993,18 @@ export function BulkTableGrid({
                           >
                             ↗
                           </button>
+                          {/* The model hit the output ceiling, so this text is
+                              a partial. Without this the cell looks identical
+                              to a complete one — which is exactly how silent
+                              truncation went unnoticed. */}
+                          {cellRef?.truncated && (
+                            <span
+                              title={t("bulkGrid.truncatedHint")}
+                              className="pointer-events-none absolute bottom-0.5 right-1 z-10 rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-800 dark:bg-amber-900/60 dark:text-amber-200"
+                            >
+                              {t("bulkGrid.truncated")}
+                            </span>
+                          )}
                         </>
                       )}
                     </td>

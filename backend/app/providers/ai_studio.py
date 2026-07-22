@@ -12,6 +12,7 @@ from app.providers.base import (
     GenerationParams,
     GenerationResult,
     ProviderError,
+    gemini_completion_tokens,
 )
 
 _BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
@@ -43,6 +44,14 @@ class AIStudioProvider(BaseProvider):
                 gen_config["maxOutputTokens"] = params.max_output_tokens
             if params.top_p is not None:
                 gen_config["topP"] = params.top_p
+            # On Gemini 2.5, thinking tokens are billed against maxOutputTokens,
+            # so leaving thinking dynamic silently eats the answer's allowance.
+            # Only emitted when explicitly configured — never guessed — because
+            # the thinking knobs differ across Gemini generations.
+            if params.thinking_budget is not None:
+                gen_config["thinkingConfig"] = {
+                    "thinkingBudget": params.thinking_budget
+                }
             if params.system:
                 body["systemInstruction"] = {"parts": [{"text": params.system}]}
         if gen_config:
@@ -80,7 +89,9 @@ class AIStudioProvider(BaseProvider):
             finish_reason=finish,
             raw=data,
             prompt_tokens=_safe_int(usage.get("promptTokenCount")),
-            completion_tokens=_safe_int(usage.get("candidatesTokenCount")),
+            # Includes thinking tokens — Gemini reports them separately from
+            # candidatesTokenCount but bills them at the output rate.
+            completion_tokens=gemini_completion_tokens(usage),
         )
 
 

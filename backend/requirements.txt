@@ -13,6 +13,11 @@ cryptography==43.0.3
 celery==5.4.0
 redis==5.2.0
 httpx==0.28.0
+# Claude models on Vertex (publishers/anthropic) speak the Anthropic Messages
+# API, not Gemini's generateContent — the SDK's AsyncAnthropicVertex client
+# handles that shape. The [vertex] extra pulls in google-auth, which the
+# Gemini service-account path already relies on.
+anthropic[vertex]==0.117.1
 python-multipart==0.0.18
 boto3==1.35.92
 sentry-sdk[fastapi,celery]==2.18.0

@@ -28,6 +28,9 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
+# Truncation semantics live with the provider contract (no db deps), so
+# importing it here can't cycle back through the services layer.
+from app.providers.base import is_truncated as _is_truncated
 
 
 class BulkTableFolder(Base, TimestampMixin):
@@ -143,6 +146,10 @@ class BulkTableColumn(Base):
     # Per-column overrides; null = fall back to first enabled provider / its default model.
     provider_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
     model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # Output-token ceiling for this column's generations; null = fall back to
+    # app_settings['generation_default_max_output_tokens']. Long-form columns
+    # (full articles) need a bigger budget than short ones (titles, metas).
+    max_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -184,6 +191,19 @@ class BulkTableCell(Base):
     # 'empty' | 'manual' (user-typed) | 'generating' | 'generated' | 'failed'
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="empty")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Raw provider stop reason for the last generation ("STOP" / "MAX_TOKENS" /
+    # "length" / "max_tokens" / "SAFETY" ...). A truncation value means the
+    # text is a partial — see providers.base.is_truncated.
+    finish_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+    @property
+    def truncated(self) -> bool:
+        """Was this cell's text cut off at the output-token ceiling?
+
+        Read by CellRead (from_attributes) so the client gets one boolean
+        instead of having to know each provider's spelling of the reason.
+        """
+        return _is_truncated(self.finish_reason)
     model_used: Mapped[str | None] = mapped_column(String(120), nullable=True)
     generated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

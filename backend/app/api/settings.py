@@ -22,6 +22,12 @@ from app.schemas.provider import (
 # the row to the client; kept inside the encrypted blob server-side.
 _SECRET_EXTRA_KEYS: frozenset[str] = frozenset({"service_account_json"})
 from app.schemas.usage import PricingTableRow, PricingTableUpdate
+from app.schemas.generation import GenerationDefaults
+from app.services.generation_limits import (
+    GenerationLimits,
+    load_generation_limits,
+    update_generation_limits,
+)
 from app.services.pricing import load_pricing, save_pricing
 from app.services.provider_cache import invalidate as invalidate_provider_cache
 from app.db.models import User
@@ -285,3 +291,35 @@ async def put_pricing(
     rows_dict = [r.model_dump() for r in payload.rates]
     await save_pricing(db, rows_dict, actor_id=actor.id)
     return await get_pricing(db)
+
+
+@router.get("/generation", response_model=GenerationDefaults)
+async def get_generation_defaults(
+    db: AsyncSession = Depends(get_db),
+) -> GenerationDefaults:
+    """Global output-token ceiling + reasoning budget for AI generation."""
+    g = await load_generation_limits(db)
+    return GenerationDefaults(
+        max_output_tokens=g.max_output_tokens,
+        thinking_budget=g.thinking_budget,
+    )
+
+
+@router.put("/generation", response_model=GenerationDefaults)
+async def set_generation_defaults(
+    payload: GenerationDefaults,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> GenerationDefaults:
+    saved = await update_generation_limits(
+        db,
+        GenerationLimits(
+            max_output_tokens=payload.max_output_tokens,
+            thinking_budget=payload.thinking_budget,
+        ),
+        updated_by_id=actor.id,
+    )
+    return GenerationDefaults(
+        max_output_tokens=saved.max_output_tokens,
+        thinking_budget=saved.thinking_budget,
+    )

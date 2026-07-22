@@ -24,6 +24,11 @@ from app.providers.base import GenerationParams, ProviderError
 from app.providers.registry import ProviderNotConfigured, get_provider
 from app.services.ai_assist import first_enabled_provider_code
 from app.services.error_log import log_error
+from app.services.generation_limits import (
+    is_truncated,
+    load_generation_limits,
+    resolve_max_output_tokens,
+)
 from app.services.prompts import render_template
 
 
@@ -103,6 +108,9 @@ async def mark_cell_generating(
     cell = await _ensure_cell(db, row_id, column_id)
     cell.status = "generating"
     cell.error = None
+    # Clear the previous run's stop reason so a retry doesn't keep showing a
+    # stale "truncated" badge while it regenerates.
+    cell.finish_reason = None
     await db.commit()
     return cell.id
 
@@ -261,6 +269,9 @@ async def generate_one_cell(
 
     chosen_model = override_model or col.model or provider_row.default_model
 
+    # Cached read; the per-column override is applied at the call site below.
+    gen_limits = await load_generation_limits(db)
+
     from app.services.rate_limit import get_rate_limiter
     from app.services.retry import call_with_retry
 
@@ -276,7 +287,13 @@ async def generate_one_cell(
                 provider,
                 prompt=rendered,
                 model=chosen_model,
-                params=GenerationParams(temperature=0.7, max_output_tokens=2048),
+                params=GenerationParams(
+                    temperature=0.7,
+                    max_output_tokens=resolve_max_output_tokens(
+                        col.max_output_tokens, gen_limits
+                    ),
+                    thinking_budget=gen_limits.thinking_budget,
+                ),
                 retry_max_attempts=provider_row.retry_max_attempts,
                 backoff_base_ms=provider_row.backoff_base_ms,
                 backoff_jitter_ms=provider_row.backoff_jitter_ms,
@@ -321,6 +338,11 @@ async def generate_one_cell(
     cell.value = result.text
     cell.status = "generated"
     cell.error = None
+    # Record WHY the model stopped. Discarding this is what made hitting the
+    # token ceiling invisible: a cell cut off mid-article looked exactly like a
+    # complete one. A truncated reply is still a usable partial, so it keeps
+    # the "generated" status — the UI badges it off this field instead.
+    cell.finish_reason = (result.finish_reason or None)
     cell.model_used = result.model
     cell.generated_at = datetime.now(timezone.utc)
     # A fresh generation invalidates any prior translations of this cell —
@@ -364,6 +386,7 @@ async def _write_failure(
     cell = await _ensure_cell(db, row_id, column_id)
     cell.status = "failed"
     cell.error = error[:2000]
+    cell.finish_reason = None
     await db.commit()
 
 

@@ -1,6 +1,20 @@
 from pydantic import BaseModel, Field
 
 
+class GenerationDefaults(BaseModel):
+    """Global generation limits (Settings → Generation).
+
+    ``max_output_tokens`` is the ceiling every bulk cell inherits unless its
+    column overrides it. ``thinking_budget`` is the reasoning allowance for
+    models that bill thinking against that same ceiling (Gemini 2.5, Claude
+    Sonnet 5): null sends nothing and keeps the model default, 0 turns
+    thinking off so the whole budget goes to the answer.
+    """
+
+    max_output_tokens: int = Field(ge=1, le=200000)
+    thinking_budget: int | None = Field(default=None, ge=0, le=200000)
+
+
 class GenerateSingleRequest(BaseModel):
     prompt_id: int
     # Optional version_number; defaults to the prompt's current version.

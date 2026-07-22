@@ -80,3 +80,155 @@ async def _run(
             )
     finally:
         await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Watchdog
+# ---------------------------------------------------------------------------
+
+# How long a run may show zero completions before we call it stalled.
+#
+# Deliberately generous. The naive signal — "cell has been 'generating' for a
+# while" — is WRONG here: the enqueue path marks all N cells 'generating' in a
+# single upsert before any work starts, so on a 1500-cell run the last cell
+# legitimately sits queued for hours behind the other 1499. What actually
+# indicates a stall is that NOTHING in the run has completed recently, which
+# stays true regardless of queue depth. A slow provider under tight rate limits
+# still lands a completion every few seconds, so 20 minutes of total silence
+# means the work is genuinely gone, not slow.
+_NO_PROGRESS_MINUTES = 20
+
+_STALL_ERROR = (
+    "Generation stopped before this cell ran (recovered by the watchdog). "
+    "Retry with \"Only failed cells\"."
+)
+
+
+@celery_app.task(name="bulk_generation.watchdog")
+def bulk_generation_watchdog() -> dict:
+    """Recover bulk-generation runs stuck in 'running'.
+
+    Every other long-running fan-out in the app has one of these; generation
+    was the exception. Two failure shapes are handled:
+
+      (a) Broker messages went missing (Redis restarted without persistence,
+          visibility timeout expired). Cells sit at 'generating' forever, the
+          counters never reach total, and the run never finalizes — no
+          generate mode can pick them up either, since they're neither
+          'failed' nor 'empty'.
+      (b) A worker wrote the cell but died before bumping the counter, so the
+          run is permanently a few short of its total with every cell settled.
+
+    Orphans are marked 'failed' rather than re-enqueued on purpose: a
+    redelivered message may still be in flight, and re-enqueueing would pay
+    for the same LLM call twice. Failed cells are one click from a retry.
+    """
+    asyncio.run(_watchdog())
+    return {"ok": True}
+
+
+async def _watchdog() -> None:
+    from sqlalchemy import select
+
+    from app.db.models import BulkGenerationRun
+
+    settings = get_settings()
+    engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
+    Session: async_sessionmaker[AsyncSession] = async_sessionmaker(
+        engine, expire_on_commit=False, class_=AsyncSession
+    )
+    try:
+        async with Session() as db:
+            run_ids = (
+                (
+                    await db.execute(
+                        select(BulkGenerationRun.id).where(
+                            BulkGenerationRun.status == "running"
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for rid in run_ids:
+                try:
+                    await _reconcile_run(db, rid)
+                except Exception:  # noqa: BLE001 — one bad run mustn't stop the rest
+                    await db.rollback()
+    finally:
+        await engine.dispose()
+
+
+async def _reconcile_run(db: AsyncSession, run_id: int) -> None:
+    """Unstick one 'running' generation run. See ``bulk_generation_watchdog``."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import func, select, text, update
+
+    from app.db.models import BulkGenerationRun, BulkTableCell
+
+    run = await db.get(BulkGenerationRun, run_id)
+    if run is None or run.status != "running":
+        return
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=_NO_PROGRESS_MINUTES)
+
+    # Newest activity anywhere in this run. Every settled cell stamps
+    # updated_at, so this advances continuously while the queue is healthy.
+    last_progress = (
+        await db.execute(
+            select(func.max(BulkTableCell.updated_at)).where(
+                BulkTableCell.generation_run_id == run_id
+            )
+        )
+    ).scalar_one_or_none()
+
+    # started_at covers a run whose cells have never been touched at all.
+    reference = max(
+        [t for t in (last_progress, run.started_at, run.created_at) if t is not None]
+    )
+    if reference > cutoff:
+        return  # progressing normally — leave it alone
+
+    # Claim the stragglers with a status-guarded UPDATE so a worker that comes
+    # back to life mid-tick can't be double-counted: only rows we actually flip
+    # 'generating'->'failed' are counted into the bump.
+    claimed = (
+        (
+            await db.execute(
+                update(BulkTableCell)
+                .where(
+                    BulkTableCell.generation_run_id == run_id,
+                    BulkTableCell.status == "generating",
+                )
+                .values(status="failed", error=_STALL_ERROR, finish_reason=None)
+                .returning(BulkTableCell.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    if claimed:
+        await db.execute(
+            text(
+                "UPDATE bulk_generation_runs SET failed = failed + :n WHERE id = :id"
+            ),
+            {"n": len(claimed), "id": run_id},
+        )
+
+    # Settle the run. Mirrors _bump_run_counter's terminal flip, including
+    # case (b) where every cell was already accounted for but the final
+    # counter bump was lost.
+    await db.execute(
+        text(
+            "UPDATE bulk_generation_runs "
+            "SET status = 'done', finished_at = NOW() "
+            "WHERE id = :id "
+            "  AND status = 'running' "
+            "  AND done + failed + skipped >= total"
+        ),
+        {"id": run_id},
+    )
+    await db.commit()

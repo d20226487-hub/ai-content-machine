@@ -215,6 +215,7 @@ export const en = {
   "settings.loadingProviders": "Loading providers…",
   "settings.tabsAria": "Settings sections",
   "settings.tab.providers": "Providers",
+  "settings.tab.generation": "Generation",
   "settings.tab.publishing": "Publishing",
   "settings.tab.pricing": "Pricing",
   "settings.tab.backups": "Backups",
@@ -301,6 +302,18 @@ export const en = {
   "settings.backoffJitter": "Backoff jitter (ms)",
   "settings.respectRetryAfter": "Respect Retry-After header",
   "settings.saveFailed": "Failed to save",
+  "settings.generationDefaults": "Generation defaults",
+  "settings.generationDefaultsHint":
+    "Applies to every AI generation that doesn't override it. A column can set its own ceiling in the column editor.",
+  "settings.maxOutputTokens": "Max output tokens",
+  "settings.maxOutputTokensHint":
+    "Hard ceiling on the model's reply. Too low and long articles are cut off mid-sentence — roughly 1000 tokens per 700 words of HTML.",
+  "settings.thinkingBudgetEnable": "Control the reasoning budget",
+  "settings.thinkingBudgetHint":
+    "Some models (Gemini 2.5, Claude Sonnet 5) spend part of the output ceiling on internal reasoning before answering, which shortens the reply by a different amount each run. Leave off to keep each model's own default.",
+  "settings.thinkingBudget": "Reasoning tokens",
+  "settings.thinkingBudgetZeroHint":
+    "0 turns reasoning off so the whole ceiling goes to the answer.",
   "settings.publishDefaults": "Publish defaults",
   "settings.publishDefaultsHint":
     "Global rate limits applied to every domain unless that domain has its own override (set in Edit domain → Rate limits).",
@@ -775,6 +788,9 @@ export const en = {
   "bulkGrid.confirmDeleteRow": "Delete this row?",
   "bulkGrid.openViewerHint": "Double-click to open viewer",
   "bulkGrid.openViewer": "Open viewer",
+  "bulkGrid.truncated": "cut off",
+  "bulkGrid.truncatedHint":
+    "The model hit its output-token limit, so this text is incomplete. Raise Max output tokens for this column (or in Settings → Generation) and regenerate.",
   "bulkGrid.outputPlaceholder": "(AI output)",
   "bulkGrid.generating": "Generating…",
   "bulkGrid.failedClickToSee": "✗ Failed — click to see error",
@@ -835,6 +851,10 @@ export const en = {
   "colCfg.useProviderDefault": "(use provider default)",
   "colCfg.inheritHint":
     "Leave both blank to inherit the first enabled provider in Settings.",
+  "colCfg.maxOutputTokens": "Max output tokens",
+  "colCfg.maxOutputTokensPlaceholder": "Inherit global default",
+  "colCfg.maxOutputTokensHint":
+    "Ceiling on the reply for this column. Raise it for full articles, lower it for titles and metas. Blank inherits Settings → Generation.",
   "colCfg.preview": "Preview",
   "colCfg.previewLoading": "(loading or nothing to preview)",
   "colCfg.unfilledVarsForRow": "Unfilled variables for this row: {vars}",
@@ -864,6 +884,9 @@ export const en = {
   "queue.onlyEmptyHint": "Skips cells that already have a generated value.",
   "queue.onlyFailed": "Only failed",
   "queue.onlyFailedHint": "Retries cells whose last run errored.",
+  "queue.onlyTruncated": "Only cut-off cells",
+  "queue.onlyTruncatedHint":
+    "Retries cells that hit the output-token limit and came back incomplete. Raise Max output tokens first, or they'll be cut off again.",
   "queue.allCells": "All cells (overwrite)",
   "queue.allCellsHint":
     "Re-runs every targeted cell, replacing existing values.",

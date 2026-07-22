@@ -2593,6 +2593,15 @@ async def _resolve_generation_candidates(
                 effective_mode == "all"
                 or (effective_mode == "failed" and existing_status == "failed")
                 or (effective_mode == "empty" and existing_status != "generated")
+                # Truncated cells are status='generated' (the partial text is
+                # kept and usable), so neither 'empty' nor 'failed' matches
+                # them and only 'all' would — which would also redo every
+                # complete cell. This mode targets exactly the cut-off ones.
+                or (
+                    effective_mode == "truncated"
+                    and existing is not None
+                    and existing.truncated
+                )
             )
             if not include:
                 skipped += 1
@@ -2738,7 +2747,12 @@ async def enqueue_generation(
                 run_id=run_id,
             )
 
-    mode_label = {"empty": "empty", "failed": "failed", "all": "all"}[effective_mode]
+    mode_label = {
+        "empty": "empty",
+        "failed": "failed",
+        "truncated": "truncated",
+        "all": "all",
+    }[effective_mode]
     msg = f"Enqueued {len(enqueued)} cell(s) (mode: {mode_label})."
     if skipped:
         msg += f" Skipped {skipped} cell(s) that didn't match the filter."

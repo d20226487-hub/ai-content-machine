@@ -58,6 +58,10 @@ export function ColumnConfigModal({ table, column, onClose, onSaved }: Props) {
   const [providers, setProviders] = useState<EnabledProvider[]>([]);
   const [providerCode, setProviderCode] = useState<string | null>(column.provider_code);
   const [model, setModel] = useState<string | null>(column.model);
+  // Output-token ceiling for this column; null = inherit the global default.
+  const [maxOutputTokens, setMaxOutputTokens] = useState<number | null>(
+    column.max_output_tokens ?? null,
+  );
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -192,6 +196,8 @@ export function ColumnConfigModal({ table, column, onClose, onSaved }: Props) {
         variable_map: cleanMap,
         provider_code: providerCode,
         model: model && model.trim() ? model.trim() : null,
+        max_output_tokens:
+          maxOutputTokens && maxOutputTokens > 0 ? maxOutputTokens : null,
       });
       onSaved(updated);
       onClose();
@@ -402,6 +408,28 @@ export function ColumnConfigModal({ table, column, onClose, onSaved }: Props) {
           <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
             {t("colCfg.inheritHint")}
           </p>
+          {/* Long-form columns (full articles) need a bigger ceiling than short
+              ones (titles, metas). Blank inherits the global default. */}
+          <label className="mt-3 block text-xs font-medium text-neutral-700 dark:text-neutral-300">
+            {t("colCfg.maxOutputTokens")}
+            <input
+              type="number"
+              min={1}
+              max={200000}
+              step={256}
+              value={maxOutputTokens ?? ""}
+              placeholder={t("colCfg.maxOutputTokensPlaceholder")}
+              onChange={(e) =>
+                setMaxOutputTokens(
+                  e.target.value.trim() === "" ? null : Number(e.target.value),
+                )
+              }
+              className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-700 dark:bg-neutral-900"
+            />
+            <span className="mt-1 block font-normal text-neutral-500 dark:text-neutral-400">
+              {t("colCfg.maxOutputTokensHint")}
+            </span>
+          </label>
         </div>
 
         {/* Preview */}

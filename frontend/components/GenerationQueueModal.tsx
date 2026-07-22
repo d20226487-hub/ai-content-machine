@@ -356,6 +356,13 @@ export function GenerationQueueModal({
             hint={t("queue.onlyFailedHint")}
           />
           <ModeOption
+            value="truncated"
+            current={mode}
+            onChange={setMode}
+            label={t("queue.onlyTruncated")}
+            hint={t("queue.onlyTruncatedHint")}
+          />
+          <ModeOption
             value="all"
             current={mode}
             onChange={setMode}

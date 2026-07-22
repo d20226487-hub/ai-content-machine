@@ -186,6 +186,9 @@ export interface BulkColumn {
   variable_map: Record<string, number>;
   provider_code: string | null;
   model: string | null;
+  /** Output-token ceiling for this column's generations.
+   *  Null = inherit the global default from Settings → Generation. */
+  max_output_tokens?: number | null;
 }
 
 export interface BulkRow {
@@ -210,6 +213,12 @@ export interface BulkCell {
   model_used: string | null;
   generated_at: string | null;
   updated_at: string;
+  /** Raw provider stop reason for the last generation ("STOP" / "MAX_TOKENS" /
+   *  "length" / "max_tokens" / "SAFETY" ...). Null for hand-typed cells. */
+  finish_reason?: string | null;
+  /** Server-derived: the reply hit the output-token ceiling, so `value` is a
+   *  partial. Raise the column's or the global max output tokens and retry. */
+  truncated?: boolean;
   /** Memoized brain-translate results keyed by lowercase language tag.
    *  Absent when no translation has ever been requested for this cell.
    *  Cleared server-side whenever `value` changes. */

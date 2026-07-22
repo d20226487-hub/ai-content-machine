@@ -30,3 +30,30 @@ export function testProviderConnection(
     body: payload,
   });
 }
+
+/**
+ * Global generation limits (Settings → Generation).
+ *
+ * `max_output_tokens` is the ceiling every bulk cell inherits unless its
+ * column overrides it — the old behaviour was a hardcoded 2048, which
+ * truncated long-form output around 5.7k characters.
+ *
+ * `thinking_budget` covers models that bill reasoning against that same
+ * ceiling (Gemini 2.5, Claude Sonnet 5): null sends nothing and keeps the
+ * model default, 0 disables thinking so the whole budget goes to the answer.
+ */
+export interface GenerationDefaults {
+  max_output_tokens: number;
+  thinking_budget: number | null;
+}
+
+export function getGenerationDefaults() {
+  return api<GenerationDefaults>("/settings/generation");
+}
+
+export function setGenerationDefaults(payload: GenerationDefaults) {
+  return api<GenerationDefaults>("/settings/generation", {
+    method: "PUT",
+    body: payload,
+  });
+}
