@@ -7,6 +7,21 @@
 export const en = {
   // ---------- common ----------
   "common.loading": "Loading…",
+  "common.refresh": "Refresh",
+  "tableCost.title": "Generation cost",
+  "tableCost.summary":
+    "{usd} across {gens} generation(s) covering {cells} cell(s).",
+  "tableCost.includesRegenerations":
+    "Includes retries and regenerations — total spend, not the cost of the current text.",
+  "tableCost.unpricedWarning":
+    "{n} generation(s) ran on a provider:model with no configured rate, so they count as $0. The real total is higher — add the rate in Settings → Pricing (it applies to future generations only).",
+  "tableCost.colColumn": "Column",
+  "tableCost.colCost": "Cost",
+  "tableCost.colCells": "Cells",
+  "tableCost.colGenerations": "Generations",
+  "tableCost.colTokens": "Tokens",
+  "tableCost.noSpend":
+    "Nothing generated yet, or this table predates cost tracking.",
   "common.retry": "Retry",
   "common.save": "Save",
   "common.saving": "Saving…",

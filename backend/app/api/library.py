@@ -26,6 +26,8 @@ from fastapi import (
     UploadFile,
     status,
 )
+from decimal import Decimal
+
 from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
@@ -67,6 +69,7 @@ from app.schemas.bulk import (
     CellUpsert,
     ClearValuesRequest,
     ClearValuesResponse,
+    ColumnCostRead,
     ColumnCreate,
     ColumnRead,
     ColumnUpdate,
@@ -124,6 +127,7 @@ from app.schemas.bulk import (
     TranslationLinkTag,
     TranslationTableResponse,
     TranslationTableRow,
+    TableCostRead,
     TableRead,
     TableUpdate,
     TableUpdateRequest,
@@ -1913,6 +1917,96 @@ async def get_cell_generation_cost(
         prompt_tokens=ev.prompt_tokens,
         completion_tokens=ev.completion_tokens,
         generated_at=ev.created_at,
+    )
+
+
+@router.get("/tables/{table_id}/cost", response_model=TableCostRead)
+async def get_table_generation_cost(
+    table_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TableCostRead:
+    """Total generation spend for a table, broken down by column.
+
+    CUMULATIVE — every billed call, including retries and regenerations. That
+    is deliberately different from the per-cell endpoint above, which reports
+    only the latest attempt: this answers "what did this table cost me", the
+    other answers "what is this text worth".
+
+    One aggregate query rather than per-column round trips; ``source_ref``
+    already carries ``table_id`` so no join back to rows/columns is needed for
+    the numbers (only for column names).
+    """
+    from app.db.models import UsageEvent
+
+    await _get_table_or_404(db, table_id, actor, level="read")
+
+    col_id = UsageEvent.source_ref["column_id"].astext
+    rows = (
+        await db.execute(
+            select(
+                col_id.label("column_id"),
+                func.coalesce(func.sum(UsageEvent.cost_usd), 0).label("cost"),
+                func.coalesce(func.sum(UsageEvent.prompt_tokens), 0).label("pt"),
+                func.coalesce(func.sum(UsageEvent.completion_tokens), 0).label("ct"),
+                func.count().label("generations"),
+                func.count(func.distinct(UsageEvent.source_ref["row_id"].astext)).label(
+                    "cells"
+                ),
+                func.count()
+                .filter(UsageEvent.cost_usd.is_(None))
+                .label("unpriced"),
+            )
+            .where(
+                UsageEvent.source == "bulk_cell",
+                UsageEvent.source_ref["table_id"].astext == str(table_id),
+            )
+            .group_by(col_id)
+        )
+    ).all()
+
+    # Column names for the breakdown. Columns deleted since generation keep
+    # their spend (it was really spent) under a placeholder name.
+    names = {
+        c.id: c.name
+        for c in (
+            await db.execute(
+                select(BulkTableColumn).where(BulkTableColumn.table_id == table_id)
+            )
+        )
+        .scalars()
+        .all()
+    }
+
+    breakdown: list[ColumnCostRead] = []
+    for r in rows:
+        try:
+            cid = int(r.column_id)
+        except (TypeError, ValueError):
+            continue
+        breakdown.append(
+            ColumnCostRead(
+                column_id=cid,
+                column_name=names.get(cid, f"(deleted column #{cid})"),
+                cost_usd=Decimal(r.cost),
+                prompt_tokens=int(r.pt),
+                completion_tokens=int(r.ct),
+                generations=int(r.generations),
+                cells=int(r.cells),
+                unpriced_generations=int(r.unpriced),
+            )
+        )
+    breakdown.sort(key=lambda c: (-c.cost_usd, c.column_name))
+
+    return TableCostRead(
+        table_id=table_id,
+        cost_usd=sum((c.cost_usd for c in breakdown), Decimal(0)),
+        prompt_tokens=sum(c.prompt_tokens for c in breakdown),
+        completion_tokens=sum(c.completion_tokens for c in breakdown),
+        generations=sum(c.generations for c in breakdown),
+        cells=sum(c.cells for c in breakdown),
+        unpriced_generations=sum(c.unpriced_generations for c in breakdown),
+        columns=breakdown,
     )
 
 

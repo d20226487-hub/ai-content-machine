@@ -131,6 +131,47 @@ class CellCostRead(BaseModel):
     generated_at: datetime
 
 
+class ColumnCostRead(BaseModel):
+    """Generation spend attributed to one column of a table."""
+
+    column_id: int
+    column_name: str
+    cost_usd: Decimal
+    prompt_tokens: int
+    completion_tokens: int
+    # Billed LLM calls, INCLUDING regenerations and retries — this is spend,
+    # not a cell count. `cells` is the distinct cells behind those calls.
+    generations: int
+    cells: int
+    # Calls whose provider:model had no configured rate at write time, so they
+    # contributed 0 to cost_usd. Surfaced so a low total can be recognised as
+    # "pricing gap" rather than "cheap".
+    unpriced_generations: int
+
+
+class TableCostRead(BaseModel):
+    """Total generation spend for a table, with a per-column breakdown.
+
+    This is CUMULATIVE spend — every billed call including retries and
+    regenerations — because the question it answers is "what did this table
+    cost me", not "what is the current content worth". The per-cell figure in
+    the editor is deliberately the opposite (latest attempt only).
+
+    Costs are frozen at write time from the pricing table, so adding a rate
+    later never back-fills historical events; ``unpriced_generations`` is how
+    the UI explains an implausibly low total.
+    """
+
+    table_id: int
+    cost_usd: Decimal
+    prompt_tokens: int
+    completion_tokens: int
+    generations: int
+    cells: int
+    unpriced_generations: int
+    columns: list[ColumnCostRead] = []
+
+
 class CsvIngestResult(BaseModel):
     """Result of a machine-to-machine CSV ingest — enough to locate the new
     table (``/library/{table_id}``) without echoing every cell back."""

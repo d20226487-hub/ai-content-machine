@@ -11,6 +11,21 @@ import type { en } from "./en";
 export const ru: Record<keyof typeof en, string> = {
   // ---------- common ----------
   "common.loading": "Загрузка…",
+  "common.refresh": "Обновить",
+  "tableCost.title": "Стоимость генерации",
+  "tableCost.summary":
+    "{usd} за {gens} генераций по {cells} ячейкам.",
+  "tableCost.includesRegenerations":
+    "Включая повторы и перегенерации — это общие расходы, а не стоимость текущего текста.",
+  "tableCost.unpricedWarning":
+    "{n} генераций выполнено на provider:model без заданной цены — они учтены как $0. Реальная сумма выше: задайте цену в Настройки → Цены (применится только к будущим генерациям).",
+  "tableCost.colColumn": "Колонка",
+  "tableCost.colCost": "Стоимость",
+  "tableCost.colCells": "Ячейки",
+  "tableCost.colGenerations": "Генерации",
+  "tableCost.colTokens": "Токены",
+  "tableCost.noSpend":
+    "Пока ничего не сгенерировано или таблица создана до учёта расходов.",
   "common.retry": "Повторить",
   "common.save": "Сохранить",
   "common.saving": "Сохранение…",

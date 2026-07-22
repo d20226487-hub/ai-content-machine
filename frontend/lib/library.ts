@@ -648,3 +648,39 @@ export function getCellCost(
     `/library/tables/${tableId}/cells/${rowId}/${columnId}/cost`,
   );
 }
+
+/** Generation spend attributed to one column. */
+export interface ColumnCost {
+  column_id: number;
+  column_name: string;
+  cost_usd: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  /** Billed calls, including regenerations — spend, not a cell count. */
+  generations: number;
+  cells: number;
+  /** Calls whose provider:model had no rate configured, so they added $0. */
+  unpriced_generations: number;
+}
+
+/**
+ * Cumulative generation spend for a table, broken down by column.
+ *
+ * Counts every billed call including retries and regenerations — "what did
+ * this table cost me". Deliberately unlike the per-cell figure in the editor,
+ * which reports only the latest attempt.
+ */
+export interface TableCost {
+  table_id: number;
+  cost_usd: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  generations: number;
+  cells: number;
+  unpriced_generations: number;
+  columns: ColumnCost[];
+}
+
+export function getTableCost(tableId: number) {
+  return api<TableCost>(`/library/tables/${tableId}/cost`);
+}

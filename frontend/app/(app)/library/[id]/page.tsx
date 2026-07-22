@@ -14,6 +14,7 @@ import {
 import { BulkTableTools } from "@/components/BulkTableTools";
 import { ErrorPanel } from "@/components/ErrorPanel";
 import { GdocsSlugAuditPanel } from "@/components/GdocsSlugAuditPanel";
+import { TableCostPanel } from "@/components/TableCostPanel";
 import { GdocsStructurePanel } from "@/components/GdocsStructurePanel";
 import { UpdateTableModal } from "@/components/UpdateTableModal";
 import { useT } from "@/lib/i18n-context";
@@ -313,6 +314,8 @@ export default function LibraryTablePage() {
           </>
         )}
       </p>
+
+      <TableCostPanel tableId={table.id} />
 
       <div className="mt-6">
         <BulkTableGrid
