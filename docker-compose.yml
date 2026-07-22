@@ -17,6 +17,18 @@ services:
 
   redis:
     image: redis:7-alpine
+    # Redis is the Celery broker, so it holds the not-yet-processed half of
+    # every bulk run. With the image defaults (RDB only, save 3600/300/60) a
+    # host crash can drop everything enqueued since the last snapshot — for a
+    # 1500-cell run that's potentially the whole queue. AOF brings worst-case
+    # loss down to ~1s of writes.
+    #
+    # The named volume is what makes that durable: the image declares an
+    # anonymous VOLUME /data, which does not reliably survive the container
+    # being recreated.
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
     ports:
       - "${REDIS_PORT:-6379}:6379"
     healthcheck:
@@ -130,5 +142,7 @@ services:
 volumes:
   db_data:
   db_backups:
+  # Broker durability — see the redis service comment.
+  redis_data:
   web_node_modules:
   web_next_cache:

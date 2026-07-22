@@ -177,7 +177,12 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2g
+          # Each WORKER_CONCURRENCY slot is a prefork process holding ~90 MiB
+          # resident, so this ceiling has to move with it: 2g fits the default
+          # 8 (~0.9 GiB) comfortably but a raised concurrency will be
+          # OOM-killed here rather than slowed down. Rough guide — 8: 2g,
+          # 16: 3g, 32: 5g.
+          memory: ${WORKER_MEMORY_LIMIT:-2g}
 
   web:
     # Override the dev profile so this service runs by default in prod.
