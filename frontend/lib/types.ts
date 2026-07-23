@@ -294,6 +294,8 @@ export interface BulkTable {
    *  public CSV, and the token forming its URL (null when disabled). */
   autotool_enabled: boolean;
   autotool_token: string | null;
+  /** Columns included in the Autotool CSV; null = all columns. */
+  autotool_column_ids?: number[] | null;
   /** Per-site planned page list for Google-Docs-imported tables (drives the
    *  "Site structure" reference panel). Null for tables not built that way. */
   gdocs_structure: GdocsSiteStructure[] | null;

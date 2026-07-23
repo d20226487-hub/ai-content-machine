@@ -599,12 +599,19 @@ export interface AutotoolState {
   autotool_token: string | null;
   /** Relative public path, e.g. "/autotool/<token>.csv"; null when disabled. */
   csv_path: string | null;
+  /** Columns included in the CSV; null = all columns. */
+  column_ids?: number[] | null;
 }
 
-/** Expose the table as a public CSV the Autotool proxy can fetch. */
-export function enableAutotool(tableId: number): Promise<AutotoolState> {
+/** Expose the table as a public CSV the Autotool proxy can fetch. Pass
+ *  `columnIds` to restrict the CSV to a subset of columns; null/omitted = all. */
+export function enableAutotool(
+  tableId: number,
+  columnIds?: number[] | null,
+): Promise<AutotoolState> {
   return api<AutotoolState>(`/library/tables/${tableId}/autotool`, {
     method: "POST",
+    body: { column_ids: columnIds ?? null },
   });
 }
 

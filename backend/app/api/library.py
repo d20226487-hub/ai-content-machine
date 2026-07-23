@@ -61,6 +61,7 @@ from app.db.models import (
 )
 from app.db.session import get_db
 from app.schemas.bulk import (
+    AutotoolEnableRequest,
     AutotoolState,
     BulkGenerationRunDetail,
     BulkGenerationRunRead,
@@ -340,6 +341,7 @@ async def _table_to_read(db: AsyncSession, table: BulkTable) -> TableRead:
             "updated_at": table.updated_at,
             "autotool_enabled": table.autotool_enabled,
             "autotool_token": table.autotool_token,
+            "autotool_column_ids": table.autotool_column_ids,
             "gdocs_structure": table.gdocs_structure,
             "gdocs_slug_audit": table.gdocs_slug_audit,
             "columns": [ColumnRead.model_validate(c) for c in table.columns],
@@ -431,6 +433,7 @@ async def _table_to_read_paginated(
             "updated_at": table.updated_at,
             "autotool_enabled": table.autotool_enabled,
             "autotool_token": table.autotool_token,
+            "autotool_column_ids": table.autotool_column_ids,
             "gdocs_structure": table.gdocs_structure,
             "gdocs_slug_audit": table.gdocs_slug_audit,
             "columns": [ColumnRead.model_validate(c) for c in columns],
@@ -6412,6 +6415,7 @@ async def download_export_job(
 @router.post("/tables/{table_id}/autotool", response_model=AutotoolState)
 async def enable_autotool(
     table_id: int,
+    payload: AutotoolEnableRequest | None = None,
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> AutotoolState:
@@ -6419,13 +6423,38 @@ async def enable_autotool(
     if not t.autotool_token:
         t.autotool_token = uuid.uuid4().hex  # 32 hex chars, 128 bits
     t.autotool_enabled = True
+    # Optional column selection. A body with column_ids=null (or every column
+    # selected) stores None = "all"; a strict subset is stored as-is; foreign or
+    # empty ids collapse to None. No body at all leaves the existing selection
+    # untouched (so a plain re-enable doesn't wipe it).
+    if payload is not None:
+        if payload.column_ids is None:
+            t.autotool_column_ids = None
+        else:
+            valid_ids = set(
+                (
+                    await db.execute(
+                        select(BulkTableColumn.id).where(
+                            BulkTableColumn.table_id == table_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            picked = [cid for cid in payload.column_ids if cid in valid_ids]
+            t.autotool_column_ids = (
+                picked if picked and set(picked) != valid_ids else None
+            )
     # Capture before commit; expire_on_commit would otherwise require a reload.
     token = t.autotool_token
+    column_ids = t.autotool_column_ids
     await db.commit()
     return AutotoolState(
         autotool_enabled=True,
         autotool_token=token,
         csv_path=f"/autotool/{token}.csv",
+        column_ids=column_ids,
     )
 
 

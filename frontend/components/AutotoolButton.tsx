@@ -15,45 +15,83 @@ import {
  * Autotool toggle — the 3rd publishing mode. Sits next to the Generate button
  * in the bulk-table toolbar.
  *
- *   - Off: a single "Autotool" button. Clicking opens a confirm popup that
- *     explains the table will be exposed as a public, unauthenticated CSV.
- *   - On: a "Copy CSV link" affordance + a "Remove from Autotool" button.
- *     Removing is guarded by a confirm popup explaining the public link will
- *     be invalidated immediately.
+ *   - Off: a single "Autotool" button. Clicking opens a dialog that explains
+ *     the table will be exposed as a public, unauthenticated CSV and lets the
+ *     operator uncheck columns that shouldn't be exposed.
+ *   - On: "Copy CSV link" + "Columns (n/m)" (edit the included columns) +
+ *     "Remove from Autotool" (guarded — the public link dies immediately).
  *
- * State is kept locally (seeded from the table) so the button flips without a
- * full table reload; a page refresh re-reads the authoritative value.
+ * Column selection is per-table (null = all columns) and applies to the public
+ * link AND the per-domain send files. State is kept locally (seeded from the
+ * table) so buttons flip without a full reload; a refresh re-reads the truth.
  */
 export function AutotoolButton({
   tableId,
   initialEnabled,
   initialToken,
+  columns,
+  initialColumnIds,
 }: {
   tableId: number;
   initialEnabled: boolean;
   initialToken: string | null;
+  columns: { id: number; name: string }[];
+  /** null = all columns included. */
+  initialColumnIds: number[] | null;
 }) {
   const { t } = useT();
   const [enabled, setEnabled] = useState(initialEnabled);
   const [token, setToken] = useState<string | null>(initialToken);
-  const [dialog, setDialog] = useState<"enable" | "remove" | null>(null);
+  const [columnIds, setColumnIds] = useState<number[] | null>(initialColumnIds);
+  const [dialog, setDialog] = useState<"enable" | "remove" | "columns" | null>(
+    null,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  async function confirmEnable() {
+  // Working set for the column picker (shared by the enable + edit dialogs).
+  const [checked, setChecked] = useState<Set<number>>(new Set());
+
+  const includedCount = columnIds === null ? columns.length : columnIds.length;
+
+  function openPicker(which: "enable" | "columns") {
+    // Seed from the current selection; null = every column.
+    setChecked(new Set(columnIds ?? columns.map((c) => c.id)));
+    setError(null);
+    setDialog(which);
+  }
+
+  function toggleCol(id: number) {
+    setChecked((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // null when every column is checked, so a column added later is auto-included.
+  function selectionForSave(): number[] | null {
+    if (checked.size === 0 || checked.size >= columns.length) return null;
+    return columns.filter((c) => checked.has(c.id)).map((c) => c.id);
+  }
+
+  async function submitSelection(closeOnly: boolean) {
     setBusy(true);
     setError(null);
     try {
-      const s = await enableAutotool(tableId);
+      const s = await enableAutotool(tableId, selectionForSave());
       setEnabled(s.autotool_enabled);
       setToken(s.autotool_token);
+      setColumnIds(s.column_ids ?? null);
       setDialog(null);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : t("autotool.failed"));
     } finally {
       setBusy(false);
     }
+    void closeOnly;
   }
 
   async function confirmRemove() {
@@ -88,6 +126,36 @@ export function AutotoolButton({
     setError(null);
   }
 
+  const columnPicker = (
+    <div className="mt-3">
+      <span className="block text-xs font-medium text-neutral-500 dark:text-neutral-400">
+        {t("autotool.columnsLabel")}
+      </span>
+      <ul className="mt-1 max-h-52 space-y-0.5 overflow-y-auto rounded-md border border-neutral-200 p-2 dark:border-neutral-800">
+        {columns.map((c) => (
+          <li key={c.id}>
+            <label className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-0.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800">
+              <input
+                type="checkbox"
+                checked={checked.has(c.id)}
+                onChange={() => toggleCol(c.id)}
+                className="h-3.5 w-3.5"
+              />
+              <span className="truncate text-neutral-800 dark:text-neutral-200">
+                {c.name}
+              </span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      {checked.size === 0 && (
+        <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+          {t("autotool.columnsNoneWarning")}
+        </p>
+      )}
+    </div>
+  );
+
   return (
     <>
       {enabled ? (
@@ -102,6 +170,17 @@ export function AutotoolButton({
           </button>
           <button
             type="button"
+            onClick={() => openPicker("columns")}
+            className="rounded-md border border-neutral-300 px-2 py-1 font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
+            title={t("autotool.columnsHint")}
+          >
+            {t("autotool.columnsBtn", {
+              n: includedCount,
+              total: columns.length,
+            })}
+          </button>
+          <button
+            type="button"
             onClick={() => setDialog("remove")}
             className="rounded-md border border-neutral-300 px-3 py-1 font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
             title={t("autotool.enabledHint")}
@@ -112,7 +191,7 @@ export function AutotoolButton({
       ) : (
         <button
           type="button"
-          onClick={() => setDialog("enable")}
+          onClick={() => openPicker("enable")}
           className="rounded-md border border-neutral-300 px-3 py-1 font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
           title={t("autotool.disabledHint")}
         >
@@ -126,10 +205,27 @@ export function AutotoolButton({
           body={t("autotool.enableBody")}
           confirmLabel={t("autotool.enableConfirm")}
           confirmTone="primary"
+          confirmDisabled={checked.size === 0}
           busy={busy}
           error={error}
           onCancel={closeDialog}
-          onConfirm={() => void confirmEnable()}
+          onConfirm={() => void submitSelection(false)}
+          extra={columnPicker}
+        />
+      )}
+
+      {dialog === "columns" && (
+        <ConfirmDialog
+          title={t("autotool.columnsTitle")}
+          body={t("autotool.columnsBody")}
+          confirmLabel={t("autotool.columnsSave")}
+          confirmTone="primary"
+          confirmDisabled={checked.size === 0}
+          busy={busy}
+          error={error}
+          onCancel={closeDialog}
+          onConfirm={() => void submitSelection(true)}
+          extra={columnPicker}
         />
       )}
 
@@ -166,6 +262,7 @@ function ConfirmDialog({
   body,
   confirmLabel,
   confirmTone,
+  confirmDisabled,
   busy,
   error,
   onCancel,
@@ -176,6 +273,7 @@ function ConfirmDialog({
   body: string;
   confirmLabel: string;
   confirmTone: "primary" | "danger";
+  confirmDisabled?: boolean;
   busy: boolean;
   error: string | null;
   onCancel: () => void;
@@ -211,7 +309,7 @@ function ConfirmDialog({
         <button
           type="button"
           onClick={onConfirm}
-          disabled={busy}
+          disabled={busy || confirmDisabled}
           className={`rounded-md px-3 py-1.5 text-sm font-medium disabled:opacity-50 ${confirmClass}`}
         >
           {confirmLabel}

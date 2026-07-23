@@ -777,6 +777,8 @@ export function BulkTableGrid({
             tableId={table.id}
             initialEnabled={!!table.autotool_enabled}
             initialToken={table.autotool_token ?? null}
+            columns={table.columns.map((c) => ({ id: c.id, name: c.name }))}
+            initialColumnIds={table.autotool_column_ids ?? null}
           />
           <button
             type="button"

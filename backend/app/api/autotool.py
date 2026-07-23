@@ -81,9 +81,16 @@ async def get_autotool_csv(
         include_row_ids = set(ordered)
 
     # single_line: collapse newlines inside cells so every row is one physical
-    # line — the Autotool proxy consumes this directly.
+    # line — the Autotool proxy consumes this directly. include_column_ids drops
+    # any columns the operator unchecked for Autotool (None = all).
     csv_text = await build_table_csv(
-        db, t, single_line=True, include_row_ids=include_row_ids
+        db,
+        t,
+        single_line=True,
+        include_row_ids=include_row_ids,
+        include_column_ids=(
+            set(t.autotool_column_ids) if t.autotool_column_ids else None
+        ),
     )
     return Response(
         content=csv_text,

@@ -90,6 +90,11 @@ class BulkTable(Base, TimestampMixin):
     autotool_token: Mapped[str | None] = mapped_column(
         String(36), nullable=True, unique=True, index=True
     )
+    # Column ids to include in the Autotool CSV (the public link AND the
+    # per-domain send files, both served by build_table_csv). NULL = all
+    # columns, so tables exposed before migration 0067 are unchanged. Lets an
+    # operator keep helper/internal columns out of what Autotool sees.
+    autotool_column_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
     # ----- Google-Docs import provenance -----
     # For tables built by the Google-Docs importer: the planned page list per

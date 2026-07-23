@@ -63,6 +63,7 @@ async def build_table_csv(
     *,
     single_line: bool = False,
     include_row_ids: set[int] | None = None,
+    include_column_ids: set[int] | None = None,
 ) -> str:
     """Render ``table`` (must be loaded with ``columns`` + ``rows``) to CSV.
 
@@ -99,11 +100,18 @@ async def build_table_csv(
         )
     lookup = {(c.row_id, c.column_id): render(c.value) for c in cells}
 
+    # Column subset (used by Autotool to drop helper columns); None = all.
+    emit_cols = [
+        c
+        for c in table.columns
+        if include_column_ids is None or c.id in include_column_ids
+    ]
+
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow([render(c.name) for c in table.columns])
+    writer.writerow([render(c.name) for c in emit_cols])
     for r in emit_rows:
-        writer.writerow([lookup.get((r.id, c.id), "") for c in table.columns])
+        writer.writerow([lookup.get((r.id, c.id), "") for c in emit_cols])
     return buf.getvalue()
 
 

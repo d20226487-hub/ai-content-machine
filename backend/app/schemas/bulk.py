@@ -293,6 +293,8 @@ class TableRead(BaseModel):
     # public CSV and the token that forms its URL (null when disabled).
     autotool_enabled: bool = False
     autotool_token: str | None = None
+    # Columns included in the Autotool CSV; null = all columns. See migration 0067.
+    autotool_column_ids: list[int] | None = None
     # Per-site planned page list for Google-Docs-imported tables (drives the
     # "Site structure" reference panel). None for tables not built that way.
     gdocs_structure: list[dict] | None = None
@@ -319,6 +321,18 @@ class AutotoolState(BaseModel):
     autotool_enabled: bool
     autotool_token: str | None = None
     csv_path: str | None = None
+    # Columns included in the Autotool CSV; null = all columns.
+    column_ids: list[int] | None = None
+
+
+class AutotoolEnableRequest(BaseModel):
+    """Optional body for enabling / updating a table's Autotool exposure.
+
+    ``column_ids`` = the columns to include in the CSV. null (or omitted) means
+    all columns; an explicit list restricts the CSV to those columns. Ids that
+    don't belong to the table are dropped."""
+
+    column_ids: list[int] | None = None
 
 
 class TrashBulkIds(BaseModel):

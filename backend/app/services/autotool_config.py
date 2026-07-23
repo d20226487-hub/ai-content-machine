@@ -320,7 +320,15 @@ async def build_post_preview(
         method="POST",
         url=target,
         headers=headers,
-        columns=[ColumnRef(id=c.id, name=c.name) for c in columns],
+        # Only the columns the operator kept for Autotool (null = all). The
+        # site split above still uses the FULL column set, so an unchecked site
+        # column can't break per-domain grouping.
+        columns=[
+            ColumnRef(id=c.id, name=c.name)
+            for c in columns
+            if table.autotool_column_ids is None
+            or c.id in set(table.autotool_column_ids)
+        ],
         site_column_id=chosen,
         detected_site_column_id=detected,
         page_size=page_size,
