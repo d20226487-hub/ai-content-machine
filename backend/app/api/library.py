@@ -5617,16 +5617,18 @@ def _pick_named_column(
 
 
 def _format_grounding_sources(gs: dict | None) -> str:
-    """One ``Title — URL`` per cited source, newline-joined. Link-Check's
-    expected-column extractor pulls the ``http(s)://`` URLs and ignores the
-    title labels, so this feeds Link-Fix directly. Pure (no DB), unit-testable."""
+    """One markdown ``[label](url)`` per cited source, newline-joined. Markdown
+    (not a bare URL) so Link-Check's OUTPUT extractor picks the URLs up and
+    crawls them for HTTP status — and so the cell renders as clickable links.
+    Label = the source title (its domain, for Vertex), or the URL if untitled.
+    Pure (no DB), unit-testable."""
     lines: list[str] = []
     for s in (gs or {}).get("sources") or []:
         uri = (s or {}).get("uri")
         if not uri:
             continue
-        title = ((s or {}).get("title") or "").strip()
-        lines.append(f"{title} — {uri}" if title else uri)
+        label = ((s or {}).get("title") or "").strip() or uri
+        lines.append(f"[{label}]({uri})")
     return "\n".join(lines)
 
 
