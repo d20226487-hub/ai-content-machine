@@ -65,6 +65,27 @@
         }
     }
 
+    # Public Autotool CSV lives on the FastAPI backend at a BARE
+    # /autotool/<token>.csv path (no /api prefix — the external Autotool proxy
+    # fetches it directly). Without this block it falls through to the catch-all
+    # below and hits the Next.js frontend, which 404s. Use `handle` (not
+    # `handle_path`) so the /autotool prefix is preserved — the backend router
+    # owns it. Same transport tuning as /api since the CSV can be large.
+    handle /autotool/* {
+        reverse_proxy api:8000 {
+            header_up X-Real-IP {client_ip}
+            header_up X-Forwarded-For {client_ip}
+            header_up X-Forwarded-Proto {scheme}
+            transport http {
+                dial_timeout 10s
+                read_timeout 120s
+                write_timeout 120s
+            }
+            lb_try_duration 30s
+            lb_try_interval 1s
+        }
+    }
+
     # Everything else: the Next.js production server.
     handle {
         reverse_proxy web:3000 {
