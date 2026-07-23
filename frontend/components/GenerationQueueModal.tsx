@@ -21,6 +21,13 @@ interface Props {
   /** True when the grid is in "select all N" mode. */
   allRowsSelected: boolean;
   preselectedRowIds: number[];
+  /** Seed the cell filter (e.g. "failed" when opened from the error banner).
+   *  Defaults to "empty". */
+  initialMode?: GenerateMode;
+  /** Preselect these columns instead of every runnable one — the error banner
+   *  passes just the columns that actually have the problem. Non-runnable ids
+   *  are dropped; an empty result falls back to all runnable columns. */
+  initialColumnIds?: number[];
   onClose: () => void;
   onEnqueued: (message: string) => void;
 }
@@ -32,6 +39,8 @@ export function GenerationQueueModal({
   totalRowCount,
   allRowsSelected,
   preselectedRowIds,
+  initialMode,
+  initialColumnIds,
   onClose,
   onEnqueued,
 }: Props) {
@@ -44,9 +53,14 @@ export function GenerationQueueModal({
     () => outputCols.filter((c) => c.prompt_id != null).map((c) => c.id),
     [outputCols],
   );
-  const [pickedColumnIds, setPickedColumnIds] = useState<Set<number>>(
-    new Set(runnableColumnIds),
-  );
+  const [pickedColumnIds, setPickedColumnIds] = useState<Set<number>>(() => {
+    if (initialColumnIds && initialColumnIds.length > 0) {
+      const runnable = new Set(runnableColumnIds);
+      const picked = new Set(initialColumnIds.filter((id) => runnable.has(id)));
+      if (picked.size > 0) return picked;
+    }
+    return new Set(runnableColumnIds);
+  });
 
   function toggleColumn(id: number) {
     setPickedColumnIds((cur) => {
@@ -65,7 +79,7 @@ export function GenerationQueueModal({
   const [rangeStart, setRangeStart] = useState(1);
   const [rangeEnd, setRangeEnd] = useState(totalRowCount);
 
-  const [mode, setMode] = useState<GenerateMode>("empty");
+  const [mode, setMode] = useState<GenerateMode>(initialMode ?? "empty");
 
   // Build the request payload from the row mode. Row targeting is resolved
   // server-side now (the modal no longer holds every row): 'all' omits row

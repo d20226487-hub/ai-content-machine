@@ -150,6 +150,70 @@ export function TableCostPanel({ tableId }: { tableId: number }) {
                 </p>
               )}
 
+              {cost.tools.length > 0 && (
+                <div className="mt-4 border-t border-neutral-100 pt-3 dark:border-neutral-800">
+                  <p className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                    {t("tableCost.toolsHeading")}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-neutral-400 dark:text-neutral-500">
+                    {t("tableCost.toolsHint")}
+                  </p>
+                  <div className="mt-2 overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-left text-neutral-500 dark:text-neutral-400">
+                          <th className="pb-1 pr-4 font-medium">
+                            {t("tableCost.colTool")}
+                          </th>
+                          <th className="pb-1 pr-4 text-right font-medium">
+                            {t("tableCost.colCost")}
+                          </th>
+                          <th className="pb-1 pr-4 text-right font-medium">
+                            {t("tableCost.colCalls")}
+                          </th>
+                          <th className="pb-1 text-right font-medium">
+                            {t("tableCost.colTokens")}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="text-neutral-800 dark:text-neutral-200">
+                        {cost.tools.map((tool) => (
+                          <tr
+                            key={tool.source}
+                            className="border-t border-neutral-100 dark:border-neutral-800"
+                          >
+                            <td className="py-1.5 pr-4">
+                              {toolLabel(tool.source, t)}
+                              {tool.unpriced_calls > 0 && (
+                                <span
+                                  title={t("tableCost.toolUnpricedHint", {
+                                    n: tool.unpriced_calls,
+                                  })}
+                                  className="ml-1 cursor-help text-amber-600 dark:text-amber-400"
+                                >
+                                  *
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-1.5 pr-4 text-right tabular-nums">
+                              {formatUsd(tool.cost_usd)}
+                            </td>
+                            <td className="py-1.5 pr-4 text-right tabular-nums">
+                              {tool.calls}
+                            </td>
+                            <td className="py-1.5 text-right tabular-nums">
+                              {(
+                                tool.prompt_tokens + tool.completion_tokens
+                              ).toLocaleString()}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
               <button
                 type="button"
                 onClick={() => void load()}
@@ -163,4 +227,12 @@ export function TableCostPanel({ tableId }: { tableId: number }) {
       )}
     </div>
   );
+}
+
+/** Friendly name for a usage `source`. Unknown sources fall back to the raw
+ *  code so a newly-added tool still shows something. */
+function toolLabel(source: string, t: ReturnType<typeof useT>["t"]): string {
+  if (source === "brain_translate") return t("tableCost.tool.brain_translate");
+  if (source === "brain_fix_links") return t("tableCost.tool.brain_fix_links");
+  return source;
 }

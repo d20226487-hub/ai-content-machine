@@ -149,6 +149,28 @@ class ColumnCostRead(BaseModel):
     unpriced_generations: int
 
 
+class ToolCostRead(BaseModel):
+    """Spend from one AI mini-tool run against a table — the cleanup passes
+    (translate, AI link-fix) that call an LLM outside the table's own
+    generation. Kept separate from the column costs because it answers a
+    different question ("what did the AI tools add"), and because these events
+    predate token capture, so a run before that shipped shows up as an unpriced
+    call rather than a real cost.
+    """
+
+    # Raw usage `source` ('brain_translate' | 'brain_fix_links'); the client
+    # maps it to a friendly tool name.
+    source: str
+    cost_usd: Decimal
+    prompt_tokens: int
+    completion_tokens: int
+    # Billed LLM calls attributed to this tool on this table.
+    calls: int
+    # Calls that contributed $0 — no rate configured, or (for older events) no
+    # token counts were captured. Explains a call count with a $0.00 cost.
+    unpriced_calls: int
+
+
 class TableCostRead(BaseModel):
     """Total generation spend for a table, with a per-column breakdown.
 
@@ -170,6 +192,41 @@ class TableCostRead(BaseModel):
     cells: int
     unpriced_generations: int
     columns: list[ColumnCostRead] = []
+    # AI mini-tool spend (translate, link-fix) attributed to this table, one
+    # entry per tool. Deliberately NOT folded into ``cost_usd`` above — that
+    # figure stays "generation only"; the client totals the two if it wants a
+    # grand total. Empty when no AI tool has run on the table.
+    tools: list[ToolCostRead] = []
+
+
+class ColumnGenHealthRead(BaseModel):
+    """Count of cells with a generation problem in one column of a table."""
+
+    column_id: int
+    column_name: str
+    # Cells whose last run errored (status='failed') — the API request itself
+    # didn't come back. Retried with mode='failed'.
+    failed: int
+    # Cells that came back but hit the output-token ceiling (status='generated',
+    # a truncation finish_reason), so the text is a partial. Retried with
+    # mode='truncated' — after raising Max output tokens, or they cut off again.
+    truncated: int
+
+
+class TableGenHealthRead(BaseModel):
+    """Table-wide tally of the two generation problems the grid can retry, with
+    a per-column breakdown so the editor can point the operator at exactly which
+    columns to re-run (and with which retry mode).
+
+    Whole-table, not page-scoped: the grid paginates cells, so this can't be
+    derived client-side from the rows currently on screen. ``columns`` lists
+    ONLY columns with at least one problem, most-affected first.
+    """
+
+    table_id: int
+    failed: int
+    truncated: int
+    columns: list[ColumnGenHealthRead] = []
 
 
 class CsvIngestResult(BaseModel):
@@ -609,7 +666,8 @@ class FindReplaceRunDetail(FindReplaceRunRead):
 # The selectable transforms. Applied in THIS canonical order regardless of the
 # order they arrive in (mirrors services/structure_format.OPERATIONS).
 StructureFormatOp = Literal[
-    "markdown", "response_start", "close_tags", "inline_css", "html_format"
+    "markdown", "response_start", "close_tags", "inline_css", "em_dash",
+    "html_format"
 ]
 
 

@@ -72,6 +72,17 @@ export function LinkFixModal({
 
   const newNameInvalid = mode === "new" && newName.trim().length === 0;
 
+  // When the typed name matches an existing column, the run writes corrections
+  // into THAT column instead of spawning a duplicate (mirrors the server's
+  // case-/space-insensitive match). Surfaced so it's a choice, not a surprise.
+  const trimmedNewName = newName.trim();
+  const matchedColumn =
+    mode === "new" && trimmedNewName
+      ? columns.find(
+          (c) => c.name.trim().toLowerCase() === trimmedNewName.toLowerCase(),
+        )
+      : undefined;
+
   return (
     <Modal onClose={onClose} size="max-w-lg">
       <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
@@ -108,6 +119,11 @@ export function LinkFixModal({
             maxLength={120}
             className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900"
           />
+          {matchedColumn && (
+            <p className="mt-2 rounded-md bg-blue-50 px-3 py-2 text-xs font-normal text-blue-800 dark:bg-blue-400/10 dark:text-blue-200">
+              {t("linkFix.newNameMatchesExisting", { name: matchedColumn.name })}
+            </p>
+          )}
         </label>
       )}
 

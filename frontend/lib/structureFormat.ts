@@ -9,6 +9,7 @@ export type StructureFormatOp =
   | "response_start"
   | "close_tags"
   | "inline_css"
+  | "em_dash"
   | "html_format";
 
 export const SF_OPERATIONS: StructureFormatOp[] = [
@@ -16,6 +17,7 @@ export const SF_OPERATIONS: StructureFormatOp[] = [
   "response_start",
   "close_tags",
   "inline_css",
+  "em_dash",
   "html_format",
 ];
 

@@ -1,6 +1,6 @@
 # Deployment
 
-Production deployment guide for AI Content Machine. Self-hosted on a single
+Production deployment guide for **Content Beast** (ACM). Self-hosted on a single
 Linux VPS with Docker Compose and Caddy as the reverse proxy and TLS
 terminator. Targets an internal team of ~10-50 users.
 

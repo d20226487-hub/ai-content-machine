@@ -153,7 +153,7 @@ async def _fix_cell(db: AsyncSession, run_id: int, cell_id: int) -> None:
     expected = await expected_links_for_row(db, run=run, row_id=cell.row_id)
 
     try:
-        new_text, code, model = await fix_links_text(
+        new_text, code, model, pt, ct = await fix_links_text(
             db,
             content=content,
             expected_links=expected,
@@ -201,10 +201,13 @@ async def _fix_cell(db: AsyncSession, run_id: int, cell_id: int) -> None:
         user_id=run.created_by_id,
         provider_code=code,
         model=model,
-        prompt_tokens=None,
-        completion_tokens=None,
+        prompt_tokens=pt,
+        completion_tokens=ct,
         source="brain_fix_links",
         source_ref={
+            # table_id lets the table cost panel attribute this spend; the fix
+            # writes into run.table_id's columns.
+            "table_id": run.table_id,
             "link_fix_run_id": run_id,
             "row_id": cell.row_id,
             "column_id": cell.column_id,

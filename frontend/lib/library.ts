@@ -670,6 +670,19 @@ export interface ColumnCost {
  * this table cost me". Deliberately unlike the per-cell figure in the editor,
  * which reports only the latest attempt.
  */
+/** Spend from one AI mini-tool (translate, link-fix) run against a table. */
+export interface ToolCost {
+  /** Raw usage source — "brain_translate" | "brain_fix_links". */
+  source: string;
+  cost_usd: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  /** Billed LLM calls this tool made on the table. */
+  calls: number;
+  /** Calls that added $0 — no rate, or (older events) no captured tokens. */
+  unpriced_calls: number;
+}
+
 export interface TableCost {
   table_id: number;
   cost_usd: string;
@@ -679,8 +692,42 @@ export interface TableCost {
   cells: number;
   unpriced_generations: number;
   columns: ColumnCost[];
+  /** AI mini-tool spend, one entry per tool. NOT included in `cost_usd`
+   *  (that stays generation-only); sum both for a grand total. */
+  tools: ToolCost[];
 }
 
 export function getTableCost(tableId: number) {
   return api<TableCost>(`/library/tables/${tableId}/cost`);
+}
+
+// ----- Generation health (failed / truncated cells) -----
+
+/** One column's tally of the two retryable generation problems. */
+export interface ColumnGenHealth {
+  column_id: number;
+  column_name: string;
+  /** Cells whose last run errored (status "failed") — retry with mode "failed". */
+  failed: number;
+  /** Cells cut off at the output-token ceiling — retry with mode "truncated". */
+  truncated: number;
+}
+
+/**
+ * Table-wide count of cells the grid can retry, with a per-column breakdown so
+ * the editor can point the operator at exactly which columns to re-run.
+ *
+ * Whole-table, not page-scoped: the grid paginates its cells, so this can't be
+ * derived from the rows currently on screen. `columns` lists only the columns
+ * that have at least one problem, most-affected first.
+ */
+export interface TableGenHealth {
+  table_id: number;
+  failed: number;
+  truncated: number;
+  columns: ColumnGenHealth[];
+}
+
+export function getTableGenHealth(tableId: number): Promise<TableGenHealth> {
+  return api<TableGenHealth>(`/library/tables/${tableId}/gen-health`);
 }

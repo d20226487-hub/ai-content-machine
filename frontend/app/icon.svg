@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="2" y1="2" x2="30" y2="30" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6366F1"/>
+      <stop offset="1" stop-color="#8B5CF6"/>
+    </linearGradient>
+  </defs>
+  <!-- rounded-square badge so the glyph reads on any tab colour -->
+  <rect width="32" height="32" rx="7" fill="url(#bg)"/>
+  <!-- sheet of paper feeding through the platen -->
+  <rect x="10.5" y="2.5" width="11" height="8.5" rx="1.2" fill="#fff"/>
+  <rect x="12.6" y="5" width="6.8" height="1.1" rx="0.55" fill="#C7D2FE"/>
+  <rect x="12.6" y="7.3" width="4.8" height="1.1" rx="0.55" fill="#C7D2FE"/>
+  <!-- platen roller with knobs on each end -->
+  <circle cx="6" cy="12" r="2.5" fill="#EDE9FE"/>
+  <circle cx="26" cy="12" r="2.5" fill="#EDE9FE"/>
+  <rect x="5.5" y="9.7" width="21" height="4.7" rx="2.35" fill="#fff"/>
+  <!-- chassis: a trapezoid flaring outward at the base -->
+  <path d="M6.4 15.6h19.2a2 2 0 0 1 1.94 1.5l1.35 5.4A2 2 0 0 1 27 25H5a2 2 0 0 1-1.94-2.5l1.35-5.4a2 2 0 0 1 1.99-1.5Z" fill="#fff"/>
+  <!-- key row -->
+  <g fill="#7C3AED">
+    <circle cx="9" cy="19" r="1.15"/>
+    <circle cx="13" cy="19" r="1.15"/>
+    <circle cx="17" cy="19" r="1.15"/>
+    <circle cx="21" cy="19" r="1.15"/>
+    <circle cx="25" cy="19" r="1.15"/>
+  </g>
+  <!-- spacebar -->
+  <rect x="10.5" y="21.7" width="11" height="1.9" rx="0.95" fill="#A78BFA"/>
+</svg>

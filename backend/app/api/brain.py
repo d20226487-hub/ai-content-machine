@@ -196,7 +196,7 @@ async def translate_raw_text(
     requested = await resolve_target_language(db, payload.target_language)
 
     try:
-        text, code, model = await translate_text(
+        text, code, model, pt, ct = await translate_text(
             db, source_text=payload.text, target_language=requested
         )
     except ProviderNotConfigured as e:
@@ -226,8 +226,8 @@ async def translate_raw_text(
         user_id=actor.id,
         provider_code=code,
         model=model,
-        prompt_tokens=None,
-        completion_tokens=None,
+        prompt_tokens=pt,
+        completion_tokens=ct,
         source="brain_translate",
         source_ref={"target_language": requested, "kind": "raw_text"},
     )

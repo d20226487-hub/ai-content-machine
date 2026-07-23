@@ -7,7 +7,7 @@ import { LanguageProvider, langInitScript } from "@/lib/i18n-context";
 import { ThemeProvider, themeInitScript } from "@/lib/theme-context";
 
 export const metadata: Metadata = {
-  title: "AI Content Machine",
+  title: "Content Beast",
   description: "Internal tool for AI-driven content generation",
 };
 

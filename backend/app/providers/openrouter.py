@@ -13,5 +13,5 @@ class OpenRouterProvider(OpenAICompatibleProvider):
     # OpenRouter uses these for attribution / leaderboards. Optional but recommended.
     extra_headers = {
         "HTTP-Referer": "https://localhost",  # replace with your real URL when deployed
-        "X-Title": "AI Content Machine",
+        "X-Title": "Content Beast",
     }

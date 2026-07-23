@@ -45,7 +45,7 @@ configure_logging(level=settings.LOG_LEVEL, fmt=settings.LOG_FORMAT)
 # Sentry — no-op when SENTRY_DSN is unset.
 init_sentry("api")
 
-app = FastAPI(title="AI Content Machine", version="0.1.0")
+app = FastAPI(title="Content Beast", version="0.1.0")
 
 # Bind request_id and emit one structured access-log line per request.
 # Added BEFORE other middlewares so the id covers their work too.
@@ -126,4 +126,4 @@ app.include_router(brain_router.router)
 
 @app.get("/")
 def root() -> dict[str, str]:
-    return {"app": "AI Content Machine", "version": "0.1.0"}
+    return {"app": "Content Beast", "version": "0.1.0"}

@@ -1,9 +1,9 @@
 """Structure & Formatting transforms for bulk-table cells.
 
-Five deterministic, user-selectable transforms run on output cells. They
+Six deterministic, user-selectable transforms run on output cells. They
 ALWAYS run in a fixed order (markdown -> response_start -> close_tags ->
-inline_css -> html_format) because later steps assume earlier ones already
-ran — e.g. ``markdown`` emits ``<strong>`` that ``html_format`` may then
+inline_css -> em_dash -> html_format) because later steps assume earlier ones
+already ran — e.g. ``markdown`` emits ``<strong>`` that ``html_format`` may then
 unwrap. The user picks a SUBSET; whatever is picked runs in this canonical
 order.
 
@@ -24,7 +24,9 @@ re-serialize would rewrite untouched markup and create diff noise.
                        a truncated cell (``<div><p>text``) renders correctly.
   4. inline_css      — drop ``style="…"`` attributes and ``<style>`` blocks,
                        leaving other attributes (href, src, …) intact.
-  5. html_format     — unwrap <b> <strong> <i> <em> <u>, keeping inner text.
+  5. em_dash         — replace em dashes with a plain spaced hyphen, the em
+                       dash being a glaring "written by AI" tell.
+  6. html_format     — unwrap <b> <strong> <i> <em> <u>, keeping inner text.
 """
 from __future__ import annotations
 
@@ -36,6 +38,7 @@ OPERATIONS: tuple[str, ...] = (
     "response_start",
     "close_tags",
     "inline_css",
+    "em_dash",
     "html_format",
 )
 
@@ -290,7 +293,43 @@ def strip_inline_css(text: str) -> str:
     return s
 
 
-# ---------- 5. html_format ----------
+# ---------- 5. em_dash ----------
+
+# Em dash (U+2014 —) and its identical-looking sibling the horizontal bar
+# (U+2015 ―). En dashes (U+2013 –) are deliberately left alone: they're
+# narrower and carry real meaning in number/date ranges. Any spaces or tabs
+# hugging the dash are pulled into the match so a spaced "a — b" and a glued
+# "a—b" both collapse onto one hyphen. The whitespace class is spaces/tabs
+# only, never "\n", so a dash at a line break can't merge the two lines.
+_EM_DASH = re.compile(r"[ \t]*[—―][ \t]*")
+
+
+def replace_em_dashes(text: str) -> str:
+    """Replace em dashes with a plain spaced hyphen.
+
+    The em dash is a glaring "an AI wrote this" tell, so swap it for the normal
+    keyboard hyphen. Spaced (`` - ``) rather than a bare ``-`` so a glued
+    ``fast—reliable`` becomes ``fast - reliable`` instead of the
+    compound-looking ``fast-reliable`` — but the space is dropped on any side
+    that butts against a line break or the cell's edge, so no stray leading or
+    trailing whitespace is introduced.
+    """
+    if not text:
+        return text
+
+    def _repl(m: re.Match[str]) -> str:
+        # The chars flanking the consumed span (the dash + its hugging spaces).
+        # A string edge is treated like a newline: no hyphen padding toward it.
+        left = text[m.start() - 1] if m.start() > 0 else "\n"
+        right = text[m.end()] if m.end() < len(text) else "\n"
+        lead = "" if left == "\n" else " "
+        trail = "" if right == "\n" else " "
+        return f"{lead}-{trail}"
+
+    return _EM_DASH.sub(_repl, text)
+
+
+# ---------- 6. html_format ----------
 
 # Opening/closing b|strong|i|em|u tags. The lookahead pins the tag NAME so
 # <button>, <br>, <ul>, <img> are never matched.
@@ -312,6 +351,7 @@ _FUNCS = {
     "response_start": strip_response_start,
     "close_tags": close_unclosed_tags,
     "inline_css": strip_inline_css,
+    "em_dash": replace_em_dashes,
     "html_format": strip_html_formatting,
 }
 

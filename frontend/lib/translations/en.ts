@@ -22,6 +22,15 @@ export const en = {
   "tableCost.colTokens": "Tokens",
   "tableCost.noSpend":
     "Nothing generated yet, or this table predates cost tracking.",
+  "tableCost.toolsHeading": "AI tools",
+  "tableCost.toolsHint":
+    "AI cleanup passes run on this table (translate, link-fix). Shown separately — not part of the generation total above.",
+  "tableCost.colTool": "Tool",
+  "tableCost.colCalls": "Calls",
+  "tableCost.tool.brain_translate": "Translate",
+  "tableCost.tool.brain_fix_links": "AI link-fix",
+  "tableCost.toolUnpricedHint":
+    "{n} call(s) added $0 — no rate configured for that provider:model, or they ran before per-tool cost tracking shipped.",
   "common.retry": "Retry",
   "common.save": "Save",
   "common.saving": "Saving…",
@@ -84,7 +93,7 @@ export const en = {
   "common.dash": "—",
 
   // ---------- app shell ----------
-  "app.brand": "AI Content Machine",
+  "app.brand": "Content Beast",
   "app.tagline": "Internal tool for AI-driven content generation",
   "app.signOut": "Sign out",
   "nav.dashboard": "Dashboard",
@@ -831,6 +840,19 @@ export const en = {
   "bulkGrid.errorEmpty": "(no error message)",
   "bulkGrid.retryCell": "Retry this cell",
   "bulkGrid.retryFailed": "Failed to retry. Check console for details.",
+
+  // generation error banner (table-wide failed / truncated notice)
+  "genErrors.failedTitle": "{count} cell(s) failed to generate",
+  "genErrors.truncatedTitle": "{count} cell(s) were cut off (truncated)",
+  "genErrors.affectedColumns": "Affected columns:",
+  "genErrors.truncatedHelp":
+    "These replies hit the output-token limit, so the text is incomplete. Raise Max output tokens for these columns (or in Settings → Generation) before retrying, or they'll be cut off again.",
+  "genErrors.retryFailed": "Retry failed ({count})",
+  "genErrors.retryFailedHint":
+    "Open the generation queue to re-run only the cells whose request errored.",
+  "genErrors.retryTruncated": "Retry truncated ({count})",
+  "genErrors.retryTruncatedHint":
+    "Open the generation queue to re-run only the cut-off cells. Raise Max output tokens first, or they'll truncate again.",
 
   // cell editor
   "cellEditor.edit": "Edit",
@@ -1863,6 +1885,9 @@ export const en = {
   "structureFormat.op.inline_css.title": "Inline CSS",
   "structureFormat.op.inline_css.desc":
     "Remove style=\"…\" attributes and <style> blocks; other attributes are kept.",
+  "structureFormat.op.em_dash.title": "Replace em dashes",
+  "structureFormat.op.em_dash.desc":
+    "Swap em dashes (—) for a plain hyphen — a glaring “written by AI” tell. Spaced, so “fast—reliable” becomes “fast - reliable”. En dashes (–) and hyphens are left alone.",
   "structureFormat.op.html_format.title": "HTML formatting",
   "structureFormat.op.html_format.desc":
     "Unwrap <b> <strong> <i> <em> <u> tags, keeping the text inside.",
@@ -2149,6 +2174,8 @@ export const en = {
   "linkFix.targetExisting": "Column: {name}",
   "linkFix.targetOverwrite": "Overwrite the scanned column",
   "linkFix.newColumnName": "New column name",
+  "linkFix.newNameMatchesExisting":
+    "A column named “{name}” already exists — corrected cells go into it, no duplicate column is created. Type a different name to make a separate column.",
   "linkFix.overwriteWarn":
     "This replaces the original content in place. Consider a new column to keep the original.",
   "linkFix.startFix": "Start fix",

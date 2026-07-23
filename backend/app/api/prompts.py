@@ -849,7 +849,7 @@ async def translate_prompt_version(
             }
 
     try:
-        text, code, model = await _translate_text(
+        text, code, model, pt, ct = await _translate_text(
             db, source_text=version.content, target_language=requested
         )
     except _ProviderNotConfigured as e:
@@ -890,8 +890,8 @@ async def translate_prompt_version(
         user_id=actor.id,
         provider_code=code,
         model=model,
-        prompt_tokens=None,
-        completion_tokens=None,
+        prompt_tokens=pt,
+        completion_tokens=ct,
         source="brain_translate",
         source_ref={
             "prompt_id": prompt_id,

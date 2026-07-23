@@ -25,7 +25,7 @@ feature works on a fresh install without anyone touching Settings first.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +40,22 @@ from app.services.app_settings_cache import (
 )
 
 BRAIN_KEY = "brain"
+
+
+class AiTextResult(NamedTuple):
+    """A Brain text call's result: the text plus what it cost to produce.
+
+    ``prompt_tokens`` / ``completion_tokens`` are whatever the provider
+    reported (either may be None when it returns no usage) and are passed
+    straight to ``record_usage`` so translate / fix-links spend is priced like
+    bulk generation instead of silently logging $0.
+    """
+
+    text: str
+    provider_code: str
+    model: str
+    prompt_tokens: int | None
+    completion_tokens: int | None
 
 # The translate prompt is intentionally short and HTML-aware. Output
 # columns in this app typically hold HTML / WordPress block markup;
@@ -334,10 +350,10 @@ async def translate_text(
     *,
     source_text: str,
     target_language: str,
-) -> tuple[str, str, str]:
+) -> AiTextResult:
     """Run the configured translate prompt against `source_text`.
 
-    Returns ``(translated_text, provider_used_code, model_used)``. Raises
+    Returns an ``AiTextResult`` (text + provider/model + token usage). Raises
     ``ProviderNotConfigured`` when no provider is enabled and no override
     is set, or ``ProviderError`` for any LLM-side failure (the caller
     surfaces it as a 502).
@@ -380,7 +396,9 @@ async def translate_text(
         lines = text.split("\n")
         text = "\n".join(lines[1:-1]).strip()
 
-    return text, code, result.model
+    return AiTextResult(
+        text, code, result.model, result.prompt_tokens, result.completion_tokens
+    )
 
 
 async def save_fix_links_config(
@@ -462,14 +480,14 @@ async def fix_links_text(
     expected_links: list[str],
     violations: list[dict],
     system_override: str | None = None,
-) -> tuple[str, str, str]:
+) -> AiTextResult:
     """Run the fix-links prompt against ``content``.
 
     ``system_override`` (a per-job prompt) takes precedence over the global
     Brain ``fix_links`` prompt when non-empty; the provider/model still come
-    from the Brain config. Returns ``(fixed_text, provider_used_code,
-    model_used)``. Raises ``ProviderNotConfigured`` when no provider is
-    enabled, or ``ProviderError`` for any LLM-side failure."""
+    from the Brain config. Returns an ``AiTextResult`` (fixed text +
+    provider/model + token usage). Raises ``ProviderNotConfigured`` when no
+    provider is enabled, or ``ProviderError`` for any LLM-side failure."""
     cfg = (await load_brain(db))["fix_links"]
     code = cfg.get("provider_code") or await first_enabled_provider_code(db)
     if not code:
@@ -506,7 +524,9 @@ async def fix_links_text(
         lines = text.split("\n")
         text = "\n".join(lines[1:-1]).strip()
 
-    return text, code, result.model
+    return AiTextResult(
+        text, code, result.model, result.prompt_tokens, result.completion_tokens
+    )
 
 
 def now_iso() -> str:

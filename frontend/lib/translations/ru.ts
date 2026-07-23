@@ -26,6 +26,15 @@ export const ru: Record<keyof typeof en, string> = {
   "tableCost.colTokens": "Токены",
   "tableCost.noSpend":
     "Пока ничего не сгенерировано или таблица создана до учёта расходов.",
+  "tableCost.toolsHeading": "ИИ-инструменты",
+  "tableCost.toolsHint":
+    "Проходы очистки с ИИ по этой таблице (перевод, исправление ссылок). Показаны отдельно — не входят в сумму генерации выше.",
+  "tableCost.colTool": "Инструмент",
+  "tableCost.colCalls": "Вызовы",
+  "tableCost.tool.brain_translate": "Перевод",
+  "tableCost.tool.brain_fix_links": "Исправление ссылок ИИ",
+  "tableCost.toolUnpricedHint":
+    "{n} вызов(ов) добавили $0 — не задана ставка для этого провайдера:модели, либо они выполнены до появления поштучного учёта расходов.",
   "common.retry": "Повторить",
   "common.save": "Сохранить",
   "common.saving": "Сохранение…",
@@ -88,7 +97,7 @@ export const ru: Record<keyof typeof en, string> = {
   "common.dash": "—",
 
   // ---------- app shell ----------
-  "app.brand": "AI Content Machine",
+  "app.brand": "Content Beast",
   "app.tagline": "Внутренний инструмент для генерации контента с помощью ИИ",
   "app.signOut": "Выйти",
   "nav.dashboard": "Главная",
@@ -860,6 +869,19 @@ export const ru: Record<keyof typeof en, string> = {
   "bulkGrid.retryCell": "Повторить для этой ячейки",
   "bulkGrid.retryFailed":
     "Не удалось повторить. Подробности в консоли.",
+
+  // generation error banner (table-wide failed / truncated notice)
+  "genErrors.failedTitle": "Ячеек с ошибкой генерации: {count}",
+  "genErrors.truncatedTitle": "Ячеек обрезано (не поместились): {count}",
+  "genErrors.affectedColumns": "Затронутые столбцы:",
+  "genErrors.truncatedHelp":
+    "Эти ответы упёрлись в лимит выходных токенов, поэтому текст неполный. Прежде чем повторять, увеличьте «Макс. выходных токенов» для этих столбцов (или в «Настройки → Генерация») — иначе их снова обрежет.",
+  "genErrors.retryFailed": "Повторить с ошибкой ({count})",
+  "genErrors.retryFailedHint":
+    "Открыть очередь генерации и перезапустить только ячейки, где запрос завершился ошибкой.",
+  "genErrors.retryTruncated": "Повторить обрезанные ({count})",
+  "genErrors.retryTruncatedHint":
+    "Открыть очередь генерации и перезапустить только обрезанные ячейки. Сначала увеличьте «Макс. выходных токенов», иначе их снова обрежет.",
 
   // cell editor
   "cellEditor.edit": "Редактирование",
@@ -1929,6 +1951,9 @@ export const ru: Record<keyof typeof en, string> = {
   "structureFormat.op.inline_css.title": "Инлайн-CSS",
   "structureFormat.op.inline_css.desc":
     "Удалить атрибуты style=\"…\" и блоки <style>; прочие атрибуты сохраняются.",
+  "structureFormat.op.em_dash.title": "Заменить длинное тире",
+  "structureFormat.op.em_dash.desc":
+    "Меняет длинное тире (—) на обычный дефис — заметный признак ИИ-текста. С пробелами: «быстро—надёжно» становится «быстро - надёжно». Короткое тире (–) и дефисы не трогает.",
   "structureFormat.op.html_format.title": "HTML-форматирование",
   "structureFormat.op.html_format.desc":
     "Снять теги <b> <strong> <i> <em> <u>, сохранив текст внутри.",
@@ -2216,6 +2241,8 @@ export const ru: Record<keyof typeof en, string> = {
   "linkFix.targetExisting": "Колонка: {name}",
   "linkFix.targetOverwrite": "Перезаписать проверяемую колонку",
   "linkFix.newColumnName": "Название новой колонки",
+  "linkFix.newNameMatchesExisting":
+    "Колонка «{name}» уже существует — исправленные ячейки запишутся в неё, дубликат не создаётся. Укажите другое название, чтобы создать отдельную колонку.",
   "linkFix.overwriteWarn":
     "Это заменит исходный контент на месте. Лучше выберите новую колонку, чтобы сохранить оригинал.",
   "linkFix.startFix": "Запустить исправление",

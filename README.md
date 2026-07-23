@@ -1,7 +1,8 @@
-# AI Content Machine
+# Content Beast (ACM)
 
-Internal multi-user web tool for AI-driven content generation, organisation
-and publishing. Replaces a Google-Sheets-based workflow.
+**Content Beast** (short name **ACM**) is an internal multi-user web tool for
+AI-driven content generation, organisation and publishing. Replaces a
+Google-Sheets-based workflow.
 
 - **Single mode** — pick a prompt template, fill in variables, generate one
   result at a time, save it, optionally publish to WordPress / a custom CMS.

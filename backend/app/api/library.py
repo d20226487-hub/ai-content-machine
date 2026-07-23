@@ -29,7 +29,7 @@ from fastapi import (
 from decimal import Decimal
 
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete, func, or_, select, text, update
+from sqlalchemy import case, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -70,6 +70,7 @@ from app.schemas.bulk import (
     ClearValuesRequest,
     ClearValuesResponse,
     ColumnCostRead,
+    ColumnGenHealthRead,
     ColumnCreate,
     ColumnRead,
     ColumnUpdate,
@@ -128,6 +129,8 @@ from app.schemas.bulk import (
     TranslationTableResponse,
     TranslationTableRow,
     TableCostRead,
+    TableGenHealthRead,
+    ToolCostRead,
     TableRead,
     TableUpdate,
     TableUpdateRequest,
@@ -1744,7 +1747,7 @@ async def translate_cell(
             }
 
     try:
-        text, code, model = await _translate_text(
+        text, code, model, pt, ct = await _translate_text(
             db, source_text=cell.value, target_language=requested
         )
     except _ProviderNotConfigured as e:
@@ -1789,8 +1792,8 @@ async def translate_cell(
         user_id=actor.id,
         provider_code=code,
         model=model,
-        prompt_tokens=None,  # translate path doesn't surface usage today;
-        completion_tokens=None,  # the provider response is text-only.
+        prompt_tokens=pt,
+        completion_tokens=ct,
         source="brain_translate",
         source_ref={
             "table_id": table_id,
@@ -1920,6 +1923,28 @@ async def get_cell_generation_cost(
     )
 
 
+def _build_tool_costs(
+    rows: list[tuple[str, object, object, object, object, object]]
+) -> list["ToolCostRead"]:
+    """Shape ``(source, cost, prompt_tokens, completion_tokens, calls,
+    unpriced)`` aggregate rows into the per-tool cost list, most-expensive
+    first (source name as the tiebreaker). Pure (no DB) so it's unit-testable.
+    """
+    tools = [
+        ToolCostRead(
+            source=source,
+            cost_usd=Decimal(cost or 0),
+            prompt_tokens=int(pt or 0),
+            completion_tokens=int(ct or 0),
+            calls=int(calls or 0),
+            unpriced_calls=int(unpriced or 0),
+        )
+        for (source, cost, pt, ct, calls, unpriced) in rows
+    ]
+    tools.sort(key=lambda tc: (-tc.cost_usd, tc.source))
+    return tools
+
+
 @router.get("/tables/{table_id}/cost", response_model=TableCostRead)
 async def get_table_generation_cost(
     table_id: int,
@@ -1998,6 +2023,35 @@ async def get_table_generation_cost(
         )
     breakdown.sort(key=lambda c: (-c.cost_usd, c.column_name))
 
+    # AI mini-tool spend for this table (translate, AI link-fix). Same
+    # usage_events store, but a different `source` than bulk_cell and keyed to
+    # the table via source_ref. One row per tool. Older events recorded no
+    # tokens (cost NULL) — surfaced as unpriced_calls so a $0 line reads as
+    # "ran before cost tracking", not "free".
+    tool_rows = (
+        await db.execute(
+            select(
+                UsageEvent.source.label("source"),
+                func.coalesce(func.sum(UsageEvent.cost_usd), 0).label("cost"),
+                func.coalesce(func.sum(UsageEvent.prompt_tokens), 0).label("pt"),
+                func.coalesce(func.sum(UsageEvent.completion_tokens), 0).label("ct"),
+                func.count().label("calls"),
+                func.count().filter(UsageEvent.cost_usd.is_(None)).label("unpriced"),
+            )
+            .where(
+                UsageEvent.source.in_(("brain_translate", "brain_fix_links")),
+                UsageEvent.source_ref["table_id"].astext == str(table_id),
+            )
+            .group_by(UsageEvent.source)
+        )
+    ).all()
+    tools = _build_tool_costs(
+        [
+            (r.source, r.cost, r.pt, r.ct, r.calls, r.unpriced)
+            for r in tool_rows
+        ]
+    )
+
     return TableCostRead(
         table_id=table_id,
         cost_usd=sum((c.cost_usd for c in breakdown), Decimal(0)),
@@ -2007,6 +2061,88 @@ async def get_table_generation_cost(
         cells=sum(c.cells for c in breakdown),
         unpriced_generations=sum(c.unpriced_generations for c in breakdown),
         columns=breakdown,
+        tools=tools,
+    )
+
+
+def _build_gen_health(
+    table_id: int, rows: list[tuple[int, str, int, int]]
+) -> TableGenHealthRead:
+    """Shape ``(column_id, name, failed, truncated)`` aggregate rows into the
+    response: drop columns with no problem, order most-affected first, and roll
+    up the table totals. Pure (no DB) so it's unit-testable on its own."""
+    breakdown = [
+        ColumnGenHealthRead(
+            column_id=cid, column_name=name, failed=failed, truncated=truncated
+        )
+        for (cid, name, failed, truncated) in rows
+        if failed or truncated
+    ]
+    # Most-affected first, name as the tiebreaker for a stable order. Failed and
+    # truncated both count toward the rank; the UI splits them back out per row.
+    breakdown.sort(key=lambda c: (-(c.failed + c.truncated), c.column_name))
+    return TableGenHealthRead(
+        table_id=table_id,
+        failed=sum(c.failed for c in breakdown),
+        truncated=sum(c.truncated for c in breakdown),
+        columns=breakdown,
+    )
+
+
+@router.get("/tables/{table_id}/gen-health", response_model=TableGenHealthRead)
+async def get_table_gen_health(
+    table_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TableGenHealthRead:
+    """Which columns hold cells the operator can retry, and how many.
+
+    Two disjoint problems, matching the grid's two retry modes:
+      * ``failed``    — status='failed'; the request itself errored.
+      * ``truncated`` — a truncation finish_reason; the reply hit the output
+        ceiling and the kept text is a partial (status stays 'generated').
+    A failed cell has its finish_reason cleared, so the two never overlap.
+
+    Whole-table, not the current page: the grid paginates cells, so the banner
+    can't count these from what's on screen. One indexed aggregate over the
+    cells (joined to columns for the table filter + names), same shape as the
+    cost endpoint above.
+    """
+    from app.providers.base import TRUNCATION_FINISH_REASONS
+
+    await _get_table_or_404(db, table_id, actor, level="read")
+
+    is_failed = case((BulkTableCell.status == "failed", 1), else_=0)
+    is_truncated = case(
+        (
+            func.lower(BulkTableCell.finish_reason).in_(
+                sorted(TRUNCATION_FINISH_REASONS)
+            ),
+            1,
+        ),
+        else_=0,
+    )
+    rows = (
+        await db.execute(
+            select(
+                BulkTableColumn.id.label("column_id"),
+                BulkTableColumn.name.label("column_name"),
+                func.coalesce(func.sum(is_failed), 0).label("failed"),
+                func.coalesce(func.sum(is_truncated), 0).label("truncated"),
+            )
+            .select_from(BulkTableCell)
+            .join(BulkTableColumn, BulkTableColumn.id == BulkTableCell.column_id)
+            .where(BulkTableColumn.table_id == table_id)
+            .group_by(BulkTableColumn.id, BulkTableColumn.name)
+        )
+    ).all()
+
+    return _build_gen_health(
+        table_id,
+        [
+            (int(r.column_id), r.column_name, int(r.failed), int(r.truncated))
+            for r in rows
+        ],
     )
 
 
@@ -5290,6 +5426,21 @@ async def _get_link_fix_run_or_404(db: AsyncSession, run_id: int) -> LinkFixRun:
     return run
 
 
+def _pick_named_column(
+    existing: list[tuple[int, str]], requested: str
+) -> int | None:
+    """Id of the first existing column whose name matches ``requested``, or
+    None. Match is case- and surrounding-space-insensitive so re-running a fix
+    with the same target name reuses the column instead of duplicating it.
+    Pure (no DB) so the reuse rule is unit-testable on its own.
+    """
+    key = requested.strip().lower()
+    for col_id, name in existing:
+        if (name or "").strip().lower() == key:
+            return col_id
+    return None
+
+
 @router.post(
     "/tables/{table_id}/link-fix",
     response_model=LinkFixRunRead,
@@ -5420,51 +5571,68 @@ async def start_link_fix(
             status_code=400, detail="Nothing to fix in the selected rows."
         )
 
-    # Resolve where corrected content goes. new_column_name creates a fresh
-    # output column (original preserved); target_column_id reuses one; neither
-    # = overwrite the scanned source column (target_column_id stays NULL).
+    # Resolve where corrected content goes. new_column_name lands in a column
+    # of that name — reusing one that already exists, else creating it; an
+    # explicit target_column_id reuses a chosen column; neither = overwrite the
+    # scanned source column (target_column_id stays NULL).
     target_column_id: int | None = None
     if payload.new_column_name and payload.new_column_name.strip():
-        next_pos = (
+        requested = payload.new_column_name.strip()[:120]
+        # Don't pile up duplicate columns: re-running the fix with the same
+        # name (the default "Fixed links", most often) should feed the column
+        # that's already there, not spawn a second one beside it. Match an
+        # existing column by name, case- and surrounding-space-insensitive; a
+        # user who genuinely wants a separate column types a different name.
+        cols = (
             await db.execute(
-                select(func.coalesce(func.max(BulkTableColumn.position), -1) + 1)
+                select(BulkTableColumn.id, BulkTableColumn.name, BulkTableColumn.position)
                 .where(BulkTableColumn.table_id == table_id)
+                .order_by(BulkTableColumn.position)
             )
-        ).scalar_one()
-        new_col = BulkTableColumn(
-            table_id=table_id,
-            position=int(next_pos),
-            name=payload.new_column_name.strip()[:120],
-            kind="output",
-        )
-        db.add(new_col)
-        await db.flush()
-        target_column_id = new_col.id
+        ).all()
+        existing_id = _pick_named_column([(c.id, c.name) for c in cols], requested)
+        if existing_id is not None:
+            # Same as picking it as the target: overwrite only the corrected
+            # cells, leave the rest of the column untouched.
+            target_column_id = existing_id
+        else:
+            next_pos = max((c.position for c in cols), default=-1) + 1
+            new_col = BulkTableColumn(
+                table_id=table_id,
+                position=int(next_pos),
+                name=requested,
+                kind="output",
+            )
+            db.add(new_col)
+            await db.flush()
+            target_column_id = new_col.id
 
-        # Publish-readiness: the new column must hold EVERY row, not just the
-        # flagged ones, so it can be published as a complete column. Copy all
-        # cells of the single scanned source column into it up front; the
-        # fix workers then overwrite the corrected rows. (Link checks scan a
-        # single output column, so there's one unambiguous source.)
-        from sqlalchemy import literal
-        from sqlalchemy.dialects.postgresql import insert as pg_insert
+            # Publish-readiness: a freshly-created column must hold EVERY row,
+            # not just the flagged ones, so it can be published as a complete
+            # column. Copy all cells of the single scanned source column into
+            # it up front; the fix workers then overwrite the corrected rows.
+            # (Link checks scan a single output column, so there's one
+            # unambiguous source.) Not needed when reusing an existing column —
+            # it already has its own content.
+            from sqlalchemy import literal
+            from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-        src_cols = [int(c) for c in (source.column_ids or [])]
-        if src_cols:
-            src_col = src_cols[0]
-            await db.execute(
-                pg_insert(BulkTableCell)
-                .from_select(
-                    ["row_id", "column_id", "value", "status"],
-                    select(
-                        BulkTableCell.row_id,
-                        literal(new_col.id),
-                        BulkTableCell.value,
-                        BulkTableCell.status,
-                    ).where(BulkTableCell.column_id == src_col),
+            src_cols = [int(c) for c in (source.column_ids or [])]
+            if src_cols:
+                src_col = src_cols[0]
+                await db.execute(
+                    pg_insert(BulkTableCell)
+                    .from_select(
+                        ["row_id", "column_id", "value", "status"],
+                        select(
+                            BulkTableCell.row_id,
+                            literal(new_col.id),
+                            BulkTableCell.value,
+                            BulkTableCell.status,
+                        ).where(BulkTableCell.column_id == src_col),
+                    )
+                    .on_conflict_do_nothing(constraint="uq_bulk_cells_row_column")
                 )
-                .on_conflict_do_nothing(constraint="uq_bulk_cells_row_column")
-            )
     elif payload.target_column_id is not None:
         await _verify_columns_in_table(db, table_id, [payload.target_column_id])
         target_column_id = payload.target_column_id

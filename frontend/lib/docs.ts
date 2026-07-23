@@ -54,9 +54,9 @@ export const DOC_ARTICLES: DocArticle[] = [
     titleEn: "Bulk: content tools",
     titleRu: "Bulk: инструменты контента",
     summaryEn:
-      "Find & Replace, Link Checker (+ AI fix), and Structure & Formatting — table-wide tools under the grid.",
+      "Find & Replace, Link Checker (+ AI fix), Structure & Formatting, and Normalize — table-wide tools under the grid.",
     summaryRu:
-      "Найти и заменить, Проверка ссылок (+ ИИ-исправление) и Структура и форматирование — инструменты по всей таблице.",
+      "Найти и заменить, Проверка ссылок (+ ИИ-исправление), Структура и форматирование и Нормализация — инструменты по всей таблице.",
     roles: ["admin", "manager", "content_generator"],
   },
   {

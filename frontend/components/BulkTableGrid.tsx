@@ -6,6 +6,7 @@ import { AutotoolButton } from "@/components/AutotoolButton";
 import { CellEditorModal } from "@/components/CellEditorModal";
 import { ColumnConfigModal } from "@/components/ColumnConfigModal";
 import { BulkPublishModal } from "@/components/BulkPublishModal";
+import { GenerationErrorBanner } from "@/components/GenerationErrorBanner";
 import { GenerationProgressBanner } from "@/components/GenerationProgressBanner";
 import { GenerationQueueModal } from "@/components/GenerationQueueModal";
 import { Modal } from "@/components/Modal";
@@ -501,10 +502,31 @@ export function BulkTableGrid({
   // ---- Generation queue ----
   const [queueOpen, setQueueOpen] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
+  // When the queue is opened from the error banner it carries a preset (which
+  // retry mode + which columns); null = opened from the plain "Generate" button.
+  const [queueInit, setQueueInit] = useState<{
+    mode: "failed" | "truncated";
+    columnIds: number[];
+  } | null>(null);
+  // Bumped whenever the failed/truncated tally may have changed (a run
+  // finished, a retry was enqueued) so the error banner refetches.
+  const [healthRefreshKey, setHealthRefreshKey] = useState(0);
 
   async function openQueue(): Promise<void> {
     // Flush any pending cell edits first so what's in the queue reflects reality.
     await flushPending();
+    setQueueInit(null);
+    setQueueOpen(true);
+  }
+
+  // Open the queue from the error banner, pre-set to a retry mode and scoped to
+  // the affected columns.
+  async function openQueueForRetry(
+    mode: "failed" | "truncated",
+    columnIds: number[],
+  ): Promise<void> {
+    await flushPending();
+    setQueueInit({ mode, columnIds });
     setQueueOpen(true);
   }
 
@@ -542,7 +564,9 @@ export function BulkTableGrid({
 
   async function onQueueEnqueued(_message: string): Promise<void> {
     // Re-fetch the current page to flip cells to 'generating'; polling will
-    // take it from there.
+    // take it from there. Retried cells leave the failed/truncated tally right
+    // away, so refresh the error banner too.
+    setHealthRefreshKey((k) => k + 1);
     try {
       await reloadPage({ silent: true });
     } catch (err) {
@@ -684,6 +708,9 @@ export function BulkTableGrid({
   // update cells server-side and the local pendingRef / autosave state has
   // nothing to merge.
   const refreshOnRunFinish = useCallback(async () => {
+    // A finished run is exactly when new failures / truncations settle, so
+    // re-probe the error banner alongside the page reload.
+    setHealthRefreshKey((k) => k + 1);
     try {
       await reloadPageRef.current({ silent: true });
     } catch {
@@ -699,6 +726,14 @@ export function BulkTableGrid({
       <GenerationProgressBanner
         tableId={table.id}
         onRunFinished={refreshOnRunFinish}
+      />
+
+      {/* Table-wide notice of cells that failed or were cut off, with a jump
+          straight into the matching retry. */}
+      <GenerationErrorBanner
+        tableId={table.id}
+        refreshKey={healthRefreshKey}
+        onRetry={(mode, columnIds) => void openQueueForRetry(mode, columnIds)}
       />
 
       {/* Generation toolbar */}
@@ -1244,7 +1279,12 @@ export function BulkTableGrid({
           totalRowCount={totalRows}
           allRowsSelected={allRowsSelected}
           preselectedRowIds={Array.from(selectedRowIds)}
-          onClose={() => setQueueOpen(false)}
+          initialMode={queueInit?.mode}
+          initialColumnIds={queueInit?.columnIds}
+          onClose={() => {
+            setQueueOpen(false);
+            setQueueInit(null);
+          }}
           onEnqueued={(msg) => void onQueueEnqueued(msg)}
         />
       )}
@@ -1269,6 +1309,7 @@ export function BulkTableGrid({
                     column_ids: [cell.column_id],
                     mode: "all",
                   });
+                  setHealthRefreshKey((k) => k + 1);
                   await reloadPage({ silent: true });
                 } catch (err) {
                   console.error("[Bulk] retry cell failed", err);
