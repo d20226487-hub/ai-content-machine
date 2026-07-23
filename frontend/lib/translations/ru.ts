@@ -984,6 +984,8 @@ export const ru: Record<keyof typeof en, string> = {
     "Запускает заново для каждой выбранной ячейки, заменяя существующие значения.",
   "queue.willGenerate":
     "Будет сгенерировано ячеек: {count} в колонках: {cols} × строках: {rows}.",
+  "queue.groundingSurcharge":
+    "{n} с поиском — до {cost} доплаты за Google Search (повторы из кэша бесплатны).",
   "queue.using": "Используется: {variants}",
   "queue.usingOverride": "Переопределение: для каждой ячейки этого запуска — {provider} / {model}.",
   "queue.overrideLabel": "Переопределить провайдера и модель для этого запуска",

@@ -272,3 +272,29 @@ async def _reconcile_run(
     )
     await db.commit()
     return len(claimed)
+
+
+# ---------------------------------------------------------------------------
+# Grounding cache cleanup
+# ---------------------------------------------------------------------------
+
+
+@celery_app.task(name="grounding_cache.cleanup")
+def grounding_cache_cleanup() -> dict:
+    """Drop expired memoized grounded results so the cache table stays bounded."""
+    return {"deleted": asyncio.run(_grounding_cache_cleanup())}
+
+
+async def _grounding_cache_cleanup() -> int:
+    from app.services.grounding_cache import cleanup_expired
+
+    settings = get_settings()
+    engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
+    Session: async_sessionmaker[AsyncSession] = async_sessionmaker(
+        engine, expire_on_commit=False, class_=AsyncSession
+    )
+    try:
+        async with Session() as db:
+            return await cleanup_expired(db)
+    finally:
+        await engine.dispose()

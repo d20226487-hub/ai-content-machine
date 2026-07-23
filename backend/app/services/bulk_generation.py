@@ -302,70 +302,91 @@ async def generate_one_cell(
     # Cached read; the per-column override is applied at the call site below.
     gen_limits = await load_generation_limits(db)
 
+    from app.services import grounding_cache
     from app.services.rate_limit import get_rate_limiter
     from app.services.retry import call_with_retry
 
-    limiter = get_rate_limiter()
-    try:
-        async with limiter.acquire(
-            provider_code=code,
-            max_concurrency=provider_row.max_concurrency,
-            requests_per_minute=provider_row.requests_per_minute,
-            inter_request_delay_ms=provider_row.inter_request_delay_ms,
-        ):
-            result = await call_with_retry(
-                provider,
-                prompt=rendered,
-                model=chosen_model,
-                params=GenerationParams(
-                    temperature=0.7,
-                    max_output_tokens=resolve_max_output_tokens(
-                        col.max_output_tokens, gen_limits
+    # Grounding memo: a grounded call carries a per-request surcharge, so cache
+    # its result keyed by the exact rendered prompt + model. An identical re-run
+    # or a duplicate-input row reuses it and pays nothing. Non-grounded columns
+    # never touch the cache.
+    grounded = bool(col.grounding)
+    gc_key = (
+        grounding_cache.cache_key(rendered, chosen_model, col.grounding)
+        if grounded
+        else None
+    )
+    cached_result = await grounding_cache.get_cached(db, gc_key) if gc_key else None
+
+    if cached_result is not None:
+        result = cached_result
+    else:
+        limiter = get_rate_limiter()
+        try:
+            async with limiter.acquire(
+                provider_code=code,
+                max_concurrency=provider_row.max_concurrency,
+                requests_per_minute=provider_row.requests_per_minute,
+                inter_request_delay_ms=provider_row.inter_request_delay_ms,
+            ):
+                result = await call_with_retry(
+                    provider,
+                    prompt=rendered,
+                    model=chosen_model,
+                    params=GenerationParams(
+                        temperature=0.7,
+                        max_output_tokens=resolve_max_output_tokens(
+                            col.max_output_tokens, gen_limits
+                        ),
+                        thinking_budget=gen_limits.thinking_budget,
+                        # Per-column grounding (null = off). Only the Vertex
+                        # Gemini path acts on it; other providers ignore it.
+                        grounding=col.grounding,
                     ),
-                    thinking_budget=gen_limits.thinking_budget,
-                    # Per-column grounding (null = off). Only the Vertex Gemini
-                    # path acts on it; other providers ignore the field.
-                    grounding=col.grounding,
-                ),
-                retry_max_attempts=provider_row.retry_max_attempts,
-                backoff_base_ms=provider_row.backoff_base_ms,
-                backoff_jitter_ms=provider_row.backoff_jitter_ms,
-                respect_retry_after=provider_row.respect_retry_after,
+                    retry_max_attempts=provider_row.retry_max_attempts,
+                    backoff_base_ms=provider_row.backoff_base_ms,
+                    backoff_jitter_ms=provider_row.backoff_jitter_ms,
+                    respect_retry_after=provider_row.respect_retry_after,
+                )
+        except ProviderError as e:
+            await _write_failure(db, row_id, column_id, str(e))
+            await _log_provider_failure(
+                db,
+                table_id=table_id,
+                row_id=row_id,
+                column_id=column_id,
+                provider_code=code,
+                model=chosen_model,
+                error=e,
             )
-    except ProviderError as e:
-        await _write_failure(db, row_id, column_id, str(e))
-        await _log_provider_failure(
-            db,
-            table_id=table_id,
-            row_id=row_id,
-            column_id=column_id,
-            provider_code=code,
-            model=chosen_model,
-            error=e,
-        )
-        if run_id is not None:
-            await _bump_run_counter(db, run_id, field="failed")
-        return
-    except Exception as e:  # last-resort
-        await _write_failure(db, row_id, column_id, f"Unexpected error: {e}")
-        await log_error(
-            db,
-            source="worker",
-            category="unhandled",
-            message=f"{type(e).__name__}: {e}",
-            provider=code,
-            context={
-                "table_id": table_id,
-                "row_id": row_id,
-                "column_id": column_id,
-                "model": chosen_model,
-            },
-            resource_type="cell",
-            resource_id=f"{row_id}:{column_id}",
-        )
-        if run_id is not None:
-            await _bump_run_counter(db, run_id, field="failed")
-        return
+            if run_id is not None:
+                await _bump_run_counter(db, run_id, field="failed")
+            return
+        except Exception as e:  # last-resort
+            await _write_failure(db, row_id, column_id, f"Unexpected error: {e}")
+            await log_error(
+                db,
+                source="worker",
+                category="unhandled",
+                message=f"{type(e).__name__}: {e}",
+                provider=code,
+                context={
+                    "table_id": table_id,
+                    "row_id": row_id,
+                    "column_id": column_id,
+                    "model": chosen_model,
+                },
+                resource_type="cell",
+                resource_id=f"{row_id}:{column_id}",
+            )
+            if run_id is not None:
+                await _bump_run_counter(db, run_id, field="failed")
+            return
+        # Cache the fresh grounded result so identical re-runs skip the paid call.
+        if gc_key is not None:
+            await grounding_cache.put_cached(
+                db, gc_key, provider_code=code, model=chosen_model, result=result
+            )
 
     cell = await _ensure_cell(db, row_id, column_id)
     cell.value = result.text
@@ -401,23 +422,42 @@ async def generate_one_cell(
 
     await db.commit()
 
-    # Track-only spend log (#9). Attribute the spend to the table owner so
-    # it shows up under the right user in /users. Best-effort.
-    from app.services.usage import record_usage  # local import: avoid cycle
-    await record_usage(
-        db,
-        user_id=table.created_by_id if table is not None else None,
-        provider_code=code,
-        model=result.model,
-        prompt_tokens=result.prompt_tokens,
-        completion_tokens=result.completion_tokens,
-        source="bulk_cell",
-        source_ref={
-            "table_id": table_id,
-            "row_id": row_id,
-            "column_id": column_id,
-        },
-    )
+    # Track-only spend log (#9) — ONLY when we actually called the provider; a
+    # cache hit is free. Attribute the spend to the table owner so it shows up
+    # under the right user in /users. Best-effort.
+    if cached_result is None:
+        from app.services.usage import (  # local import: avoid cycle
+            record_grounding_surcharge,
+            record_usage,
+        )
+
+        await record_usage(
+            db,
+            user_id=table.created_by_id if table is not None else None,
+            provider_code=code,
+            model=result.model,
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+            source="bulk_cell",
+            source_ref={
+                "table_id": table_id,
+                "row_id": row_id,
+                "column_id": column_id,
+            },
+        )
+        # Flat per-request surcharge for the Google Search grounding tool.
+        if grounded:
+            await record_grounding_surcharge(
+                db,
+                user_id=table.created_by_id if table is not None else None,
+                provider_code=code,
+                model=result.model,
+                source_ref={
+                    "table_id": table_id,
+                    "row_id": row_id,
+                    "column_id": column_id,
+                },
+            )
 
     if run_id is not None:
         await _bump_run_counter(db, run_id, field="done")

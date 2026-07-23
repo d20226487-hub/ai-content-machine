@@ -74,6 +74,12 @@ celery_app.conf.update(
             "task": "csv_export.cleanup",
             "schedule": crontab(hour=3, minute=30),
         },
+        # Drop expired memoized grounded results so the cache table stays
+        # bounded (the TTL already makes stale rows read as misses).
+        "daily-grounding-cache-cleanup": {
+            "task": "grounding_cache.cleanup",
+            "schedule": crontab(hour=3, minute=45),
+        },
         # Resume link-check runs whose crawl has stalled (worker death / lost
         # message). The task itself only touches runs with no progress in the
         # last few minutes, so active runs are never disturbed.

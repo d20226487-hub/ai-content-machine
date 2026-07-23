@@ -2934,8 +2934,21 @@ async def generate_preview(
     to_enqueue, skipped = await _resolve_generation_candidates(
         db, table_id, cols, rows, payload
     )
+    # Grounded cells carry a per-request surcharge; estimate the max (cache hits
+    # at run time can only lower it) so the queue modal can warn before running.
+    grounded_col_ids = {c.id for c in cols if c.grounding}
+    grounded_count = sum(1 for (_rid, cid) in to_enqueue if cid in grounded_col_ids)
+    surcharge: float | None = None
+    if grounded_count:
+        from app.services.pricing import load_grounding_rate
+
+        surcharge = float(await load_grounding_rate(db)) * grounded_count
     return GeneratePreviewResponse(
-        will_generate=len(to_enqueue), skipped=skipped, unmapped_columns=unmapped
+        will_generate=len(to_enqueue),
+        skipped=skipped,
+        unmapped_columns=unmapped,
+        grounded_count=grounded_count,
+        grounding_surcharge_usd=surcharge,
     )
 
 

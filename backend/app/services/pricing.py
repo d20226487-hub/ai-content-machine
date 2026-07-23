@@ -31,6 +31,23 @@ from app.services.app_settings_cache import (
 PRICING_KEY = "pricing"
 _TOKENS_PER_UNIT = Decimal("1000000")  # rates are per 1M tokens
 
+# Grounding (Google Search tool) is billed per grounded request, not per token,
+# so it lives in its OWN app_settings key rather than the per-model pricing blob
+# — save_pricing() overwrites that blob wholesale and would wipe it. Default is
+# Google's list rate: $35 / 1000 grounded prompts.
+GROUNDING_PRICING_KEY = "grounding_pricing"
+_DEFAULT_GROUNDING_RATE = Decimal("0.035")
+
+
+async def load_grounding_rate(db: AsyncSession) -> Decimal:
+    """Per-grounded-request surcharge in USD (configurable; sane default)."""
+    raw = await get_setting(db, GROUNDING_PRICING_KEY)
+    if isinstance(raw, dict):
+        rate = _to_decimal(raw.get("per_request_usd"))
+        if rate is not None and rate >= 0:
+            return rate
+    return _DEFAULT_GROUNDING_RATE
+
 
 def _key(provider_code: str, model: str) -> str:
     return f"{provider_code}:{model}".strip()

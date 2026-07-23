@@ -25,7 +25,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import UsageEvent, User
-from app.services.pricing import compute_cost_usd, load_pricing
+from app.services.pricing import (
+    compute_cost_usd,
+    load_grounding_rate,
+    load_pricing,
+)
 
 log = logging.getLogger("acm.usage")
 
@@ -69,6 +73,40 @@ async def record_usage(
             "provider_code": provider_code,
             "model": model,
             "source": source,
+        })
+
+
+async def record_grounding_surcharge(
+    db: AsyncSession,
+    *,
+    user_id: int | None,
+    provider_code: str,
+    model: str,
+    source_ref: dict[str, Any] | None = None,
+) -> None:
+    """Record the flat per-request grounding surcharge as its own usage event
+    (``source='grounding'``) so it surfaces separately from token spend. The
+    rate is the configurable ``grounding_pricing`` setting. Best-effort — a
+    failure here must never break generation."""
+    try:
+        rate = await load_grounding_rate(db)
+        ev = UsageEvent(
+            user_id=user_id,
+            provider_code=provider_code,
+            model=model,
+            prompt_tokens=None,
+            completion_tokens=None,
+            cost_usd=rate,
+            source="grounding",
+            source_ref=source_ref,
+        )
+        db.add(ev)
+        await db.commit()
+    except Exception:
+        log.exception("grounding surcharge recording failed (non-fatal)", extra={
+            "user_id": user_id,
+            "provider_code": provider_code,
+            "model": model,
         })
 
 

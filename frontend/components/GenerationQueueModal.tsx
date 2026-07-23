@@ -140,6 +140,11 @@ export function GenerationQueueModal({
   const unmappedColumns = preview?.unmapped_columns ?? [];
   const hasUnmapped = unmappedColumns.length > 0;
 
+  // Grounded cells carry a per-request Google-Search surcharge; show the
+  // max estimate (cache hits at run time only lower it).
+  const groundedCount = preview?.grounded_count ?? 0;
+  const groundingSurcharge = preview?.grounding_surcharge_usd ?? null;
+
   // Targeted row count for the summary line (independent of cell filtering).
   const targetRowCount = useMemo(() => {
     if (rowMode === "selected") return preselectedRowIds.length;
@@ -477,6 +482,17 @@ export function GenerationQueueModal({
             rows: targetRowCount,
           })}
         </p>
+        {groundedCount > 0 && (
+          <p className="mt-1 text-amber-700 dark:text-amber-300">
+            {t("queue.groundingSurcharge", {
+              n: groundedCount,
+              cost:
+                groundingSurcharge != null
+                  ? `$${groundingSurcharge.toFixed(2)}`
+                  : "—",
+            })}
+          </p>
+        )}
         {overrideEnabled && overrideProvider && overrideModel ? (
           <p className="mt-1 truncate text-neutral-500 dark:text-neutral-400">
             {t("queue.usingOverride", {

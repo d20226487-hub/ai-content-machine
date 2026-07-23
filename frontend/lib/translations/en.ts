@@ -950,6 +950,8 @@ export const en = {
     "Re-runs every targeted cell, replacing existing values.",
   "queue.willGenerate":
     "Will generate {count} cell(s) across {cols} column(s) × {rows} row(s).",
+  "queue.groundingSurcharge":
+    "{n} grounded — up to {cost} Google Search surcharge (cached repeats are free).",
   "queue.using": "Using: {variants}",
   "queue.usingOverride": "Override: forcing {provider} / {model} for every cell in this run.",
   "queue.overrideLabel": "Override provider + model for this run",

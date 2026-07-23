@@ -19,6 +19,7 @@ from app.db.models.error_log import AppSetting, ErrorLog
 from app.db.models.find_replace_run import FindReplaceRun
 from app.db.models.gdocs_import_run import GdocsImportRun
 from app.db.models.generation import Generation
+from app.db.models.grounding_cache import GroundingCache
 from app.db.models.language_sync import LanguageSyncResult, LanguageSyncRun
 from app.db.models.link_check_run import (
     LinkCheckCrawlTarget,
@@ -66,6 +67,7 @@ __all__ = [
     "FindReplaceRun",
     "GdocsImportRun",
     "Generation",
+    "GroundingCache",
     "LanguageSyncResult",
     "LanguageSyncRun",
     "LinkCheckCrawlTarget",

@@ -485,6 +485,10 @@ class GeneratePreviewResponse(BaseModel):
     # Requested columns whose prompt variables aren't all mapped. The UI blocks
     # the run until these are fixed; enqueue rejects them too. Empty = all good.
     unmapped_columns: list[UnmappedColumn] = []
+    # Grounded cells in this run + their estimated Google-Search surcharge (the
+    # MAX, before any cache hits reduce it). 0 / null when nothing is grounded.
+    grounded_count: int = 0
+    grounding_surcharge_usd: float | None = None
 
 
 class ClearValuesRequest(BaseModel):

@@ -367,6 +367,10 @@ export interface GeneratePreviewResponse {
   /** Requested columns whose prompt variables aren't all mapped. When any are
    *  present the queue modal blocks the run until they're fixed. */
   unmapped_columns?: UnmappedColumn[];
+  /** Grounded cells in this run + their estimated MAX Google-Search surcharge
+   *  (before cache hits reduce it). 0 / null when nothing is grounded. */
+  grounded_count?: number;
+  grounding_surcharge_usd?: number | null;
 }
 
 /** Dry-run a generation request: how many cells WOULD be enqueued vs skipped.
