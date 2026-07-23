@@ -172,8 +172,21 @@ async def _watchdog() -> None:
         await engine.dispose()
 
 
-async def _reconcile_run(db: AsyncSession, run_id: int) -> None:
-    """Unstick one 'running' generation run. See ``bulk_generation_watchdog``."""
+async def _reconcile_run(
+    db: AsyncSession,
+    run_id: int,
+    *,
+    no_progress_minutes: float = _NO_PROGRESS_MINUTES,
+) -> int:
+    """Unstick one 'running'/'cancelled' generation run; return cells recovered.
+
+    ``no_progress_minutes`` is how long the run must have been silent before we
+    treat its in-flight cells as dead. The watchdog uses the generous default;
+    the operator's "Recover now" button passes a short window to act on demand
+    without waiting out the full stall timer — but the window is still honoured,
+    so a run that produced a cell within it is left alone rather than culling
+    live work. See ``bulk_generation_watchdog``.
+    """
     from datetime import datetime, timedelta, timezone
 
     from sqlalchemy import func, select, text, update
@@ -182,10 +195,10 @@ async def _reconcile_run(db: AsyncSession, run_id: int) -> None:
 
     run = await db.get(BulkGenerationRun, run_id)
     if run is None or run.status not in ("running", "cancelled"):
-        return
+        return 0
 
     now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(minutes=_NO_PROGRESS_MINUTES)
+    cutoff = now - timedelta(minutes=no_progress_minutes)
 
     # Newest activity anywhere in this run. Every settled cell stamps
     # updated_at, so this advances continuously while the queue is healthy.
@@ -202,7 +215,7 @@ async def _reconcile_run(db: AsyncSession, run_id: int) -> None:
         [t for t in (last_progress, run.started_at, run.created_at) if t is not None]
     )
     if reference > cutoff:
-        return  # progressing normally — leave it alone
+        return 0  # progressing normally — leave it alone
 
     # Claim the stragglers with a status-guarded UPDATE so a worker that comes
     # back to life mid-tick can't be double-counted: only rows we actually flip
@@ -258,3 +271,4 @@ async def _reconcile_run(db: AsyncSession, run_id: int) -> None:
         {"id": run_id},
     )
     await db.commit()
+    return len(claimed)

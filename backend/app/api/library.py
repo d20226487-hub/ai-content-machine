@@ -3172,6 +3172,43 @@ async def cancel_gen_run(
     return run
 
 
+# How long a run must have been silent before "Recover now" treats its
+# in-flight cells as dead. Far shorter than the watchdog's 20-min stall timer
+# (the operator is asserting it's stuck), but non-zero so a run that produced a
+# cell in the last couple of minutes — i.e. workers are alive — is left alone
+# instead of having live work culled.
+_RECOVER_GRACE_MINUTES = 2.0
+
+
+@router.post("/gen-runs/{run_id}/recover", response_model=BulkGenerationRunRead)
+async def recover_gen_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BulkGenerationRun:
+    """Operator override for a run that looks frozen: run the watchdog's
+    reconcile right now instead of waiting out its 20-minute stall timer.
+
+    Flips cells wedged on 'generating' to 'failed' (retry them with "Only
+    failed cells") and settles the run. Guarded by a short no-progress window:
+    if the run produced a cell within the last couple of minutes it's still
+    alive, so this is a no-op and returns the run untouched. No-op on terminal
+    (done / failed) runs.
+    """
+    run = await _get_gen_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+
+    if run.status in ("done", "failed"):
+        return run
+
+    # Reuse the watchdog's reconcile, but with a short window so it acts now.
+    from app.tasks.bulk_generation import _reconcile_run
+
+    await _reconcile_run(db, run_id, no_progress_minutes=_RECOVER_GRACE_MINUTES)
+    await db.refresh(run)
+    return run
+
+
 # ---------- Find / replace (content tool) ----------
 
 

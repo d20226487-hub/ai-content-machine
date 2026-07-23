@@ -1780,6 +1780,12 @@ export const en = {
   "genBanner.cancel": "Cancel",
   "genBanner.cancelConfirm":
     "Cancel this generation run? In-flight cells finish; the rest get a \"Cancelled\" status.",
+  "genBanner.recover": "Recover",
+  "genBanner.recoverTitle":
+    "This run looks frozen. Force-recover cells stuck on \"generating\" so you can retry them.",
+  "genBanner.recovered":
+    "Recovered {n} stuck cell(s). Retry them with \"Only failed cells\".",
+  "genBanner.recoverNoop": "Nothing to recover — the run is still producing cells.",
 
   "genRun.title": "Generation run #{id}",
   "genRun.meta": "Started by {by} · {when}",

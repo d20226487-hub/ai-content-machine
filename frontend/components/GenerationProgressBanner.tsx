@@ -8,8 +8,15 @@ import { useT } from "@/lib/i18n-context";
 import {
   cancelGenerationRun,
   getActiveGenerationRun,
+  recoverGenerationRun,
   type BulkGenerationRun,
 } from "@/lib/library";
+
+// A run whose settled-cell count hasn't advanced for this long looks frozen —
+// that's when the Recover button appears. Matches the backend's recover grace
+// (_RECOVER_GRACE_MINUTES), so a visible button corresponds to a backend that
+// will actually act rather than no-op.
+const STALL_MS = 120_000;
 
 /**
  * Inline progress banner for an active bulk-generation run.
@@ -40,13 +47,29 @@ export function GenerationProgressBanner({
   const { t } = useT();
   const [run, setRun] = useState<BulkGenerationRun | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [recovering, setRecovering] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const finishedRef = useRef<number | null>(null);
+  // When the run's settled-cell count last advanced. Reset whenever it moves,
+  // so a count that sits still past STALL_MS distinguishes a frozen run from a
+  // merely slow one and surfaces the Recover button.
+  const progressRef = useRef<{ value: number; since: number }>({
+    value: -1,
+    since: 0,
+  });
 
   const tick = useCallback(async () => {
     try {
       const r = await getActiveGenerationRun(tableId);
       setRun(r);
+      // Stall tracking: bump the "last advanced" timestamp whenever the
+      // settled count moves. A count that then sits still past STALL_MS is
+      // what surfaces the Recover button.
+      const prog = r ? r.done + r.failed + r.skipped : 0;
+      if (prog !== progressRef.current.value) {
+        progressRef.current = { value: prog, since: Date.now() };
+      }
       // First-time observation of a terminal status: notify parent.
       // We dedupe by run id so a fast-polling tick that re-fires while
       // the run still shows doesn't call onRunFinished multiple times.
@@ -106,13 +129,16 @@ export function GenerationProgressBanner({
   const isActive = run.status === "queued" || run.status === "running";
   if (!isActive) return null;
 
-  const pct =
-    run.total > 0
-      ? Math.min(
-          100,
-          Math.round(((run.done + run.failed + run.skipped) / run.total) * 100),
-        )
-      : 0;
+  const settled = run.done + run.failed + run.skipped;
+  const pct = run.total > 0 ? Math.min(100, Math.round((settled / run.total) * 100)) : 0;
+
+  // Frozen-run heuristic: settled count static past STALL_MS and not yet
+  // complete. Date.now() re-evaluates each ~2s poll (setRun re-renders), so the
+  // Recover button appears within a tick of crossing the threshold.
+  const looksStuck =
+    settled < run.total &&
+    progressRef.current.since > 0 &&
+    Date.now() - progressRef.current.since > STALL_MS;
 
   async function onCancel() {
     if (run == null || cancelling) return;
@@ -126,6 +152,36 @@ export function GenerationProgressBanner({
       setError(e instanceof ApiError ? e.message : t("common.failedToLoad"));
     } finally {
       setCancelling(false);
+    }
+  }
+
+  async function onRecover() {
+    if (run == null || recovering) return;
+    setRecovering(true);
+    setNotice(null);
+    setError(null);
+    try {
+      const before = run.failed;
+      const updated = await recoverGenerationRun(run.id);
+      setRun(updated);
+      // Recovered cells are counted as failures, so the delta is how many the
+      // reconcile unstuck. Zero means the run was still producing cells (the
+      // grace refused it) or nothing was wedged.
+      const recovered = Math.max(0, updated.failed - before);
+      setNotice(
+        recovered > 0
+          ? t("genBanner.recovered", { n: recovered })
+          : t("genBanner.recoverNoop"),
+      );
+      // Reset the stall clock so the button hides until the run stalls again.
+      progressRef.current = {
+        value: updated.done + updated.failed + updated.skipped,
+        since: Date.now(),
+      };
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : t("common.failedToLoad"));
+    } finally {
+      setRecovering(false);
     }
   }
 
@@ -159,6 +215,17 @@ export function GenerationProgressBanner({
           >
             {t("genBanner.details")}
           </Link>
+          {looksStuck && (
+            <button
+              type="button"
+              onClick={() => void onRecover()}
+              disabled={recovering}
+              title={t("genBanner.recoverTitle")}
+              className="rounded-md border border-amber-400 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-60 dark:border-amber-600/60 dark:bg-amber-950/40 dark:text-amber-200"
+            >
+              {recovering ? t("common.loading") : t("genBanner.recover")}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => void onCancel()}
@@ -178,6 +245,9 @@ export function GenerationProgressBanner({
       </div>
       {error != null && (
         <p className="mt-1 text-xs text-red-700 dark:text-red-300">{error}</p>
+      )}
+      {notice != null && (
+        <p className="mt-1 text-xs text-amber-800 dark:text-amber-200">{notice}</p>
       )}
     </section>
   );

@@ -1845,6 +1845,12 @@ export const ru: Record<keyof typeof en, string> = {
   "genBanner.cancel": "Отменить",
   "genBanner.cancelConfirm":
     "Отменить генерацию? Незавершённые ячейки получат статус «Отменено».",
+  "genBanner.recover": "Восстановить",
+  "genBanner.recoverTitle":
+    "Похоже, генерация зависла. Принудительно вернуть застрявшие ячейки, чтобы повторить их.",
+  "genBanner.recovered":
+    "Восстановлено ячеек: {n}. Повторите их через «Только ошибки».",
+  "genBanner.recoverNoop": "Нечего восстанавливать — генерация ещё идёт.",
 
   "genRun.title": "Генерация #{id}",
   "genRun.meta": "Запустил: {by} · {when}",

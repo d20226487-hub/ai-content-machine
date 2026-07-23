@@ -169,3 +169,35 @@ async def test_watchdog_still_ignores_terminal_runs():
 
     assert db.statements == []
     assert db.commits == 0
+
+
+# --- Recover-now: on-demand reconcile with a short window --------------------
+
+
+@pytest.mark.asyncio
+async def test_recover_short_window_acts_and_returns_count():
+    """The Recover button passes a short window; a run silent beyond it gets its
+    stuck cells claimed, and the recovered count comes back."""
+    from app.tasks import bulk_generation as wd
+
+    db = _RecordingDB(_run(status="running", started_at=_OLD, created_at=_OLD))
+    n = await wd._reconcile_run(db, 7, no_progress_minutes=2)
+
+    assert n == 3  # the three stranded cells
+    assert any("UPDATE bulk_table_cells" in s for s in db.statements)
+    assert db.commits >= 1
+
+
+@pytest.mark.asyncio
+async def test_recover_refuses_when_run_still_producing():
+    """If the run produced a cell within the window it's alive — Recover must be
+    a no-op (return 0, touch nothing) so live work isn't culled."""
+    from app.tasks import bulk_generation as wd
+
+    now = datetime.now(timezone.utc)
+    db = _RecordingDB(_run(status="running", started_at=now, created_at=now))
+    n = await wd._reconcile_run(db, 7, no_progress_minutes=2)
+
+    assert n == 0
+    assert not any("UPDATE bulk_table_cells" in s for s in db.statements)
+    assert db.commits == 0

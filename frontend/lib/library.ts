@@ -456,6 +456,16 @@ export function cancelGenerationRun(runId: number): Promise<BulkGenerationRun> {
   });
 }
 
+/** Operator override for a run that looks frozen: runs the watchdog's
+ *  reconcile immediately (short no-progress grace) instead of waiting out its
+ *  20-min stall timer. Wedged 'generating' cells become 'failed' so they can
+ *  be retried. No-op if the run is still producing cells or already terminal. */
+export function recoverGenerationRun(runId: number): Promise<BulkGenerationRun> {
+  return api<BulkGenerationRun>(`/library/gen-runs/${runId}/recover`, {
+    method: "POST",
+  });
+}
+
 export function renameGenerationRun(
   runId: number,
   name: string | null,
