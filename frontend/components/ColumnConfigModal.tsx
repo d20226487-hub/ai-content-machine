@@ -7,7 +7,7 @@ import { Modal } from "@/components/Modal";
 import { ApiError } from "@/lib/api";
 import { useT } from "@/lib/i18n-context";
 import { listEnabledProviders, renderPrompt } from "@/lib/generate";
-import { updateColumn } from "@/lib/library";
+import { extractGroundingSources, updateColumn } from "@/lib/library";
 import { getPrompt, listCategories, listPrompts } from "@/lib/prompts";
 import type {
   BulkColumn,
@@ -23,13 +23,16 @@ interface Props {
   column: BulkColumn;
   onClose: () => void;
   onSaved: (col: BulkColumn) => void;
+  /** Called after a grounded column's sources are extracted into a sibling
+   *  column, so the parent can refetch and show it. */
+  onExtracted?: () => void;
 }
 
 /**
  * Configures an output column: pick a prompt, then map each prompt variable
  * to a source column. Auto-matches by name on first selection.
  */
-export function ColumnConfigModal({ table, column, onClose, onSaved }: Props) {
+export function ColumnConfigModal({ table, column, onClose, onSaved, onExtracted }: Props) {
   const { t } = useT();
   // First-touch guard: flips true on any input change inside the form so
   // an accidental backdrop click can't lose prompt/variable mappings.
@@ -69,6 +72,7 @@ export function ColumnConfigModal({ table, column, onClose, onSaved }: Props) {
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [extracting, setExtracting] = useState(false);
 
   // Other columns that can be sources for variables (any column except this one).
   const sourceColumns = useMemo(
@@ -190,6 +194,22 @@ export function ColumnConfigModal({ table, column, onClose, onSaved }: Props) {
     }
     return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [filteredPrompts, categories]);
+
+  async function onExtractSources() {
+    if (extracting) return;
+    setExtracting(true);
+    setError(null);
+    try {
+      await extractGroundingSources(table.id, column.id);
+      onExtracted?.();
+      onClose();
+    } catch (err) {
+      console.error("[Bulk] extract grounding sources failed", err);
+      setError(err);
+    } finally {
+      setExtracting(false);
+    }
+  }
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -469,6 +489,22 @@ export function ColumnConfigModal({ table, column, onClose, onSaved }: Props) {
                 : t("colCfg.groundingRequiresVertex")}
             </span>
           </label>
+
+          {column.grounding && (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void onExtractSources()}
+                disabled={extracting}
+                className="rounded-md border border-neutral-300 px-2.5 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-60 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
+              >
+                {extracting ? t("common.loading") : t("colCfg.extractSources")}
+              </button>
+              <span className="text-xs text-neutral-500 dark:text-neutral-400">
+                {t("colCfg.extractSourcesHint")}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Preview */}

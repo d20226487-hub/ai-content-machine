@@ -907,6 +907,9 @@ export const en = {
   "colCfg.groundingGoogleSearch": "Google Search — research the topic",
   "colCfg.groundingHint":
     "Researches the topic against live Google Search and attaches the sources it cited. Best on a dedicated column that other columns read as a variable. Adds a per-cell surcharge on top of tokens.",
+  "colCfg.extractSources": "Extract sources → column",
+  "colCfg.extractSourcesHint":
+    "Copy the cited source URLs into a sibling column you can validate/repair with Link-Check.",
   "colCfg.groundingRequiresVertex":
     "Set the provider to Google Vertex AI with a Gemini model to enable grounding.",
   "colCfg.preview": "Preview",

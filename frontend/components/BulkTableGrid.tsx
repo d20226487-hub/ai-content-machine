@@ -1258,6 +1258,10 @@ export function BulkTableGrid({
           table={table}
           column={configuring}
           onClose={() => setConfiguring(null)}
+          onExtracted={() => {
+            setConfiguring(null);
+            void reloadPage();
+          }}
           onSaved={(col) =>
             onTableChange({
               ...table,

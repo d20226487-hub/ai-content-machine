@@ -270,6 +270,19 @@ export function deleteColumn(tableId: number, columnId: number): Promise<void> {
   });
 }
 
+/** Spin a grounded column's cited sources into a sibling "<name> — Sources"
+ *  input column (reused on re-run) so Link-Check / AI Link-Fix can validate or
+ *  repair those URLs. Returns the new/updated column. */
+export function extractGroundingSources(
+  tableId: number,
+  columnId: number,
+): Promise<BulkColumn> {
+  return api<BulkColumn>(
+    `/library/tables/${tableId}/columns/${columnId}/grounding-sources-column`,
+    { method: "POST" },
+  );
+}
+
 // ----- Rows -----
 
 export function addRow(tableId: number): Promise<BulkRow> {

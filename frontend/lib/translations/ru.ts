@@ -937,6 +937,9 @@ export const ru: Record<keyof typeof en, string> = {
   "colCfg.groundingGoogleSearch": "Google Search — исследовать тему",
   "colCfg.groundingHint":
     "Исследует тему через живой поиск Google и прикрепляет использованные источники. Лучше всего — на отдельной колонке, которую остальные читают как переменную. Добавляет наценку за каждую ячейку сверх токенов.",
+  "colCfg.extractSources": "Источники → в колонку",
+  "colCfg.extractSourcesHint":
+    "Скопировать ссылки на источники в соседнюю колонку, которую можно проверить/починить через «Проверку ссылок».",
   "colCfg.groundingRequiresVertex":
     "Чтобы включить граундинг, выберите провайдера Google Vertex AI и модель Gemini.",
   "colCfg.preview": "Предпросмотр",

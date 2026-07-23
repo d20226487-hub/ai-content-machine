@@ -5616,6 +5616,111 @@ def _pick_named_column(
     return None
 
 
+def _format_grounding_sources(gs: dict | None) -> str:
+    """One ``Title — URL`` per cited source, newline-joined. Link-Check's
+    expected-column extractor pulls the ``http(s)://`` URLs and ignores the
+    title labels, so this feeds Link-Fix directly. Pure (no DB), unit-testable."""
+    lines: list[str] = []
+    for s in (gs or {}).get("sources") or []:
+        uri = (s or {}).get("uri")
+        if not uri:
+            continue
+        title = ((s or {}).get("title") or "").strip()
+        lines.append(f"{title} — {uri}" if title else uri)
+    return "\n".join(lines)
+
+
+@router.post(
+    "/tables/{table_id}/columns/{column_id}/grounding-sources-column",
+    response_model=ColumnRead,
+)
+async def extract_grounding_sources_column(
+    table_id: int,
+    column_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ColumnRead:
+    """Spin a grounded column's cited sources into a sibling INPUT column — one
+    ``Title — URL`` per line, per row — so Link-Check / AI Link-Fix can validate
+    or repair those URLs (the Vertex source links are redirects worth resolving).
+    Reuses a same-named ``<column> — Sources`` column on re-run instead of
+    stacking duplicates. 400 if the column isn't grounded."""
+    t = await _get_owned_table_or_404(db, table_id, actor)
+
+    col = (
+        await db.execute(
+            select(BulkTableColumn).where(
+                BulkTableColumn.id == column_id,
+                BulkTableColumn.table_id == t.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if col is None:
+        raise HTTPException(status_code=404, detail="Column not found")
+    if not col.grounding:
+        raise HTTPException(
+            status_code=400,
+            detail="This column isn't grounded, so it has no sources to extract.",
+        )
+
+    src_cells = (
+        await db.execute(
+            select(BulkTableCell.row_id, BulkTableCell.grounding_sources).where(
+                BulkTableCell.column_id == column_id,
+                BulkTableCell.grounding_sources.is_not(None),
+            )
+        )
+    ).all()
+    row_text = {
+        rid: _format_grounding_sources(gs)
+        for rid, gs in src_cells
+    }
+    row_text = {rid: txt for rid, txt in row_text.items() if txt}
+
+    # Reuse-or-create the sibling "<name> — Sources" column (dedupe by name).
+    target_name = f"{col.name} — Sources"[:120]
+    cols = (
+        await db.execute(
+            select(
+                BulkTableColumn.id, BulkTableColumn.name, BulkTableColumn.position
+            )
+            .where(BulkTableColumn.table_id == t.id)
+            .order_by(BulkTableColumn.position)
+        )
+    ).all()
+    existing_id = _pick_named_column([(c.id, c.name) for c in cols], target_name)
+    if existing_id is not None:
+        target = (
+            await db.execute(
+                select(BulkTableColumn).where(BulkTableColumn.id == existing_id)
+            )
+        ).scalar_one()
+    else:
+        next_pos = max((c.position for c in cols), default=-1) + 1
+        target = BulkTableColumn(
+            table_id=t.id, position=int(next_pos), name=target_name, kind="input"
+        )
+        db.add(target)
+        await db.flush()
+
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    for rid, txt in row_text.items():
+        await db.execute(
+            pg_insert(BulkTableCell)
+            .values(row_id=rid, column_id=target.id, value=txt, status="manual")
+            .on_conflict_do_update(
+                constraint="uq_bulk_cells_row_column",
+                set_={"value": txt, "status": "manual"},
+            )
+        )
+
+    await _bump_table_updated(db, t.id)
+    await db.commit()
+    await db.refresh(target)
+    return ColumnRead.model_validate(target)
+
+
 @router.post(
     "/tables/{table_id}/link-fix",
     response_model=LinkFixRunRead,
