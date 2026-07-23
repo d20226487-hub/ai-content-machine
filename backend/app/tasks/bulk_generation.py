@@ -128,7 +128,7 @@ def bulk_generation_watchdog() -> dict:
 
 
 async def _watchdog() -> None:
-    from sqlalchemy import select
+    from sqlalchemy import and_, or_, select
 
     from app.db.models import BulkGenerationRun
 
@@ -139,11 +139,24 @@ async def _watchdog() -> None:
     )
     try:
         async with Session() as db:
+            # 'running' runs are the common case. 'cancelled' runs are picked up
+            # only while NOT yet finalized (finished_at IS NULL): a user cancel
+            # that stranded in-flight cells (OOM-killed worker / lost message)
+            # whose tasks never ran to settle themselves. The cancel endpoint
+            # now sweeps those synchronously, so this is a backstop — for cells
+            # it missed and for runs cancelled by older code. Drained cancels
+            # have finished_at set and are skipped, keeping the tick cheap.
             run_ids = (
                 (
                     await db.execute(
                         select(BulkGenerationRun.id).where(
-                            BulkGenerationRun.status == "running"
+                            or_(
+                                BulkGenerationRun.status == "running",
+                                and_(
+                                    BulkGenerationRun.status == "cancelled",
+                                    BulkGenerationRun.finished_at.is_(None),
+                                ),
+                            )
                         )
                     )
                 )
@@ -168,7 +181,7 @@ async def _reconcile_run(db: AsyncSession, run_id: int) -> None:
     from app.db.models import BulkGenerationRun, BulkTableCell
 
     run = await db.get(BulkGenerationRun, run_id)
-    if run is None or run.status != "running":
+    if run is None or run.status not in ("running", "cancelled"):
         return
 
     now = datetime.now(timezone.utc)
@@ -218,15 +231,28 @@ async def _reconcile_run(db: AsyncSession, run_id: int) -> None:
             {"n": len(claimed), "id": run_id},
         )
 
-    # Settle the run. Mirrors _bump_run_counter's terminal flip, including
-    # case (b) where every cell was already accounted for but the final
-    # counter bump was lost.
+    # Settle the run. A 'running' run flips to 'done' once fully accounted for
+    # (case (b): every cell settled but the final counter bump was lost). A
+    # 'cancelled' run keeps its status but gets finished_at stamped so the
+    # detail page stops showing it as ongoing. Both are guarded on the current
+    # status so a live worker's own terminal write and ours converge.
     await db.execute(
         text(
             "UPDATE bulk_generation_runs "
             "SET status = 'done', finished_at = NOW() "
             "WHERE id = :id "
             "  AND status = 'running' "
+            "  AND done + failed + skipped >= total"
+        ),
+        {"id": run_id},
+    )
+    await db.execute(
+        text(
+            "UPDATE bulk_generation_runs "
+            "SET finished_at = NOW() "
+            "WHERE id = :id "
+            "  AND status = 'cancelled' "
+            "  AND finished_at IS NULL "
             "  AND done + failed + skipped >= total"
         ),
         {"id": run_id},

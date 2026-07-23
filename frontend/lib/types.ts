@@ -189,6 +189,10 @@ export interface BulkColumn {
   /** Output-token ceiling for this column's generations.
    *  Null = inherit the global default from Settings → Generation. */
   max_output_tokens?: number | null;
+  /** Grounding source for this column's generations. Null/absent = off.
+   *  "google_search" = research the topic with Gemini + Google Search on
+   *  Vertex. Only the Vertex Gemini path honours it. */
+  grounding?: "google_search" | null;
 }
 
 export interface BulkRow {
@@ -223,6 +227,22 @@ export interface BulkCell {
    *  Absent when no translation has ever been requested for this cell.
    *  Cleared server-side whenever `value` changes. */
   translations?: Record<string, CellTranslation> | null;
+  /** Provenance from a grounded generation: the search queries the model ran
+   *  and the web sources it cited. Absent when the cell was never grounded;
+   *  cleared server-side whenever `value` changes. Source URIs are Vertex
+   *  redirect links that expire (~30 days). */
+  grounding_sources?: GroundingSources | null;
+}
+
+export interface GroundingSource {
+  uri: string;
+  title: string;
+}
+
+export interface GroundingSources {
+  queries: string[];
+  sources: GroundingSource[];
+  retrieved_at?: string;
 }
 
 export interface BulkTableListItem {

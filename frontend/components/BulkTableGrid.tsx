@@ -1183,6 +1183,8 @@ export function BulkTableGrid({
           // When this cell was corrected by an AI link-fix, enable the
           // "Changes" diff view (highlights only the changed link spans).
           diff={fixedCells.get(`${viewing.row.id}:${viewing.column.id}`)}
+          // Sources cited if this cell was generated with grounding enabled.
+          groundingSources={viewing.cell?.grounding_sources ?? null}
           // Translation panel only makes sense for output cells that
           // already have a saved value to translate.
           translation={

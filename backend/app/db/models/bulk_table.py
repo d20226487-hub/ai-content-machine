@@ -150,6 +150,12 @@ class BulkTableColumn(Base):
     # app_settings['generation_default_max_output_tokens']. Long-form columns
     # (full articles) need a bigger budget than short ones (titles, metas).
     max_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Grounding source for this column's generations; null = off. Wired today:
+    # 'google_search' (Gemini-on-Vertex uses Google Search as a tool to research
+    # the topic and cite sources). A plain string so future sources
+    # ('vertex_ai_search') need no migration. Only the Vertex Gemini path acts
+    # on this; other providers ignore it. See migration 0066.
+    grounding: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -231,3 +237,11 @@ class BulkTableCell(Base):
     # upsert path and the bulk-generation worker when the underlying
     # `value` changes, so a stale translation never outlives its source.
     translations: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # What a grounded generation cited, shape:
+    #   {"queries": [...], "sources": [{"uri","title"}, ...],
+    #    "retrieved_at": "<ISO 8601>"}
+    # NULL when the cell was never grounded. Cleared alongside `translations`
+    # whenever `value` is rewritten, so it never describes stale text. The
+    # source URIs are Vertex redirect links that expire (~30 days) — provenance,
+    # not a durable citation store. See migration 0066.
+    grounding_sources: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

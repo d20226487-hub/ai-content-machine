@@ -62,6 +62,10 @@ export function ColumnConfigModal({ table, column, onClose, onSaved }: Props) {
   const [maxOutputTokens, setMaxOutputTokens] = useState<number | null>(
     column.max_output_tokens ?? null,
   );
+  // Grounding source (null = off). Only valid on Vertex + a Gemini model.
+  const [grounding, setGrounding] = useState<string | null>(
+    column.grounding ?? null,
+  );
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -98,6 +102,13 @@ export function ColumnConfigModal({ table, column, onClose, onSaved }: Props) {
   }, [providerCode, providers]);
 
   const selectedProvider = providers.find((p) => p.code === providerCode);
+
+  // Grounding is a Vertex-Gemini capability (only that path wires the Google
+  // Search tool). Offer it only when the column runs on Vertex with a non-Claude
+  // model, matching the server-side guard.
+  const groundingAllowed =
+    providerCode === "vertex" &&
+    !(model ?? "").trim().toLowerCase().startsWith("claude");
 
   // When prompt changes, fetch its detail (variables list).
   // Abort superseded fetches via an `ignored` flag so a stale result can't
@@ -198,6 +209,9 @@ export function ColumnConfigModal({ table, column, onClose, onSaved }: Props) {
         model: model && model.trim() ? model.trim() : null,
         max_output_tokens:
           maxOutputTokens && maxOutputTokens > 0 ? maxOutputTokens : null,
+        grounding: groundingAllowed
+          ? (grounding as "google_search" | null)
+          : null,
       });
       onSaved(updated);
       onClose();
@@ -367,6 +381,9 @@ export function ColumnConfigModal({ table, column, onClose, onSaved }: Props) {
                   const v = e.target.value || null;
                   setProviderCode(v);
                   setModel(null);
+                  // Grounding only survives on Vertex — reset it otherwise so
+                  // the config can't be saved into a guaranteed 400.
+                  if (v !== "vertex") setGrounding(null);
                 }}
                 className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-700 dark:bg-neutral-900"
               >
@@ -428,6 +445,28 @@ export function ColumnConfigModal({ table, column, onClose, onSaved }: Props) {
             />
             <span className="mt-1 block font-normal text-neutral-500 dark:text-neutral-400">
               {t("colCfg.maxOutputTokensHint")}
+            </span>
+          </label>
+
+          {/* Grounding: research the topic against live sources. Vertex+Gemini
+              only — disabled (and forced Off) on any other provider/model. */}
+          <label className="mt-3 block text-xs font-medium text-neutral-700 dark:text-neutral-300">
+            {t("colCfg.grounding")}
+            <select
+              value={grounding ?? ""}
+              onChange={(e) => setGrounding(e.target.value || null)}
+              disabled={!groundingAllowed}
+              className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900"
+            >
+              <option value="">{t("colCfg.groundingOff")}</option>
+              <option value="google_search">
+                {t("colCfg.groundingGoogleSearch")}
+              </option>
+            </select>
+            <span className="mt-1 block font-normal text-neutral-500 dark:text-neutral-400">
+              {groundingAllowed
+                ? t("colCfg.groundingHint")
+                : t("colCfg.groundingRequiresVertex")}
             </span>
           </label>
         </div>

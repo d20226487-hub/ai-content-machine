@@ -893,6 +893,8 @@ export const ru: Record<keyof typeof en, string> = {
   "cellEditor.unsavedChanges": "Несохранённые изменения",
   "cellEditor.noChanges": "Изменений нет",
   "cellEditor.toSave": "для сохранения",
+  "cellEditor.groundingSources": "Источники ({n})",
+  "cellEditor.groundingQueries": "Запросы: {q}",
 
   // column config
   "colCfg.title": "Настройка колонки:",
@@ -922,6 +924,13 @@ export const ru: Record<keyof typeof en, string> = {
   "colCfg.maxOutputTokensPlaceholder": "Наследовать общее значение",
   "colCfg.maxOutputTokensHint":
     "Предел длины ответа для этой колонки. Увеличьте для полных статей, уменьшите для заголовков и мета-описаний. Пусто — берётся из Настройки → Генерация.",
+  "colCfg.grounding": "Граундинг (research)",
+  "colCfg.groundingOff": "Выключено",
+  "colCfg.groundingGoogleSearch": "Google Search — исследовать тему",
+  "colCfg.groundingHint":
+    "Исследует тему через живой поиск Google и прикрепляет использованные источники. Лучше всего — на отдельной колонке, которую остальные читают как переменную. Добавляет наценку за каждую ячейку сверх токенов.",
+  "colCfg.groundingRequiresVertex":
+    "Чтобы включить граундинг, выберите провайдера Google Vertex AI и модель Gemini.",
   "colCfg.preview": "Предпросмотр",
   "colCfg.previewLoading": "(загрузка или нечего показать)",
   "colCfg.unfilledVarsForRow":

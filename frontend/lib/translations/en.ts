@@ -864,6 +864,8 @@ export const en = {
   "cellEditor.unsavedChanges": "Unsaved changes",
   "cellEditor.noChanges": "No changes",
   "cellEditor.toSave": "to save",
+  "cellEditor.groundingSources": "Sources ({n})",
+  "cellEditor.groundingQueries": "Searched: {q}",
 
   // column config
   "colCfg.title": "Configure column:",
@@ -892,6 +894,13 @@ export const en = {
   "colCfg.maxOutputTokensPlaceholder": "Inherit global default",
   "colCfg.maxOutputTokensHint":
     "Ceiling on the reply for this column. Raise it for full articles, lower it for titles and metas. Blank inherits Settings → Generation.",
+  "colCfg.grounding": "Grounding",
+  "colCfg.groundingOff": "Off",
+  "colCfg.groundingGoogleSearch": "Google Search — research the topic",
+  "colCfg.groundingHint":
+    "Researches the topic against live Google Search and attaches the sources it cited. Best on a dedicated column that other columns read as a variable. Adds a per-cell surcharge on top of tokens.",
+  "colCfg.groundingRequiresVertex":
+    "Set the provider to Google Vertex AI with a Gemini model to enable grounding.",
   "colCfg.preview": "Preview",
   "colCfg.previewLoading": "(loading or nothing to preview)",
   "colCfg.unfilledVarsForRow": "Unfilled variables for this row: {vars}",

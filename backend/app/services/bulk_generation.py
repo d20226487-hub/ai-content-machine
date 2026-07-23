@@ -126,6 +126,33 @@ async def _is_run_cancelled(db: AsyncSession, run_id: int) -> bool:
     return row is not None and row[0] == "cancelled"
 
 
+async def _claim_generating_cell(
+    db: AsyncSession, row_id: int, column_id: int, error: str
+) -> bool:
+    """Flip one cell ``'generating' -> 'failed'`` iff it is still generating.
+
+    Returns True only when THIS call performed the transition. Two settlers can
+    race for a cancelled run — the cancel endpoint's bulk sweep and this
+    per-task pre-check — and row-level locking on the guarded UPDATE lets
+    exactly one of them win. The winner counts the cell (bumps ``skipped``); the
+    loser gets False and counts nothing, so the run tallies can't overshoot
+    ``total`` (and, more importantly, never undershoot it and strand the run).
+    """
+    row = (
+        await db.execute(
+            text(
+                "UPDATE bulk_table_cells "
+                "SET status = 'failed', error = :err, finish_reason = NULL "
+                "WHERE row_id = :r AND column_id = :c AND status = 'generating' "
+                "RETURNING id"
+            ),
+            {"err": error[:2000], "r": row_id, "c": column_id},
+        )
+    ).first()
+    await db.commit()
+    return row is not None
+
+
 async def _bump_run_counter(
     db: AsyncSession, run_id: int, *, field: str
 ) -> None:
@@ -200,10 +227,13 @@ async def generate_one_cell(
     """
     # Cancellation pre-check. Cheap query, no provider cost.
     if run_id is not None and await _is_run_cancelled(db, run_id):
-        await _write_failure(
+        # Guarded settle: the cancel endpoint may have already swept this cell
+        # in bulk. Count it toward `skipped` only if WE are the one that flips
+        # it out of 'generating', so the same cell can't be double-counted.
+        if await _claim_generating_cell(
             db, row_id, column_id, "Cancelled before completion"
-        )
-        await _bump_run_counter(db, run_id, field="skipped")
+        ):
+            await _bump_run_counter(db, run_id, field="skipped")
         return
 
     col = await _load_column(db, column_id)
@@ -293,6 +323,9 @@ async def generate_one_cell(
                         col.max_output_tokens, gen_limits
                     ),
                     thinking_budget=gen_limits.thinking_budget,
+                    # Per-column grounding (null = off). Only the Vertex Gemini
+                    # path acts on it; other providers ignore the field.
+                    grounding=col.grounding,
                 ),
                 retry_max_attempts=provider_row.retry_max_attempts,
                 backoff_base_ms=provider_row.backoff_base_ms,
@@ -348,6 +381,16 @@ async def generate_one_cell(
     # A fresh generation invalidates any prior translations of this cell —
     # the source they translated no longer exists.
     cell.translations = None
+    # Grounding provenance for THIS text: the sources the model cited, stamped
+    # with when they were fetched. None (cleared) when the column isn't grounded
+    # or the provider returned no metadata — same lifecycle as translations.
+    if result.grounding:
+        cell.grounding_sources = {
+            **result.grounding,
+            "retrieved_at": datetime.now(timezone.utc).isoformat(),
+        }
+    else:
+        cell.grounding_sources = None
 
     # Bump the parent table's updated_at so the Library list re-sorts.
     table = (

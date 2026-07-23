@@ -6,6 +6,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ColumnKind = Literal["input", "output"]
 CellStatus = Literal["empty", "manual", "generating", "generated", "failed"]
+# Retrieval source a column's generations are grounded against. Null = off.
+# Stage 1 wires only Google Search (Gemini on Vertex); 'vertex_ai_search' lands
+# with the datastore field in a later stage.
+GroundingSource = Literal["google_search"]
 
 
 # ----- Columns -----
@@ -23,6 +27,8 @@ class ColumnRead(BaseModel):
     provider_code: str | None
     model: str | None
     max_output_tokens: int | None = None
+    # Grounding source (null = off). See GroundingSource.
+    grounding: str | None = None
 
 
 class ColumnCreate(BaseModel):
@@ -36,6 +42,7 @@ class ColumnCreate(BaseModel):
     model: str | None = None
     # null = use the global default from Settings → Generation.
     max_output_tokens: int | None = Field(default=None, ge=1, le=200000)
+    grounding: GroundingSource | None = None
 
 
 class ColumnUpdate(BaseModel):
@@ -48,6 +55,8 @@ class ColumnUpdate(BaseModel):
     provider_code: str | None = None
     model: str | None = None
     max_output_tokens: int | None = Field(default=None, ge=1, le=200000)
+    # null clears grounding (back to off); omit to leave unchanged.
+    grounding: GroundingSource | None = None
 
 
 # ----- Rows -----
@@ -90,6 +99,9 @@ class CellRead(BaseModel):
     # Lowercase language tag → CellTranslation. Absent when no
     # translation has ever been requested for this cell.
     translations: dict[str, CellTranslation] | None = None
+    # Grounding provenance for the current value: {queries, sources, retrieved_at}.
+    # Absent when the cell was never grounded.
+    grounding_sources: dict | None = None
 
 
 class CellUpsert(BaseModel):

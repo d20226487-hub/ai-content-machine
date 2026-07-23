@@ -248,6 +248,9 @@ export interface UpdateColumnPayload {
   model?: string | null;
   /** Null clears the override so the column inherits the global default. */
   max_output_tokens?: number | null;
+  /** Grounding source; null clears it (off). Only valid on a Vertex + Gemini
+   *  column — the server rejects it otherwise. */
+  grounding?: "google_search" | null;
 }
 
 export function updateColumn(

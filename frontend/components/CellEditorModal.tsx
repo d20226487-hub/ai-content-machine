@@ -17,7 +17,7 @@ import {
   shareUrl,
   type ShareLink,
 } from "@/lib/share";
-import type { CellTranslation } from "@/lib/types";
+import type { CellTranslation, GroundingSources } from "@/lib/types";
 
 type Mode = "edit" | "preview" | "changes";
 
@@ -59,6 +59,9 @@ interface Props {
   /** When set (cell corrected by an AI link-fix), enables a "Changes" view
    *  highlighting only the spans that changed. Opens there by default. */
   diff?: UnifiedSegment[];
+  /** Provenance from a grounded generation — the sources the model cited.
+   *  Rendered as a read-only list under the content. */
+  groundingSources?: GroundingSources | null;
 }
 
 /**
@@ -89,6 +92,7 @@ export function CellEditorModal({
   translation,
   cell,
   diff,
+  groundingSources,
 }: Props) {
   const { t } = useT();
   const hasDiff = !!diff && diff.length > 0;
@@ -445,6 +449,41 @@ export function CellEditorModal({
           />
         )}
       </div>
+
+      {/* Grounding provenance — the sources the model cited when this text was
+          generated with Google Search. Read-only; links open in a new tab.
+          The URIs are Vertex redirect links that expire (~30 days). */}
+      {groundingSources && groundingSources.sources.length > 0 && (
+        <div className="mt-4 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 dark:border-neutral-800 dark:bg-neutral-950">
+          <p className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+            {t("cellEditor.groundingSources", {
+              n: groundingSources.sources.length,
+            })}
+          </p>
+          <ul className="mt-1 space-y-0.5">
+            {groundingSources.sources.map((s, i) => (
+              <li key={i} className="truncate text-xs">
+                <a
+                  href={s.uri}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={s.uri}
+                  className="text-blue-600 hover:underline dark:text-blue-400"
+                >
+                  {s.title || s.uri}
+                </a>
+              </li>
+            ))}
+          </ul>
+          {groundingSources.queries.length > 0 && (
+            <p className="mt-1 text-[11px] text-neutral-400 dark:text-neutral-500">
+              {t("cellEditor.groundingQueries", {
+                q: groundingSources.queries.join(", "),
+              })}
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="mt-4 flex items-center justify-between border-t border-neutral-200 pt-4 dark:border-neutral-800">
         <p className="text-xs text-neutral-500 dark:text-neutral-400">

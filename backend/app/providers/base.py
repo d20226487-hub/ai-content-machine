@@ -82,6 +82,10 @@ class GenerationResult:
     # best-effort (zero contribution from that bucket).
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    # Grounding provenance when the call used a retrieval tool (Google Search).
+    # Shape: {"queries": [...], "sources": [{"uri","title"}, ...]}. None when the
+    # call wasn't grounded or the provider returned no grounding metadata.
+    grounding: dict | None = None
 
 
 @dataclass
@@ -102,6 +106,10 @@ class GenerationParams:
     # Left unset by default so a provider whose thinking API we haven't
     # verified (e.g. Gemini 3.x) is never sent a field it might reject.
     thinking_budget: int | None = None
+    # Retrieval grounding for this call. None = off. 'google_search' makes the
+    # model research the prompt against Google Search and return citations.
+    # Only the Vertex Gemini path honors it; other providers ignore it.
+    grounding: str | None = None
 
 
 class ProviderError(RuntimeError):

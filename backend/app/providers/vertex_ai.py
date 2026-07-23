@@ -80,6 +80,30 @@ def _is_anthropic_model(model: str) -> bool:
     return model.strip().lower().startswith("claude")
 
 
+def _parse_grounding(candidate: dict) -> dict | None:
+    """Compact a Gemini candidate's ``groundingMetadata`` into
+    ``{"queries": [...], "sources": [{"uri","title"}, ...]}``, or None when the
+    reply wasn't grounded.
+
+    We keep only the search queries and the cited web sources — the durable,
+    useful bits for a research brief. The ``searchEntryPoint`` widget and the
+    per-span ``groundingSupports`` maps are dropped: ACM uses grounding as an
+    internal research step, not to render Google's Search-Suggestions UI.
+    """
+    meta = candidate.get("groundingMetadata")
+    if not isinstance(meta, dict):
+        return None
+    sources: list[dict[str, str]] = []
+    for chunk in meta.get("groundingChunks") or []:
+        web = chunk.get("web") if isinstance(chunk, dict) else None
+        if isinstance(web, dict) and web.get("uri"):
+            sources.append({"uri": web["uri"], "title": web.get("title") or ""})
+    queries = [q for q in (meta.get("webSearchQueries") or []) if q]
+    if not sources and not queries:
+        return None
+    return {"queries": queries, "sources": sources}
+
+
 def _accepts_sampling_params(model: str) -> bool:
     m = model.strip().lower()
     return any(m.startswith(p) for p in _SAMPLING_OK_PREFIXES)
@@ -164,6 +188,12 @@ class VertexAIProvider(BaseProvider):
         if gen_config:
             body["generationConfig"] = gen_config
 
+        # Grounding: expose Google Search as a tool so the model researches the
+        # prompt against live web results and returns citations. Gemini 2.0+
+        # takes a bare `googleSearch`; the reply carries `groundingMetadata`.
+        if params and params.grounding == "google_search":
+            body["tools"] = [{"googleSearch": {}}]
+
         if sa_json:
             url, headers, params_qs = self._sa_target(sa_json, chosen_model)
         elif api_key:
@@ -217,6 +247,7 @@ class VertexAIProvider(BaseProvider):
             # Includes thinking tokens — Gemini reports them separately from
             # candidatesTokenCount but bills them at the output rate.
             completion_tokens=gemini_completion_tokens(usage),
+            grounding=_parse_grounding(candidate),
         )
 
     # ------------------------------------------------------------------

@@ -355,6 +355,7 @@ async def _table_to_read(db: AsyncSession, table: BulkTable) -> TableRead:
                     "generated_at": c.generated_at,
                     "updated_at": c.updated_at,
                     "translations": c.translations,
+                    "grounding_sources": c.grounding_sources,
                 }
                 for c in cells
             ],
@@ -445,6 +446,7 @@ async def _table_to_read_paginated(
                     "generated_at": c.generated_at,
                     "updated_at": c.updated_at,
                     "translations": c.translations,
+                    "grounding_sources": c.grounding_sources,
                 }
                 for c in cells
             ],
@@ -1390,6 +1392,24 @@ async def update_column(
     data = payload.model_dump(exclude_unset=True)
     for k, v in data.items():
         setattr(col, k, v)
+    # Grounding only works on the Vertex Gemini path (the only place the Google
+    # Search tool is wired). Reject it on any other provider — where it would
+    # silently no-op — or on Claude, which can't ground. Raised before commit,
+    # so the transaction rolls back and nothing persists.
+    if col.grounding:
+        if col.provider_code != "vertex":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Grounding requires this column's provider to be Google "
+                    "Vertex AI with a Gemini model."
+                ),
+            )
+        if (col.model or "").strip().lower().startswith("claude"):
+            raise HTTPException(
+                status_code=400,
+                detail="Grounding is a Gemini feature — pick a Gemini model, not Claude.",
+            )
     await _bump_table_updated(db, table_id)
     await db.commit()
     await db.refresh(col)
@@ -1514,11 +1534,14 @@ async def _upsert_one_cell(
         )
         db.add(cell)
     else:
-        # Editing the source value invalidates any cached translations —
-        # otherwise the side-by-side translation panel would show stale
-        # output that no longer matches the original.
-        if cell.value != payload.value and cell.translations is not None:
-            cell.translations = None
+        # Editing the source value invalidates any cached translations and
+        # grounding provenance — otherwise the side-by-side translation panel
+        # (or the sources list) would describe text that no longer exists.
+        if cell.value != payload.value:
+            if cell.translations is not None:
+                cell.translations = None
+            if cell.grounding_sources is not None:
+                cell.grounding_sources = None
         cell.value = payload.value
         cell.status = new_status
 
@@ -3095,16 +3118,55 @@ async def cancel_gen_run(
         return run
 
     run.status = "cancelled"
-    # If no cells finish after this point (rare — the queue was
-    # already drained except for ours, or the worker is bottlenecked),
-    # we still want finished_at populated so the UI doesn't show a
-    # cancelled run as "ongoing forever". The worker stamps it on the
-    # last counter update; this catches the no-more-updates edge case.
-    if (
-        run.done + run.failed + run.skipped >= run.total
-        and run.finished_at is None
-    ):
-        run.finished_at = datetime.now(timezone.utc)
+    # Persist the status flip before the guarded settles below read it back.
+    await db.flush()
+
+    # Settle cells that were still 'generating' when Cancel was clicked. Their
+    # tasks may never run (a lost broker message / OOM-killed worker strands the
+    # cell) or may be mid-flight; flipping them here stops the grid spinning the
+    # instant Cancel lands, instead of waiting up to 20 min for the watchdog.
+    # Status-guarded and count-what-we-flip: a queued task that later hits its
+    # own (also guarded) cancel pre-check can't move the same cell, so `skipped`
+    # is bumped exactly once per cell. Matches the pre-check's convention —
+    # cell -> 'failed', counter -> skipped.
+    swept = (
+        (
+            await db.execute(
+                update(BulkTableCell)
+                .where(
+                    BulkTableCell.generation_run_id == run_id,
+                    BulkTableCell.status == "generating",
+                )
+                .values(
+                    status="failed",
+                    error="Cancelled before completion",
+                    finish_reason=None,
+                )
+                .returning(BulkTableCell.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if swept:
+        await db.execute(
+            text(
+                "UPDATE bulk_generation_runs "
+                "SET skipped = skipped + :n WHERE id = :id"
+            ),
+            {"n": len(swept), "id": run_id},
+        )
+    # If that drained the run (nothing left in flight), stamp finished_at so the
+    # UI stops showing it as ongoing. Mirrors _bump_run_counter's cancelled
+    # branch; the last live worker stamps it otherwise.
+    await db.execute(
+        text(
+            "UPDATE bulk_generation_runs SET finished_at = NOW() "
+            "WHERE id = :id AND status = 'cancelled' AND finished_at IS NULL "
+            "  AND done + failed + skipped >= total"
+        ),
+        {"id": run_id},
+    )
     await db.commit()
     await db.refresh(run)
     return run
