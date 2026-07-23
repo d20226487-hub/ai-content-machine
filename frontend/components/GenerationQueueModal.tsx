@@ -10,6 +10,7 @@ import {
   enqueueGeneration,
   generatePreview,
   type GenerateMode,
+  type GeneratePreviewResponse,
   type GenerateRequestPayload,
 } from "@/lib/library";
 import type { BulkTable, EnabledProvider } from "@/lib/types";
@@ -101,7 +102,7 @@ export function GenerationQueueModal({
 
   // "Will generate N" — fetched from the server so the count matches what the
   // enqueue would actually do, without scanning every cell client-side.
-  const [preview, setPreview] = useState<{ will_generate: number; skipped: number } | null>(null);
+  const [preview, setPreview] = useState<GeneratePreviewResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   useEffect(() => {
     if (pickedColumnIds.size === 0) {
@@ -133,6 +134,11 @@ export function GenerationQueueModal({
   }, [table.id, basePayload, pickedColumnIds.size, rowMode, preselectedRowIds.length]);
 
   const eligibleCount = preview?.will_generate ?? 0;
+
+  // Columns whose prompt variables aren't all mapped — block the run until
+  // they're fixed so AI calls aren't spent on prompts left with {{placeholders}}.
+  const unmappedColumns = preview?.unmapped_columns ?? [];
+  const hasUnmapped = unmappedColumns.length > 0;
 
   // Targeted row count for the summary line (independent of cell filtering).
   const targetRowCount = useMemo(() => {
@@ -446,6 +452,23 @@ export function GenerationQueueModal({
         )}
       </section>
 
+      {hasUnmapped && (
+        <section className="mt-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-200">
+          <p className="font-medium">{t("queue.unmappedTitle")}</p>
+          <ul className="mt-1 list-inside list-disc">
+            {unmappedColumns.map((c) => (
+              <li key={c.column_id}>
+                {t("queue.unmappedItem", {
+                  col: c.name,
+                  vars: c.missing.join(", "),
+                })}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1">{t("queue.unmappedHint")}</p>
+        </section>
+      )}
+
       <section className="mt-5 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs dark:border-neutral-800 dark:bg-neutral-950">
         <p className="text-neutral-700 dark:text-neutral-300">
           {t("queue.willGenerate", {
@@ -487,7 +510,7 @@ export function GenerationQueueModal({
         <button
           type="button"
           onClick={onSubmit}
-          disabled={busy || eligibleCount === 0 || !overrideValid}
+          disabled={busy || eligibleCount === 0 || !overrideValid || hasUnmapped}
           className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-60 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
         >
           {busy

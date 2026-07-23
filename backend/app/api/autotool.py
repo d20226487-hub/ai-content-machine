@@ -29,7 +29,7 @@ from app.services.autotool_files import (
     decode_file_token,
     ordered_row_ids_for_domain,
 )
-from app.services.bulk_csv import build_table_csv
+from app.services.bulk_csv import build_table_csv, content_disposition
 
 router = APIRouter(prefix="/autotool", tags=["autotool"])
 
@@ -85,14 +85,11 @@ async def get_autotool_csv(
     csv_text = await build_table_csv(
         db, t, single_line=True, include_row_ids=include_row_ids
     )
-    safe_name = "".join(
-        ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in t.name
-    )
     return Response(
         content=csv_text,
         media_type="text/csv",
         headers={
-            "Content-Disposition": f'inline; filename="{safe_name}.csv"',
+            "Content-Disposition": content_disposition(f"{t.name}.csv", inline=True),
             # The proxy polls this; let it cache briefly but always revalidate.
             "Cache-Control": "no-cache",
         },

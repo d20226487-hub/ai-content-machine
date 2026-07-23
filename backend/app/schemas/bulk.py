@@ -453,12 +453,24 @@ class GenerateRequest(BaseModel):
     override_model: str | None = None
 
 
+class UnmappedColumn(BaseModel):
+    """An output column whose prompt has variables its variable_map doesn't
+    fill — generating it would leave literal {{placeholders}} in the prompt."""
+
+    column_id: int
+    name: str
+    missing: list[str]
+
+
 class GeneratePreviewResponse(BaseModel):
     """Dry-run of a GenerateRequest: how many cells WOULD be enqueued vs
     skipped, using the exact same resolver as the enqueue endpoint."""
 
     will_generate: int
     skipped: int
+    # Requested columns whose prompt variables aren't all mapped. The UI blocks
+    # the run until these are fixed; enqueue rejects them too. Empty = all good.
+    unmapped_columns: list[UnmappedColumn] = []
 
 
 class ClearValuesRequest(BaseModel):

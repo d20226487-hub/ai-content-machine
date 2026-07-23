@@ -354,9 +354,19 @@ export function enqueueGeneration(
   });
 }
 
+export interface UnmappedColumn {
+  column_id: number;
+  name: string;
+  /** Prompt variables with no column mapping. */
+  missing: string[];
+}
+
 export interface GeneratePreviewResponse {
   will_generate: number;
   skipped: number;
+  /** Requested columns whose prompt variables aren't all mapped. When any are
+   *  present the queue modal blocks the run until they're fixed. */
+  unmapped_columns?: UnmappedColumn[];
 }
 
 /** Dry-run a generation request: how many cells WOULD be enqueued vs skipped.

@@ -414,6 +414,11 @@ export default function PromptDetailPage() {
                           value={noteDraft}
                           onChange={(e) => setNoteDraft(e.target.value)}
                           onKeyDown={(e) => {
+                            // Keep keystrokes inside the input: the version row
+                            // wrapper treats Space (and Enter) as "toggle" and
+                            // preventDefaults them, which otherwise swallows the
+                            // space you're trying to type into the note.
+                            e.stopPropagation();
                             if (e.key === "Enter") {
                               e.preventDefault();
                               void commitNote(v.version_number);

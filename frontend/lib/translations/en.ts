@@ -918,6 +918,10 @@ export const en = {
   "queue.noPrompt": "no prompt",
   "queue.noPromptColumnsHint":
     "{count} output column(s) have no prompt yet — configure with the gear button.",
+  "queue.unmappedTitle": "Some columns have unmapped prompt variables",
+  "queue.unmappedItem": "{col}: {vars}",
+  "queue.unmappedHint":
+    "Map every prompt variable to a column (in the column's settings) before generating.",
   "queue.rows": "Rows",
   "queue.rowsAll": "All rows ({count})",
   "queue.rowsSelected": "Selected rows ({count})",

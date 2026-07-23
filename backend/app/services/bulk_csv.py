@@ -16,6 +16,7 @@ import gzip
 import io
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
+from urllib.parse import quote
 
 from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +25,32 @@ from app.db.models import BulkTable, BulkTableCell, BulkTableRow
 from app.db.session import SessionLocal
 
 _NEWLINES = re.compile(r"[\r\n]+")
+
+
+def content_disposition(filename: str, *, inline: bool = False) -> str:
+    """Build a Content-Disposition value that survives non-ASCII filenames.
+
+    Starlette encodes header values as latin-1, so a Cyrillic (or any
+    non-latin-1) filename passed as a bare ``filename="..."`` raises
+    UnicodeEncodeError and 500s the whole response — which is exactly what a
+    Russian-named table's CSV download hit. We emit an ASCII-only fallback plus
+    an RFC 5987 ``filename*=UTF-8''`` so modern browsers show the real name and
+    the header always encodes cleanly. The fallback uses an explicit
+    ``isascii()`` guard because ``str.isalnum()`` is Unicode-aware (it's what let
+    Cyrillic through the old sanitizer in the first place).
+    """
+    disposition = "inline" if inline else "attachment"
+    ascii_fallback = (
+        "".join(
+            ch if (ch.isascii() and (ch.isalnum() or ch in "._-")) else "_"
+            for ch in filename
+        ).strip("_")
+        or "table.csv"
+    )
+    return (
+        f'{disposition}; filename="{ascii_fallback}"; '
+        f"filename*=UTF-8''{quote(filename, safe='')}"
+    )
 
 # Rows per DB round-trip when streaming a large table. Keeps peak memory to one
 # batch of cells + one CSV chunk, regardless of total table size.

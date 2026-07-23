@@ -949,6 +949,10 @@ export const ru: Record<keyof typeof en, string> = {
   "queue.noPrompt": "нет промпта",
   "queue.noPromptColumnsHint":
     "Выходных колонок без промпта: {count} — настройте через значок шестерёнки.",
+  "queue.unmappedTitle": "У некоторых колонок не сопоставлены переменные промпта",
+  "queue.unmappedItem": "{col}: {vars}",
+  "queue.unmappedHint":
+    "Сопоставьте каждую переменную промпта с колонкой (в настройках колонки) перед генерацией.",
   "queue.rows": "Строки",
   "queue.rowsAll": "Все строки ({count})",
   "queue.rowsSelected": "Выбранные строки ({count})",

@@ -87,6 +87,7 @@ from app.schemas.bulk import (
     GdocsImportRunRead,
     GeneratePreviewResponse,
     GenerateRequest,
+    UnmappedColumn,
     GenerateResponse,
     LinkCheckRequest,
     LinkCheckRunDetail,
@@ -140,7 +141,7 @@ from app.schemas.bulk import (
 from app.schemas.csv_export import CsvExportJobRead
 from app.schemas.share import ShareLinkRead
 from app.services import csv_export as csv_export_svc
-from app.services.bulk_csv import build_table_csv, stream_table_csv
+from app.services.bulk_csv import build_table_csv, content_disposition, stream_table_csv
 from app.tasks.csv_export import build_csv_export
 from app.services.provider_cache import get_enabled_providers
 from app.services.find_replace import (
@@ -2787,6 +2788,46 @@ async def _resolve_generation_columns(
     return list((await db.execute(col_q)).scalars().all())
 
 
+def _missing_mapped_vars(template: str, variable_map: dict | None) -> list[str]:
+    """Prompt variables in ``template`` that ``variable_map`` doesn't fill.
+
+    A variable is 'set' when the map holds a truthy source-column id for it;
+    absent or null counts as unmapped. Pure (no DB) so it's unit-testable."""
+    from app.services.prompts import extract_variables
+
+    vmap = variable_map or {}
+    return [v for v in extract_variables(template) if not vmap.get(v)]
+
+
+async def _columns_missing_variables(
+    db: AsyncSession, cols: list[BulkTableColumn]
+) -> list[UnmappedColumn]:
+    """Which of ``cols`` would generate against unfilled {{placeholders}} —
+    their prompt has variables ``variable_map`` doesn't cover. Callers block the
+    run on a non-empty result so AI spend isn't wasted on broken prompts."""
+    from app.services.bulk_generation import _resolve_prompt_template
+
+    out: list[UnmappedColumn] = []
+    for col in cols:
+        try:
+            template = await _resolve_prompt_template(
+                db, col.prompt_id, col.prompt_version_number
+            )
+        except ValueError:
+            out.append(
+                UnmappedColumn(
+                    column_id=col.id, name=col.name, missing=["(prompt unavailable)"]
+                )
+            )
+            continue
+        missing = _missing_mapped_vars(template, col.variable_map)
+        if missing:
+            out.append(
+                UnmappedColumn(column_id=col.id, name=col.name, missing=missing)
+            )
+    return out
+
+
 async def _resolve_generation_rows(
     db: AsyncSession, table_id: int, payload: GenerateRequest
 ) -> list[BulkTableRow]:
@@ -2881,13 +2922,18 @@ async def generate_preview(
     cols = await _resolve_generation_columns(db, table_id, payload.column_ids)
     if not cols:
         return GeneratePreviewResponse(will_generate=0, skipped=0)
+    unmapped = await _columns_missing_variables(db, cols)
     rows = await _resolve_generation_rows(db, table_id, payload)
     if not rows:
-        return GeneratePreviewResponse(will_generate=0, skipped=0)
+        return GeneratePreviewResponse(
+            will_generate=0, skipped=0, unmapped_columns=unmapped
+        )
     to_enqueue, skipped = await _resolve_generation_candidates(
         db, table_id, cols, rows, payload
     )
-    return GeneratePreviewResponse(will_generate=len(to_enqueue), skipped=skipped)
+    return GeneratePreviewResponse(
+        will_generate=len(to_enqueue), skipped=skipped, unmapped_columns=unmapped
+    )
 
 
 @router.post("/tables/{table_id}/generate", response_model=GenerateResponse)
@@ -2916,6 +2962,20 @@ async def enqueue_generation(
             message=(
                 "Nothing to do: no output columns with prompts. "
                 "Configure a prompt on an output column first."
+            ),
+        )
+
+    # Block the run if any target column's prompt has unmapped variables:
+    # generating those burns AI calls on prompts with literal {{placeholders}}
+    # left in. The queue modal surfaces the same list via /generate-preview.
+    unmapped = await _columns_missing_variables(db, cols)
+    if unmapped:
+        names = ", ".join(u.name for u in unmapped)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Can't generate: these columns have unmapped prompt variables "
+                f"— {names}. Map every variable to a column first."
             ),
         )
 
@@ -6276,11 +6336,10 @@ async def export_csv(
         )
     ).all()
     columns = [(c.id, c.name) for c in col_rows]
-    safe_name = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in t.name)
     return StreamingResponse(
         stream_table_csv(table_id, columns),
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}.csv"'},
+        headers={"Content-Disposition": content_disposition(f"{t.name}.csv")},
     )
 
 
@@ -6334,7 +6393,7 @@ async def download_export_job(
         content=blob,
         media_type="text/csv; charset=utf-8",
         headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Disposition": content_disposition(filename),
             "Content-Encoding": "gzip",
         },
     )

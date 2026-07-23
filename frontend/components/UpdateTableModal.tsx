@@ -10,7 +10,7 @@ import {
   updateTableCellsCsv,
   type TableUpdateResult,
 } from "@/lib/library";
-import { detectDelimiter, isBlankRow, parseDelimited } from "@/lib/parseDelimited";
+import { isBlankRow, parseDelimited } from "@/lib/parseDelimited";
 import type { BulkColumn } from "@/lib/types";
 
 // A file upload streams to the server (parsed there) — same 200 MB ceiling as
@@ -33,6 +33,11 @@ export function UpdateTableModal({ tableId, columns, onClose, onUpdated }: Props
   const { t } = useT();
   const [source, setSource] = useState<"file" | "paste">("file");
   const [delimiter, setDelimiter] = useState(","); // file mode only
+  // Paste defaults to Tab: Excel/Sheets copy tab-separated, so a single column
+  // of values that contain commas/semicolons stays in ONE column instead of
+  // being split on those in-value characters. Overridable for the rare
+  // comma/semicolon paste. (Value is a real tab, split on directly.)
+  const [pasteDelimiter, setPasteDelimiter] = useState("\t");
   const [hasHeader, setHasHeader] = useState(true);
   const [file, setFile] = useState<File | null>(null);
   // For a file we only read a leading slice — enough for the header + a few
@@ -53,8 +58,7 @@ export function UpdateTableModal({ tableId, columns, onClose, onUpdated }: Props
   const [result, setResult] = useState<TableUpdateResult | null>(null);
 
   const text = source === "file" ? fileText : pasteText;
-  const effectiveDelimiter =
-    source === "paste" ? detectDelimiter(pasteText) : delimiter;
+  const effectiveDelimiter = source === "paste" ? pasteDelimiter : delimiter;
 
   const parsed = useMemo(() => {
     if (!text.trim()) return { headers: [] as string[], rows: [] as string[][] };
@@ -272,16 +276,31 @@ export function UpdateTableModal({ tableId, columns, onClose, onUpdated }: Props
               </label>
             </div>
           ) : (
-            <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-              {t("updateTable.pasteLabel")}
-              <textarea
-                value={pasteText}
-                onChange={(e) => setPasteText(e.target.value)}
-                rows={6}
-                placeholder={t("updateTable.pastePlaceholder")}
-                className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 font-mono text-xs dark:border-neutral-700 dark:bg-neutral-900"
-              />
-            </label>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                {t("updateTable.pasteLabel")}
+                <textarea
+                  value={pasteText}
+                  onChange={(e) => setPasteText(e.target.value)}
+                  rows={6}
+                  placeholder={t("updateTable.pastePlaceholder")}
+                  className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 font-mono text-xs dark:border-neutral-700 dark:bg-neutral-900"
+                />
+              </label>
+              <label className="flex items-center gap-2 text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                {t("csvImport.delimiter")}
+                <select
+                  value={pasteDelimiter}
+                  onChange={(e) => setPasteDelimiter(e.target.value)}
+                  className="rounded-md border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+                >
+                  <option value={"\t"}>{t("csvImport.delimiterTab")}</option>
+                  <option value={","}>{t("csvImport.delimiterComma")}</option>
+                  <option value={";"}>{t("csvImport.delimiterSemicolon")}</option>
+                  <option value={"|"}>{t("csvImport.delimiterPipe")}</option>
+                </select>
+              </label>
+            </div>
           )}
 
           <label className="flex items-center gap-2 text-xs font-medium text-neutral-700 dark:text-neutral-300">
