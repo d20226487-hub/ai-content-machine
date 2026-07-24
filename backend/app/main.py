@@ -13,6 +13,7 @@ from app.api import (
     backup as backup_router,
     brain as brain_router,
     categories,
+    dashboard as dashboard_router,
     domain_cache as domain_cache_router,
     domain_folders as domain_folders_router,
     domains as domains_router,
@@ -95,6 +96,7 @@ async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSON
 
 app.include_router(health.router)
 app.include_router(auth.router)
+app.include_router(dashboard_router.router)
 # Public, unauthenticated CSV proxy for the Autotool publishing mode.
 app.include_router(autotool_router.router)
 app.include_router(settings_router.router)

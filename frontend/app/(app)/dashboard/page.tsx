@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { ActiveProcessesCard } from "@/components/ActiveProcessesCard";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { articlesForRole } from "@/lib/docs";
@@ -86,6 +87,8 @@ export default function DashboardPage() {
           {apiStatus === "down" && <span className="text-red-600 dark:text-red-400">{t("dashboard.unreachable")}</span>}
         </p>
       </section>
+
+      <ActiveProcessesCard />
 
       <section className="mt-6 rounded-lg border border-dashed border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 p-5 text-sm text-neutral-500 dark:text-neutral-400">
         {t("dashboard.note")}
