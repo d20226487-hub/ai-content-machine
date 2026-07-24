@@ -140,6 +140,12 @@ function PostRequestModal({
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [copiedFile, setCopiedFile] = useState<string | null>(null);
+  // Operator has acknowledged the append-mode duplication risk (required before
+  // sending a table whose included `mode` column holds "append").
+  const [ackAppend, setAckAppend] = useState(false);
+
+  const appendRows = data?.append_row_count ?? 0;
+  const hasAppend = appendRows > 0;
 
   async function copyCsvLink(file: string) {
     try {
@@ -202,6 +208,7 @@ function PostRequestModal({
         table.id,
         touchedColumn ? siteColumnId : undefined,
         pageSize,
+        ackAppend,
       );
       // Hand off to the run's progress page.
       router.push(`/publish/autotool/runs/${run.id}`);
@@ -239,6 +246,26 @@ function PostRequestModal({
               {t("autotoolCfg.noKey")}
             </p>
           )}
+          {data.missing_required_columns.length > 0 && (
+            <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">
+              {t("autotoolCfg.missingRequired", {
+                cols: data.missing_required_columns.join(", "),
+              })}
+            </p>
+          )}
+          {hasAppend && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-200">
+              <p className="font-medium">{t("autotoolCfg.appendWarnTitle")}</p>
+              <p className="mt-1">
+                {t("autotoolCfg.appendWarn", { n: appendRows })}
+              </p>
+              {data.previously_sent && (
+                <p className="mt-1 font-medium">
+                  {t("autotoolCfg.appendWarnSent")}
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Site column remap */}
           <label className="block text-sm">
@@ -254,6 +281,7 @@ function PostRequestModal({
                   // A column change regroups the requests; drop stale send state.
                   setConfirming(false);
                   setSendError(null);
+                  setAckAppend(false);
                 }}
                 className="rounded-md border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
               >
@@ -295,6 +323,7 @@ function PostRequestModal({
                   // A new page size regroups the requests; drop stale send state.
                   setConfirming(false);
                   setSendError(null);
+                  setAckAppend(false);
                 }}
                 className="w-24 rounded-md border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
               />
@@ -385,7 +414,11 @@ function PostRequestModal({
           {/* Send */}
           {data.requests.length > 0 && (
             <div className="border-t border-neutral-200 pt-4 dark:border-neutral-800">
-              {!data.target_configured || !data.api_key_configured ? (
+              {data.missing_required_columns.length > 0 ? (
+                <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                  {t("autotoolCfg.sendNeedsColumns")}
+                </p>
+              ) : !data.target_configured || !data.api_key_configured ? (
                 <p className="text-xs text-neutral-500 dark:text-neutral-400">
                   {t("autotoolCfg.sendNeedsConfig")}
                 </p>
@@ -394,11 +427,22 @@ function PostRequestModal({
                   <p className="text-xs text-amber-900 dark:text-amber-200">
                     {t("autotoolCfg.sendConfirmWarn", { n: data.page_count })}
                   </p>
+                  {hasAppend && (
+                    <label className="mt-2 flex cursor-pointer items-start gap-2 text-xs text-amber-900 dark:text-amber-200">
+                      <input
+                        type="checkbox"
+                        checked={ackAppend}
+                        onChange={(e) => setAckAppend(e.target.checked)}
+                        className="mt-0.5 h-3.5 w-3.5"
+                      />
+                      <span>{t("autotoolCfg.appendAck")}</span>
+                    </label>
+                  )}
                   <div className="mt-2 flex gap-2">
                     <button
                       type="button"
                       onClick={() => void send()}
-                      disabled={sending}
+                      disabled={sending || (hasAppend && !ackAppend)}
                       className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-60"
                     >
                       {sending ? t("autotoolCfg.sending") : t("autotoolCfg.sendConfirm")}

@@ -124,7 +124,12 @@ async def create_autotool_run(
     if t is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     run = await run_svc.create_run(
-        db, t, payload.site_column_id, payload.page_size, actor.id
+        db,
+        t,
+        payload.site_column_id,
+        payload.page_size,
+        actor.id,
+        acknowledge_append=payload.acknowledge_append,
     )
     seed_autotool_run.delay(run.id)
     return await run_svc.get_run_detail(db, run.id, 1, 50)

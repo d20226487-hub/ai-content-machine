@@ -4,12 +4,23 @@ import { useState } from "react";
 
 import { Modal } from "@/components/Modal";
 import { ApiError } from "@/lib/api";
+import { missingRequiredColumns } from "@/lib/autotool";
 import { useT } from "@/lib/i18n-context";
 import {
   autotoolCsvUrl,
   disableAutotool,
   enableAutotool,
 } from "@/lib/library";
+
+/** Downloadable import-file examples shown inside the Autotool dialog — trimmed
+ *  3-row samples served from frontend/public/samples/autotool/. */
+const AUTOTOOL_SAMPLES: {
+  file: string;
+  labelKey: "autotool.sampleSlots" | "autotool.sampleVendors";
+}[] = [
+  { file: "slots.csv", labelKey: "autotool.sampleSlots" },
+  { file: "vendors.csv", labelKey: "autotool.sampleVendors" },
+];
 
 /**
  * Autotool toggle — the 3rd publishing mode. Sits next to the Generate button
@@ -54,6 +65,24 @@ export function AutotoolButton({
   const [checked, setChecked] = useState<Set<number>>(new Set());
 
   const includedCount = columnIds === null ? columns.length : columnIds.length;
+
+  // Required-column guard for the picker. Validate the CHECKED names (what the
+  // CSV will actually carry): a required role is "missing" if no checked column
+  // matches it. Split into required columns the table lacks entirely (must be
+  // added) vs ones that exist but are unchecked (must be re-checked) for a
+  // clearer message. Mirrors the backend block in enable_autotool.
+  const checkedNames = columns
+    .filter((c) => checked.has(c.id))
+    .map((c) => c.name);
+  const missingRequired = missingRequiredColumns(checkedNames);
+  const absentFromTable = missingRequiredColumns(columns.map((c) => c.name));
+  const requiredNotInTable = missingRequired.filter((m) =>
+    absentFromTable.includes(m),
+  );
+  const requiredUnchecked = missingRequired.filter(
+    (m) => !absentFromTable.includes(m),
+  );
+  const saveDisabled = checked.size === 0 || missingRequired.length > 0;
 
   function openPicker(which: "enable" | "columns") {
     // Seed from the current selection; null = every column.
@@ -153,6 +182,42 @@ export function AutotoolButton({
           {t("autotool.columnsNoneWarning")}
         </p>
       )}
+      {checked.size > 0 && requiredNotInTable.length > 0 && (
+        <p className="mt-1 text-xs text-red-700 dark:text-red-300">
+          {t("autotool.requiredMissingTable", {
+            cols: requiredNotInTable.join(", "),
+          })}
+        </p>
+      )}
+      {checked.size > 0 && requiredUnchecked.length > 0 && (
+        <p className="mt-1 text-xs text-red-700 dark:text-red-300">
+          {t("autotool.requiredUnchecked", {
+            cols: requiredUnchecked.join(", "),
+          })}
+        </p>
+      )}
+    </div>
+  );
+
+  // Downloadable example import files (slots / vendors) so an operator can see
+  // the exact column names + content format Autotool expects.
+  const sampleLinks = (
+    <div className="mt-3 border-t border-neutral-200 pt-3 dark:border-neutral-800">
+      <span className="block text-xs font-medium text-neutral-500 dark:text-neutral-400">
+        {t("autotool.samplesLabel")}
+      </span>
+      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+        {AUTOTOOL_SAMPLES.map((s) => (
+          <a
+            key={s.file}
+            href={`/samples/autotool/${s.file}`}
+            download
+            className="text-xs font-medium text-blue-600 hover:underline dark:text-blue-400"
+          >
+            {t(s.labelKey)}
+          </a>
+        ))}
+      </div>
     </div>
   );
 
@@ -205,12 +270,17 @@ export function AutotoolButton({
           body={t("autotool.enableBody")}
           confirmLabel={t("autotool.enableConfirm")}
           confirmTone="primary"
-          confirmDisabled={checked.size === 0}
+          confirmDisabled={saveDisabled}
           busy={busy}
           error={error}
           onCancel={closeDialog}
           onConfirm={() => void submitSelection(false)}
-          extra={columnPicker}
+          extra={
+            <>
+              {columnPicker}
+              {sampleLinks}
+            </>
+          }
         />
       )}
 
@@ -220,12 +290,17 @@ export function AutotoolButton({
           body={t("autotool.columnsBody")}
           confirmLabel={t("autotool.columnsSave")}
           confirmTone="primary"
-          confirmDisabled={checked.size === 0}
+          confirmDisabled={saveDisabled}
           busy={busy}
           error={error}
           onCancel={closeDialog}
           onConfirm={() => void submitSelection(true)}
-          extra={columnPicker}
+          extra={
+            <>
+              {columnPicker}
+              {sampleLinks}
+            </>
+          }
         />
       )}
 

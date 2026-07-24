@@ -79,6 +79,15 @@ export interface AutotoolPostPreview {
   url: string | null;
   headers: Record<string, string>;
   columns: { id: number; name: string }[];
+  /** Required roles (domain/site, post_type, slug, status) not among the
+   *  included columns; empty = ready to send. See missingRequiredColumns. */
+  missing_required_columns: string[];
+  /** Rows whose included `mode` column is "append" — Autotool appends the
+   *  Content to existing WP content, so re-sending duplicates it. 0 = none. */
+  append_row_count: number;
+  /** This table already had a send run that delivered ≥1 item — a re-send would
+   *  append a second time. Escalates the append warning. */
+  previously_sent: boolean;
   site_column_id: number | null;
   detected_site_column_id: number | null;
   /** effective rows-per-request used to page the table (clamped server-side). */
@@ -91,6 +100,29 @@ export interface AutotoolPostPreview {
   requests: AutotoolDomainRequest[];
   target_configured: boolean;
   api_key_configured: boolean;
+}
+
+/**
+ * Columns Autotool's WordPress importer requires in every CSV, matched by
+ * EXACT, case-insensitive header name (the `domain` role also accepts `site`).
+ * Mirrors REQUIRED_AUTOTOOL_COLUMNS in backend/app/services/autotool_files.py —
+ * keep the two lists in sync.
+ */
+export const AUTOTOOL_REQUIRED_COLUMNS: { label: string; names: string[] }[] = [
+  { label: "domain", names: ["domain", "site"] },
+  { label: "post_type", names: ["post_type"] },
+  { label: "slug", names: ["slug"] },
+  { label: "status", names: ["status"] },
+];
+
+/** Required Autotool roles NOT covered by `columnNames` (exact, case-insensitive,
+ *  trimmed). Pass the names that will actually be in the CSV — i.e. the checked
+ *  subset — so an unchecked required column is reported missing. */
+export function missingRequiredColumns(columnNames: string[]): string[] {
+  const present = new Set(columnNames.map((n) => n.trim().toLowerCase()));
+  return AUTOTOOL_REQUIRED_COLUMNS.filter(
+    (role) => !role.names.some((n) => present.has(n)),
+  ).map((role) => role.label);
 }
 
 export function listSharedTables(
@@ -185,6 +217,7 @@ export function createAutotoolRun(
   tableId: number,
   siteColumnId?: number | null,
   pageSize?: number | null,
+  acknowledgeAppend = false,
 ): Promise<AutotoolRunDetail> {
   return api<AutotoolRunDetail>("/autotool/runs", {
     method: "POST",
@@ -192,6 +225,7 @@ export function createAutotoolRun(
       table_id: tableId,
       site_column_id: siteColumnId ?? null,
       page_size: pageSize ?? null,
+      acknowledge_append: acknowledgeAppend,
     },
   });
 }

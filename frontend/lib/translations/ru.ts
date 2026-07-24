@@ -827,6 +827,13 @@ export const ru: Record<keyof typeof en, string> = {
   "autotool.columnsBody":
     "Выберите, какие колонки включить в CSV для Autotool. Снятые колонки не попадут ни в публичную ссылку, ни в отправки на сайты.",
   "autotool.columnsSave": "Сохранить",
+  "autotool.requiredMissingTable":
+    "Autotool требует эти колонки, которых нет в таблице: {cols}. Сначала добавьте их в таблицу.",
+  "autotool.requiredUnchecked":
+    "Autotool требует эти колонки — оставьте их отмеченными: {cols}.",
+  "autotool.samplesLabel": "Примеры файлов импорта",
+  "autotool.sampleSlots": "Слоты (slots.csv)",
+  "autotool.sampleVendors": "Вендоры (vendors.csv)",
   "bulkGrid.selectAllOnPage": "Выбрать все строки на этой странице",
   "bulkGrid.colKindOutput": "выход",
   "bulkGrid.colKindInput": "вход",
@@ -1217,6 +1224,17 @@ export const ru: Record<keyof typeof en, string> = {
   "autotoolCfg.sending": "Запуск…",
   "autotoolCfg.sendNeedsConfig":
     "Сначала задайте целевой URL и API-ключ выше.",
+  "autotoolCfg.missingRequired":
+    "В таблице нет колонок, обязательных для Autotool: {cols}. Перед отправкой добавьте их в таблицу и включите для Autotool.",
+  "autotoolCfg.sendNeedsColumns":
+    "Перед отправкой добавьте обязательные колонки.",
+  "autotoolCfg.appendWarnTitle": "Режим append — риск дублирования контента",
+  "autotoolCfg.appendWarn":
+    "{n} строк используют mode=append. Autotool добавляет Content к тому, что уже есть на странице WP, а не заменяет его — поэтому повторная отправка этой таблицы наложит текст ещё раз и оставит на странице дубли.",
+  "autotoolCfg.appendWarnSent":
+    "Эту таблицу уже отправляли хотя бы раз, поэтому повторная отправка добавит Content второй раз.",
+  "autotoolCfg.appendAck":
+    "Понимаю: append добавляет текст к существующему контенту, и повторная отправка его дублирует.",
   "autotoolCfg.viewRuns": "Запуски →",
   "autotoolCfg.startRun": "Запустить ({n})",
 

@@ -37,15 +37,59 @@ authenticated preview can import them without pulling in the config service.
 from __future__ import annotations
 
 import base64
+from collections.abc import Iterable
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import BulkTableCell, BulkTableRow
+from app.db.models import BulkTable, BulkTableCell, BulkTableRow
 
 DEFAULT_PAGE_SIZE = 50  # rows per file when the operator doesn't choose
 MIN_PAGE_SIZE = 1
 MAX_PAGE_SIZE = 1000  # guardrail — a too-large page defeats the importer's window
+
+# ----- required columns -----
+#
+# Autotool's WordPress importer needs these four columns in every CSV it pulls.
+# A table can't be exposed to Autotool (the public link) or sent (a run) unless
+# all four are among the columns INCLUDED for Autotool — an unchecked required
+# column counts as absent, since it never reaches the CSV. Matched by EXACT,
+# case-insensitive, trimmed header name (the `domain` role also accepts `site`).
+# Defined here, in the pure-helpers module, so the enable endpoint, the preview,
+# the send run and any test can all import it without pulling in httpx/crypto.
+# The frontend mirrors this list (frontend/lib/autotool.ts) — keep them in sync.
+REQUIRED_AUTOTOOL_COLUMNS: tuple[tuple[str, frozenset[str]], ...] = (
+    ("domain", frozenset({"domain", "site"})),
+    ("post_type", frozenset({"post_type"})),
+    ("slug", frozenset({"slug"})),
+    ("status", frozenset({"status"})),
+)
+
+
+def missing_required_columns(column_names: Iterable[str]) -> list[str]:
+    """Labels of the required Autotool roles NOT covered by ``column_names``.
+
+    Match is exact, case-insensitive and trimmed. Pass the names of the columns
+    that will actually be in the CSV — i.e. the operator's selected subset, not
+    the whole table — so an unchecked required column is reported as missing.
+    Empty result = all four requirements met. Order follows the spec above.
+    """
+    present = {(n or "").strip().lower() for n in column_names}
+    return [
+        label
+        for label, accepted in REQUIRED_AUTOTOOL_COLUMNS
+        if accepted.isdisjoint(present)
+    ]
+
+
+def required_columns_error(missing: list[str]) -> str:
+    """A human error for a table missing required Autotool columns (see above)."""
+    return (
+        "This table is missing columns Autotool requires: "
+        + ", ".join(missing)
+        + ". Add them to the table and include them for Autotool."
+    )
+
 
 _SEP = "~"  # legacy delimiter only — see _decode_legacy
 _TT_LEN = 32  # uuid4().hex
@@ -188,3 +232,34 @@ async def ordered_row_ids_for_domain(
         )
     ).all()
     return [rid for rid, val in pairs if (val or "").strip() == domain]
+
+
+async def count_append_rows(db: AsyncSession, table: BulkTable) -> int:
+    """Rows whose INCLUDED ``mode`` column holds "append" (case-insensitive).
+
+    Autotool reads ``mode=append`` as "add the Content to whatever the WP page
+    already has", so these rows duplicate content on a re-send. Respects the
+    table's Autotool column selection — an unchecked ``mode`` column never
+    reaches the CSV, so it can't append. ``table`` must be loaded with
+    ``columns``. Single source of truth for both the send-preview count and the
+    create-run acknowledgement gate.
+    """
+    selected = (
+        None if table.autotool_column_ids is None else set(table.autotool_column_ids)
+    )
+    mode_col = next(
+        (
+            c
+            for c in table.columns
+            if c.name.strip().lower() == "mode"
+            and (selected is None or c.id in selected)
+        ),
+        None,
+    )
+    if mode_col is None:
+        return 0
+    return sum(
+        cnt
+        for value, cnt in await column_value_counts(db, table.id, mode_col.id)
+        if value.strip().lower() == "append"
+    )

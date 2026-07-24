@@ -142,6 +142,10 @@ from app.schemas.bulk import (
 from app.schemas.csv_export import CsvExportJobRead
 from app.schemas.share import ShareLinkRead
 from app.services import csv_export as csv_export_svc
+from app.services.autotool_files import (
+    missing_required_columns,
+    required_columns_error,
+)
 from app.services.bulk_csv import build_table_csv, content_disposition, stream_table_csv
 from app.tasks.csv_export import build_csv_export
 from app.services.provider_cache import get_enabled_providers
@@ -1993,24 +1997,36 @@ async def get_table_generation_cost(
 
     await _get_table_or_404(db, table_id, actor, level="read")
 
+    # Column spend = the token cost of its generations (source='bulk_cell') PLUS
+    # any per-request grounding surcharge (source='grounding') those generations
+    # incurred. Grounding events carry the same table_id/column_id, so a grounded
+    # column's spend is no longer invisible (it used to be dropped entirely). Only
+    # `cost` spans both sources; the token totals and the generation/cell/unpriced
+    # counts stay generation-only — a grounding surcharge isn't a separate
+    # "generation", and it's always priced.
     col_id = UsageEvent.source_ref["column_id"].astext
+    is_cell = UsageEvent.source == "bulk_cell"
     rows = (
         await db.execute(
             select(
                 col_id.label("column_id"),
                 func.coalesce(func.sum(UsageEvent.cost_usd), 0).label("cost"),
-                func.coalesce(func.sum(UsageEvent.prompt_tokens), 0).label("pt"),
-                func.coalesce(func.sum(UsageEvent.completion_tokens), 0).label("ct"),
-                func.count().label("generations"),
-                func.count(func.distinct(UsageEvent.source_ref["row_id"].astext)).label(
-                    "cells"
-                ),
+                func.coalesce(
+                    func.sum(UsageEvent.prompt_tokens).filter(is_cell), 0
+                ).label("pt"),
+                func.coalesce(
+                    func.sum(UsageEvent.completion_tokens).filter(is_cell), 0
+                ).label("ct"),
+                func.count().filter(is_cell).label("generations"),
+                func.count(func.distinct(UsageEvent.source_ref["row_id"].astext))
+                .filter(is_cell)
+                .label("cells"),
                 func.count()
-                .filter(UsageEvent.cost_usd.is_(None))
+                .filter(is_cell, UsageEvent.cost_usd.is_(None))
                 .label("unpriced"),
             )
             .where(
-                UsageEvent.source == "bulk_cell",
+                UsageEvent.source.in_(("bulk_cell", "grounding")),
                 UsageEvent.source_ref["table_id"].astext == str(table_id),
             )
             .group_by(col_id)
@@ -6540,32 +6556,45 @@ async def enable_autotool(
     db: AsyncSession = Depends(get_db),
 ) -> AutotoolState:
     t = await _get_table_or_404(db, table_id, actor, level="write")
+    col_rows = (
+        await db.execute(
+            select(BulkTableColumn.id, BulkTableColumn.name).where(
+                BulkTableColumn.table_id == table_id
+            )
+        )
+    ).all()
+    valid_ids = {cid for cid, _ in col_rows}
+
+    # Resolve the effective column selection FIRST (without touching the table),
+    # so validation runs before we expose anything. A body with column_ids=null
+    # (or every column selected) means None = "all"; a strict subset is kept
+    # as-is; foreign or empty ids collapse to None. No body at all leaves the
+    # existing selection untouched (so a plain re-enable doesn't wipe it).
+    if payload is None:
+        new_column_ids = t.autotool_column_ids
+    elif payload.column_ids is None:
+        new_column_ids = None
+    else:
+        picked = [cid for cid in payload.column_ids if cid in valid_ids]
+        new_column_ids = picked if picked and set(picked) != valid_ids else None
+
+    # Every CSV Autotool pulls must carry the required columns — block exposing a
+    # table (or a selection) that omits any. Validate the INCLUDED names (null =
+    # all), so an unchecked required column counts as absent. create_run enforces
+    # the same rule at send time.
+    keep = None if new_column_ids is None else set(new_column_ids)
+    included_names = [name for cid, name in col_rows if keep is None or cid in keep]
+    missing = missing_required_columns(included_names)
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=required_columns_error(missing),
+        )
+
     if not t.autotool_token:
         t.autotool_token = uuid.uuid4().hex  # 32 hex chars, 128 bits
     t.autotool_enabled = True
-    # Optional column selection. A body with column_ids=null (or every column
-    # selected) stores None = "all"; a strict subset is stored as-is; foreign or
-    # empty ids collapse to None. No body at all leaves the existing selection
-    # untouched (so a plain re-enable doesn't wipe it).
-    if payload is not None:
-        if payload.column_ids is None:
-            t.autotool_column_ids = None
-        else:
-            valid_ids = set(
-                (
-                    await db.execute(
-                        select(BulkTableColumn.id).where(
-                            BulkTableColumn.table_id == table_id
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            picked = [cid for cid in payload.column_ids if cid in valid_ids]
-            t.autotool_column_ids = (
-                picked if picked and set(picked) != valid_ids else None
-            )
+    t.autotool_column_ids = new_column_ids
     # Capture before commit; expire_on_commit would otherwise require a reload.
     token = t.autotool_token
     column_ids = t.autotool_column_ids

@@ -33,7 +33,10 @@ from app.services.autotool_config import CONFIG_KEY, _detect_site_column
 from app.services.autotool_files import (
     clamp_page_size,
     column_value_counts,
+    count_append_rows,
     encode_file_token,
+    missing_required_columns,
+    required_columns_error,
 )
 
 _SEND_TIMEOUT_S = 20.0
@@ -158,9 +161,16 @@ async def create_run(
     site_column_id: int | None,
     page_size: int | None,
     user_id: int | None,
+    *,
+    acknowledge_append: bool = False,
 ) -> AutotoolRun:
     """Validate config + build the page items, insert a queued run. ``table``
-    must be loaded with its columns. The caller enqueues the seed task."""
+    must be loaded with its columns. The caller enqueues the seed task.
+
+    ``acknowledge_append`` must be True to send a table whose included ``mode``
+    column holds "append" — that mode appends the Content to whatever the WP
+    page already has, so an unconfirmed (re-)send can silently duplicate it.
+    """
     page_size = clamp_page_size(page_size)
 
     row = await db.get(AppSetting, CONFIG_KEY)
@@ -176,6 +186,30 @@ async def create_run(
         raise _bad_request(f"Target URL rejected: {e}")
 
     columns = list(table.columns)
+
+    # Every CSV Autotool receives must carry the required columns. Validate the
+    # INCLUDED set (null = all columns) so an unchecked required column blocks
+    # the send too — same rule the enable endpoint and preview enforce.
+    selected_ids = (
+        None if table.autotool_column_ids is None else set(table.autotool_column_ids)
+    )
+    included_names = [
+        c.name for c in columns if selected_ids is None or c.id in selected_ids
+    ]
+    missing = missing_required_columns(included_names)
+    if missing:
+        raise _bad_request(required_columns_error(missing))
+
+    # Append-mode safeguard, enforced at the POST (not just the UI): a table
+    # whose included `mode` column holds "append" duplicates content on a
+    # re-send, so the run can't be created without an explicit acknowledgement.
+    if not acknowledge_append and await count_append_rows(db, table) > 0:
+        raise _bad_request(
+            "This table uses mode=append: Autotool adds the Content to whatever "
+            "each page already has, so re-sending duplicates it. Confirm the "
+            "append warning to proceed."
+        )
+
     valid_ids = {c.id for c in columns}
     chosen = (
         site_column_id

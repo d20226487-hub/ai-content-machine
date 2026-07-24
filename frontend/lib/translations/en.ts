@@ -804,6 +804,13 @@ export const en = {
   "autotool.columnsBody":
     "Choose which columns to include in the Autotool CSV. Unchecked columns are left out of the public link and every send-to-sites run.",
   "autotool.columnsSave": "Save",
+  "autotool.requiredMissingTable":
+    "Autotool requires these columns, which this table doesn't have: {cols}. Add them to the table first.",
+  "autotool.requiredUnchecked":
+    "Autotool requires these columns — keep them checked: {cols}.",
+  "autotool.samplesLabel": "Example import files",
+  "autotool.sampleSlots": "Slots (slots.csv)",
+  "autotool.sampleVendors": "Vendors (vendors.csv)",
   "bulkGrid.selectAllOnPage": "Select all rows on this page",
   "bulkGrid.colKindOutput": "output",
   "bulkGrid.colKindInput": "input",
@@ -1173,6 +1180,17 @@ export const en = {
   "autotoolCfg.sending": "Starting…",
   "autotoolCfg.sendNeedsConfig":
     "Set the target URL and API key above before sending.",
+  "autotoolCfg.missingRequired":
+    "This table is missing columns Autotool requires: {cols}. Add them to the table and include them for Autotool before sending.",
+  "autotoolCfg.sendNeedsColumns":
+    "Add the required columns before sending.",
+  "autotoolCfg.appendWarnTitle": "Append mode — risk of duplicate content",
+  "autotoolCfg.appendWarn":
+    "{n} row(s) set mode=append. Autotool adds the Content to whatever the WP page already has instead of replacing it — so sending this table more than once stacks the text and leaves duplicate content on the page.",
+  "autotoolCfg.appendWarnSent":
+    "This table was already sent at least once, so sending it again will append the Content a second time.",
+  "autotoolCfg.appendAck":
+    "I understand: append adds to existing content, and re-sending duplicates it.",
   "autotoolCfg.viewRuns": "Runs →",
   "autotoolCfg.startRun": "Start run ({n})",
 

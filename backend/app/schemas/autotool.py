@@ -97,6 +97,16 @@ class AutotoolPostPreview(BaseModel):
     url: str | None = None
     headers: dict[str, str]
     columns: list[ColumnRef] = []
+    # Required Autotool columns (domain/site, post_type, slug, status) NOT among
+    # the included columns above; empty = ready to send. Drives the UI's pre-send
+    # block. See services/autotool_files.missing_required_columns.
+    missing_required_columns: list[str] = []
+    # Rows whose included `mode` column is "append": Autotool ADDS the Content to
+    # what the WP page already has, so re-sending duplicates it. 0 = none.
+    append_row_count: int = 0
+    # This table already had a send run that delivered >=1 item — so a re-send
+    # would append the Content a second time. Escalates the append warning.
+    previously_sent: bool = False
     site_column_id: int | None = None
     detected_site_column_id: int | None = None
     page_size: int = 50
@@ -116,6 +126,10 @@ class AutotoolRunCreate(BaseModel):
     table_id: int
     site_column_id: int | None = None
     page_size: int | None = None
+    # Operator confirmed the append-mode duplication risk (see append_row_count
+    # in the post-preview). Required to create a run for a table using mode=append
+    # — the server rejects the run without it, so the safeguard can't be bypassed.
+    acknowledge_append: bool = False
 
 
 class AutotoolRunItemRead(BaseModel):

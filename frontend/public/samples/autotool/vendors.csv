@@ -1,0 +1,4 @@
+lang,post_type,slug,title,content,status,image_url,aioseo_title,aioseo_description,site,mode
+en,vendor,yggdrasil,yggdrasil,<p>content 1</p>,publish,https://ziom-production-static.fra1.cdn.digitaloceanspaces.com/game_producer/237/efcf55d226dd4fe6b9bd3ec3d955a4f1_evolution.svg,seo title 1,meta description 1,test3.mrba-stage1.xyz,append
+en,vendor,hacksaw,hacksaw,<p>content 2</p>,publish,https://ziom-production-static.fra1.cdn.digitaloceanspaces.com/game_producer/274/371784a20c204decb6686be2e81a0cc2_lucky.svg,seo title 2,meta description 2,test3.mrba-stage1.xyz,append
+en,vendor,kagaming,kagaming,<p>content 3</p>,publish,https://ziom-production-static.fra1.cdn.digitaloceanspaces.com/game_producer/396/d8a52868cfb34c9c90b027ddcc59aaf1_yggdrasil.svg,seo title 3,meta description 3,test3.mrba-stage1.xyz,

@@ -28,6 +28,7 @@ from app.core.crypto import decrypt, encrypt
 from app.core.ssrf import SafeAsyncTransport, UnsafeUrlError, validate_public_url
 from app.db.models import (
     AppSetting,
+    AutotoolRun,
     BulkTable,
     BulkTableColumn,
     BulkTableRow,
@@ -46,7 +47,9 @@ from app.services.app_settings_cache import invalidate
 from app.services.autotool_files import (
     clamp_page_size,
     column_value_counts,
+    count_append_rows,
     encode_file_token,
+    missing_required_columns,
 )
 
 CONFIG_KEY = "autotool_config"
@@ -316,19 +319,41 @@ async def build_post_preview(
                     )
                 )
 
+    # Only the columns the operator kept for Autotool (null = all). The site
+    # split above still uses the FULL column set, so an unchecked site column
+    # can't break per-domain grouping.
+    selected_ids = (
+        None if table.autotool_column_ids is None else set(table.autotool_column_ids)
+    )
+    included = [c for c in columns if selected_ids is None or c.id in selected_ids]
+
+    # Append-mode detection. A `mode` column (among the INCLUDED columns) holding
+    # "append" tells Autotool to ADD the Content to whatever the WP page already
+    # has — so re-sending stacks the text and duplicates it. Count the append
+    # rows (shared with the create-run gate), and whether this table was already
+    # sent (any prior run delivered ≥1 item), so the UI can warn before a
+    # double-append.
+    append_row_count = await count_append_rows(db, table)
+    previously_sent = bool(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(AutotoolRun)
+                .where(AutotoolRun.table_id == table.id, AutotoolRun.sent > 0)
+            )
+        ).scalar_one()
+    )
+
     return AutotoolPostPreview(
         method="POST",
         url=target,
         headers=headers,
-        # Only the columns the operator kept for Autotool (null = all). The
-        # site split above still uses the FULL column set, so an unchecked site
-        # column can't break per-domain grouping.
-        columns=[
-            ColumnRef(id=c.id, name=c.name)
-            for c in columns
-            if table.autotool_column_ids is None
-            or c.id in set(table.autotool_column_ids)
-        ],
+        columns=[ColumnRef(id=c.id, name=c.name) for c in included],
+        # Required roles absent from the INCLUDED columns — the UI blocks the
+        # send while this is non-empty (create_run enforces the same server-side).
+        missing_required_columns=missing_required_columns([c.name for c in included]),
+        append_row_count=append_row_count,
+        previously_sent=previously_sent,
         site_column_id=chosen,
         detected_site_column_id=detected,
         page_size=page_size,
