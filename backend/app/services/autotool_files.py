@@ -235,28 +235,25 @@ async def ordered_row_ids_for_domain(
 
 
 async def count_append_rows(db: AsyncSession, table: BulkTable) -> int:
-    """Rows whose INCLUDED ``mode`` column holds "append" (case-insensitive).
+    """Rows that risk a duplicate append on a (re-)send.
 
-    Autotool reads ``mode=append`` as "add the Content to whatever the WP page
-    already has", so these rows duplicate content on a re-send. Respects the
-    table's Autotool column selection — an unchecked ``mode`` column never
-    reaches the CSV, so it can't append. ``table`` must be loaded with
-    ``columns``. Single source of truth for both the send-preview count and the
-    create-run acknowledgement gate.
+    A row counts only when the CSV includes BOTH a ``content`` column AND a
+    ``mode`` column whose value is "append" (case-insensitive) for that row.
+    Autotool's ``append`` mode affects ONLY the Content field — it "adds the
+    Content to whatever the WP page already has" — so if ``content`` isn't in the
+    CSV there is nothing to append and no duplication risk, whatever ``mode``
+    says. Respects the table's Autotool column selection (an unchecked
+    ``content`` or ``mode`` column never reaches the CSV). ``table`` must be
+    loaded with ``columns``. Single source of truth for the send-preview count
+    and the create-run acknowledgement gate.
     """
     selected = (
         None if table.autotool_column_ids is None else set(table.autotool_column_ids)
     )
-    mode_col = next(
-        (
-            c
-            for c in table.columns
-            if c.name.strip().lower() == "mode"
-            and (selected is None or c.id in selected)
-        ),
-        None,
-    )
-    if mode_col is None:
+    included = [c for c in table.columns if selected is None or c.id in selected]
+    has_content = any(c.name.strip().lower() == "content" for c in included)
+    mode_col = next((c for c in included if c.name.strip().lower() == "mode"), None)
+    if not has_content or mode_col is None:
         return 0
     return sum(
         cnt

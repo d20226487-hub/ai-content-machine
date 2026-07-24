@@ -49,7 +49,10 @@ class AutotoolTableItem(BaseModel):
     autotool_token: str | None = None
     csv_path: str | None = None
     row_count: int = 0
+    # Count + names of the columns actually exposed to Autotool (the operator's
+    # selection, or all when none is set) — column_count == len(columns).
     column_count: int = 0
+    columns: list[str] = []
     updated_at: datetime
 
 

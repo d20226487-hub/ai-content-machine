@@ -202,18 +202,27 @@ async def list_shared_tables(
     )
     ids = [t.id for t in tables]
 
-    col_counts: dict[int, int] = {}
+    # Column (id, name) per table, ordered — so the list can show WHICH columns
+    # Autotool actually receives (the included subset), not just a count.
+    cols_by_table: dict[int, list[tuple[int, str]]] = {}
     row_counts: dict[int, int] = {}
     if ids:
-        col_counts = dict(
-            (
-                await db.execute(
-                    select(BulkTableColumn.table_id, func.count())
-                    .where(BulkTableColumn.table_id.in_(ids))
-                    .group_by(BulkTableColumn.table_id)
+        for tid, cid, name in (
+            await db.execute(
+                select(
+                    BulkTableColumn.table_id,
+                    BulkTableColumn.id,
+                    BulkTableColumn.name,
                 )
-            ).all()
-        )
+                .where(BulkTableColumn.table_id.in_(ids))
+                .order_by(
+                    BulkTableColumn.table_id,
+                    BulkTableColumn.position,
+                    BulkTableColumn.id,
+                )
+            )
+        ).all():
+            cols_by_table.setdefault(tid, []).append((cid, name))
         row_counts = dict(
             (
                 await db.execute(
@@ -224,18 +233,29 @@ async def list_shared_tables(
             ).all()
         )
 
-    items = [
-        AutotoolTableItem(
-            id=t.id,
-            name=t.name,
-            autotool_token=t.autotool_token,
-            csv_path=f"/autotool/{t.autotool_token}.csv" if t.autotool_token else None,
-            row_count=row_counts.get(t.id, 0),
-            column_count=col_counts.get(t.id, 0),
-            updated_at=t.updated_at,
+    items = []
+    for t in tables:
+        # Columns exposed to Autotool: the operator's selection, or all when null.
+        keep = None if t.autotool_column_ids is None else set(t.autotool_column_ids)
+        included = [
+            name
+            for cid, name in cols_by_table.get(t.id, [])
+            if keep is None or cid in keep
+        ]
+        items.append(
+            AutotoolTableItem(
+                id=t.id,
+                name=t.name,
+                autotool_token=t.autotool_token,
+                csv_path=(
+                    f"/autotool/{t.autotool_token}.csv" if t.autotool_token else None
+                ),
+                row_count=row_counts.get(t.id, 0),
+                column_count=len(included),
+                columns=included,
+                updated_at=t.updated_at,
+            )
         )
-        for t in tables
-    ]
     return AutotoolTablesPage(
         items=items, total=int(total), page=page, page_size=page_size
     )

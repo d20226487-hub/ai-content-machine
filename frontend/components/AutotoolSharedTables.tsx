@@ -32,6 +32,8 @@ export function AutotoolSharedTables() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [preview, setPreview] = useState<AutotoolTableItem | null>(null);
+  // Table id whose exposed-column list is expanded (click the "N cols" count).
+  const [expandedCols, setExpandedCols] = useState<number | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -80,28 +82,54 @@ export function AutotoolSharedTables() {
         <>
           <ul className="mt-3 divide-y divide-neutral-100 rounded-lg border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
             {data.items.map((it) => (
-              <li
-                key={it.id}
-                className="flex items-center justify-between gap-3 px-3 py-2.5 text-sm"
-              >
-                <span className="min-w-0">
-                  <span className="block truncate font-medium text-neutral-900 dark:text-neutral-100">
-                    {it.name}
+              <li key={it.id} className="px-3 py-2.5 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium text-neutral-900 dark:text-neutral-100">
+                      {it.name}
+                    </span>
+                    <span className="text-xs text-neutral-500 dark:text-neutral-400">
+                      {t("autotoolCfg.rowsCount", { rows: it.row_count })}
+                      {" · "}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedCols((cur) =>
+                            cur === it.id ? null : it.id,
+                          )
+                        }
+                        title={t("autotoolCfg.colsToggleHint")}
+                        className="underline decoration-dotted underline-offset-2 hover:text-neutral-700 dark:hover:text-neutral-300"
+                      >
+                        {t("autotoolCfg.colsCount", { cols: it.column_count })}
+                      </button>
+                    </span>
                   </span>
-                  <span className="text-xs text-neutral-500 dark:text-neutral-400">
-                    {t("autotoolCfg.rowsCols", {
-                      rows: it.row_count,
-                      cols: it.column_count,
-                    })}
-                  </span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setPreview(it)}
-                  className="shrink-0 rounded-md border border-neutral-300 px-2.5 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
-                >
-                  {t("autotoolCfg.viewRequest")}
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => setPreview(it)}
+                    className="shrink-0 rounded-md border border-neutral-300 px-2.5 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                  >
+                    {t("autotoolCfg.viewRequest")}
+                  </button>
+                </div>
+                {expandedCols === it.id && (
+                  <div className="mt-2">
+                    <p className="mb-1 text-[11px] uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+                      {t("autotoolCfg.colsSentHeading")}
+                    </p>
+                    <div className="flex flex-wrap gap-1">
+                      {it.columns.map((name, i) => (
+                        <span
+                          key={i}
+                          className="rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-xs text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
+                        >
+                          {name}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </li>
             ))}
           </ul>

@@ -45,7 +45,10 @@ export interface AutotoolTableItem {
   autotool_token: string | null;
   csv_path: string | null;
   row_count: number;
+  /** Count + names of the columns actually exposed to Autotool (the operator's
+   *  selection, or all when none is set); column_count === columns.length. */
   column_count: number;
+  columns: string[];
   updated_at: string;
 }
 

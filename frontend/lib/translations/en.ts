@@ -1145,7 +1145,10 @@ export const en = {
     "Tables currently exposed to Autotool. View the exact POST request that would be sent for each.",
   "autotoolCfg.sharedEmpty":
     "No tables are shared to Autotool yet. Enable one with the Autotool button on a bulk table.",
-  "autotoolCfg.rowsCols": "{rows} rows · {cols} cols",
+  "autotoolCfg.rowsCount": "{rows} rows",
+  "autotoolCfg.colsCount": "{cols} cols",
+  "autotoolCfg.colsToggleHint": "Show the columns sent to Autotool",
+  "autotoolCfg.colsSentHeading": "Columns sent to Autotool",
   "autotoolCfg.viewRequest": "View POST request",
   "autotoolCfg.previewTitle": "POST request — {name}",
   "autotoolCfg.noTarget": "No target URL set — configure it above.",

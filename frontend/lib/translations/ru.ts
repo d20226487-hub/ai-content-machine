@@ -1188,7 +1188,10 @@ export const ru: Record<keyof typeof en, string> = {
     "Таблицы, сейчас доступные Autotool. Можно посмотреть точный POST-запрос, который будет отправлен для каждой.",
   "autotoolCfg.sharedEmpty":
     "Пока ни одна таблица не отдана в Autotool. Включите кнопкой Autotool в bulk-таблице.",
-  "autotoolCfg.rowsCols": "{rows} строк · {cols} колонок",
+  "autotoolCfg.rowsCount": "{rows} строк",
+  "autotoolCfg.colsCount": "{cols} колонок",
+  "autotoolCfg.colsToggleHint": "Показать колонки, отправляемые в Autotool",
+  "autotoolCfg.colsSentHeading": "Отправляемые в Autotool колонки",
   "autotoolCfg.viewRequest": "Показать POST-запрос",
   "autotoolCfg.previewTitle": "POST-запрос — {name}",
   "autotoolCfg.noTarget": "Целевой URL не задан — настройте выше.",
