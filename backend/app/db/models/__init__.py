@@ -1,3 +1,4 @@
+from app.db.models.ai_helper_run import AiHelperCell, AiHelperRun
 from app.db.models.autotool_run import AutotoolRun, AutotoolRunItem
 from app.db.models.backup_run import BackupRun
 from app.db.models.bulk_generation_run import BulkGenerationRun
@@ -43,6 +44,8 @@ from app.db.models.usage_event import UsageEvent
 from app.db.models.user import User
 
 __all__ = [
+    "AiHelperCell",
+    "AiHelperRun",
     "AppSetting",
     "AutotoolRun",
     "AutotoolRunItem",

@@ -176,6 +176,16 @@ from app.tasks.gdocs_import import run_gdocs_import
 from app.tasks.link_check import resume_link_check, seed_link_check
 from app.tasks.link_fix import fix_cell as fix_cell_task, resume_link_fix
 from app.tasks.structure_format import resume_sf, run_sf
+from app.tasks.ai_helper import (
+    process_cell as ai_helper_process_cell,
+    resume_ai_helper,
+)
+from app.services import ai_helper_run as ai_helper_svc
+from app.schemas.ai_helper import (
+    AiHelperPreview,
+    AiHelperRunCreate,
+    AiHelperRunDetail,
+)
 
 router = APIRouter(
     prefix="/library", tags=["library"], dependencies=[Depends(get_current_user)]
@@ -2082,7 +2092,9 @@ async def get_table_generation_cost(
                 func.count().filter(UsageEvent.cost_usd.is_(None)).label("unpriced"),
             )
             .where(
-                UsageEvent.source.in_(("brain_translate", "brain_fix_links")),
+                UsageEvent.source.in_(
+                    ("brain_translate", "brain_fix_links", "ai_helper")
+                ),
                 UsageEvent.source_ref["table_id"].astext == str(table_id),
             )
             .group_by(UsageEvent.source)
@@ -6536,6 +6548,112 @@ async def download_export_job(
             "Content-Encoding": "gzip",
         },
     )
+
+
+# ---------- AI Helper (prompt-driven per-cell mini-tool) ----------
+#
+# The operator gives a prompt + maps {{columns}}, picks Read (write to a target
+# column) or Edit (rewrite in place), and every selected row gets one AI call —
+# a distributed, revertable run through the provider rate limiter. Its spend
+# lands on its own "ai_helper" cost line. Gated by table write access.
+
+
+async def _get_ai_helper_run_or_404(
+    db: AsyncSession, run_id: int, actor: User, *, level: AccessLevel = "read"
+):
+    from app.db.models import AiHelperRun
+
+    run = await db.get(AiHelperRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    await _get_table_or_404(db, run.table_id, actor, level=level)
+    return run
+
+
+@router.post(
+    "/tables/{table_id}/ai-helper",
+    response_model=AiHelperRunDetail,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def create_ai_helper_run(
+    table_id: int,
+    payload: AiHelperRunCreate,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AiHelperRunDetail:
+    """Validate + seed a run, fan out one AI call per selected row (202)."""
+    await _get_table_or_404(db, table_id, actor, level="write")
+    run, cell_ids = await ai_helper_svc.create_run(db, table_id, payload, actor.id)
+    for cid in cell_ids:
+        ai_helper_process_cell.delay(run.id, cid)
+    return await ai_helper_svc.get_run_detail(db, run.id, 1, 50)
+
+
+@router.post("/tables/{table_id}/ai-helper/preview", response_model=AiHelperPreview)
+async def preview_ai_helper_run(
+    table_id: int,
+    payload: AiHelperRunCreate,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AiHelperPreview:
+    """Matched-row count + best-effort cost for the pre-run confirm gate."""
+    await _get_table_or_404(db, table_id, actor, level="write")
+    return await ai_helper_svc.preview(db, table_id, payload)
+
+
+@router.get("/ai-helper-runs/{run_id}", response_model=AiHelperRunDetail)
+async def get_ai_helper_run(
+    run_id: int,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AiHelperRunDetail:
+    await _get_ai_helper_run_or_404(db, run_id, actor, level="read")
+    return await ai_helper_svc.get_run_detail(db, run_id, page, page_size)
+
+
+@router.post("/ai-helper-runs/{run_id}/cancel", response_model=AiHelperRunDetail)
+async def cancel_ai_helper_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AiHelperRunDetail:
+    await _get_ai_helper_run_or_404(db, run_id, actor, level="write")
+    return await ai_helper_svc.cancel_run(db, run_id)
+
+
+@router.post("/ai-helper-runs/{run_id}/resume", response_model=AiHelperRunDetail)
+async def resume_ai_helper_run_ep(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AiHelperRunDetail:
+    await _get_ai_helper_run_or_404(db, run_id, actor, level="write")
+    resume_ai_helper.delay(run_id)
+    return await ai_helper_svc.get_run_detail(db, run_id, 1, 50)
+
+
+@router.post("/ai-helper-runs/{run_id}/retry-failed", response_model=AiHelperRunDetail)
+async def retry_failed_ai_helper_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AiHelperRunDetail:
+    await _get_ai_helper_run_or_404(db, run_id, actor, level="write")
+    await ai_helper_svc.retry_failed(db, run_id)
+    resume_ai_helper.delay(run_id)
+    return await ai_helper_svc.get_run_detail(db, run_id, 1, 50)
+
+
+@router.post("/ai-helper-runs/{run_id}/revert", response_model=AiHelperRunDetail)
+async def revert_ai_helper_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AiHelperRunDetail:
+    await _get_ai_helper_run_or_404(db, run_id, actor, level="write")
+    return await ai_helper_svc.revert_run(db, run_id)
 
 
 # ---------- Autotool (3rd publishing mode) ----------

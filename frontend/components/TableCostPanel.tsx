@@ -234,5 +234,6 @@ export function TableCostPanel({ tableId }: { tableId: number }) {
 function toolLabel(source: string, t: ReturnType<typeof useT>["t"]): string {
   if (source === "brain_translate") return t("tableCost.tool.brain_translate");
   if (source === "brain_fix_links") return t("tableCost.tool.brain_fix_links");
+  if (source === "ai_helper") return t("tableCost.tool.ai_helper");
   return source;
 }

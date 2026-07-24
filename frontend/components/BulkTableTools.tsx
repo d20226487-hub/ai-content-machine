@@ -42,6 +42,12 @@ export function BulkTableTools({ tableId }: { tableId: number }) {
           title={t("tools.normalize.title")}
           description={t("tools.normalize.desc")}
         />
+        <ToolCard
+          href={`/library/${tableId}/ai-helper`}
+          icon="✨"
+          title={t("tools.aiHelper.title")}
+          description={t("tools.aiHelper.desc")}
+        />
       </div>
     </section>
   );
