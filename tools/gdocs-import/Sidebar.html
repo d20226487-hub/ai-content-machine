@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top" />
+    <style>
+      body {
+        font-family: Roboto, Arial, sans-serif;
+        font-size: 13px;
+        color: #202124;
+        margin: 0;
+        padding: 12px;
+      }
+      h2 { font-size: 14px; margin: 0 0 4px; }
+      p.hint { color: #5f6368; font-size: 12px; margin: 0 0 10px; }
+      label { display: block; font-weight: 500; margin: 9px 0 3px; }
+      select,
+      input[type="number"] {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 5px 6px;
+        border: 1px solid #dadce0;
+        border-radius: 4px;
+        font-size: 13px;
+        background: #fff;
+      }
+      .cols {
+        border: 1px solid #e0e0e0;
+        border-radius: 6px;
+        padding: 8px 10px 10px;
+        margin-top: 6px;
+      }
+      .cols .h { color: #5f6368; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+      .row2 { display: flex; gap: 8px; }
+      .row2 > div { flex: 1; }
+      .chk { font-weight: 400; margin-top: 12px; }
+      button {
+        margin-top: 14px;
+        width: 100%;
+        padding: 9px;
+        background: #1a73e8;
+        color: #fff;
+        border: 0;
+        border-radius: 4px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      button:disabled { opacity: 0.55; cursor: default; }
+      .status { margin-top: 12px; font-size: 12px; min-height: 16px; }
+      .err { color: #c5221f; }
+      .ok { color: #188038; }
+      .result {
+        margin-top: 12px;
+        padding: 10px;
+        border: 1px solid #e0e0e0;
+        border-radius: 6px;
+      }
+      .result a.dl {
+        display: inline-block;
+        margin-top: 8px;
+        background: #188038;
+        color: #fff;
+        padding: 7px 12px;
+        border-radius: 4px;
+        text-decoration: none;
+        font-weight: 500;
+      }
+      .fname { color: #5f6368; font-size: 12px; margin-top: 4px; word-break: break-all; }
+      .warn { margin-top: 8px; color: #9a6700; font-size: 12px; max-height: 150px; overflow: auto; }
+      .muted { color: #5f6368; }
+      .spinner {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border: 2px solid #ccc;
+        border-top-color: #1a73e8;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+        vertical-align: -1px;
+        margin-right: 6px;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+  </head>
+  <body>
+    <h2>Import Google Docs → Content Beast</h2>
+    <p class="hint">
+      Map your columns, extract the linked Docs to a JSON file, then upload it in
+      Content Beast (Library → Import from Google Docs).
+    </p>
+
+    <div id="loading" class="status">
+      <span class="spinner"></span>Reading the spreadsheet…
+    </div>
+
+    <div id="form" style="display: none">
+      <label for="tab">Tab</label>
+      <select id="tab"></select>
+      <p class="hint" id="rowHint"></p>
+
+      <div class="cols">
+        <div class="h">Column mapping</div>
+        <label for="c_domain">Domain / site</label>
+        <select id="c_domain"></select>
+        <label for="c_language">Language</label>
+        <select id="c_language"></select>
+        <label for="c_structure">Structure (page list)</label>
+        <select id="c_structure"></select>
+        <label for="c_links">Links (Google Docs)</label>
+        <select id="c_links"></select>
+      </div>
+
+      <div class="row2" style="margin-top: 10px">
+        <div>
+          <label for="rowStart">First row</label>
+          <input type="number" id="rowStart" min="0" value="0" />
+        </div>
+        <div>
+          <label for="rowEnd">Last row</label>
+          <input type="number" id="rowEnd" min="0" value="0" />
+        </div>
+      </div>
+      <p class="hint">
+        0 = all rows. Use a range to run big sheets in chunks (~6 min limit).
+      </p>
+
+      <label class="chk">
+        <input type="checkbox" id="keepImages" checked /> Keep images in exported
+        HTML
+      </label>
+
+      <button id="run">Extract to JSON</button>
+      <div id="status" class="status"></div>
+      <div id="result"></div>
+    </div>
+
+    <script>
+      var META = null;
+      var COL_IDS = ["domain", "language", "structure", "links"];
+
+      function opt(value, text) {
+        var o = document.createElement("option");
+        o.value = value;
+        o.textContent = text;
+        return o;
+      }
+
+      function esc(s) {
+        return String(s)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+
+      function currentSheet() {
+        return META.sheets[Number(document.getElementById("tab").value) || 0];
+      }
+
+      function fillTabs() {
+        var sel = document.getElementById("tab");
+        sel.innerHTML = "";
+        META.sheets.forEach(function (sh, i) {
+          sel.appendChild(opt(String(i), sh.name));
+        });
+        sel.onchange = onTabChange;
+        onTabChange();
+      }
+
+      function onTabChange() {
+        var sh = currentSheet();
+        document.getElementById("rowHint").textContent =
+          sh.rowCount + " data row(s) · " + sh.headers.length + " column(s)";
+        COL_IDS.forEach(function (k) {
+          var sel = document.getElementById("c_" + k);
+          sel.innerHTML = "";
+          sel.appendChild(opt("-1", "— none —"));
+          sh.headers.forEach(function (h) {
+            sel.appendChild(opt(String(h.index), h.name));
+          });
+          var sug =
+            sh.suggested && sh.suggested[k] != null ? sh.suggested[k] : -1;
+          sel.value = String(sug);
+        });
+      }
+
+      function onReady(meta) {
+        META = meta;
+        document.getElementById("loading").style.display = "none";
+        document.getElementById("form").style.display = "block";
+        fillTabs();
+      }
+
+      function onMetaErr(e) {
+        document.getElementById("loading").innerHTML =
+          '<span class="err">' + esc(e && e.message ? e.message : e) + "</span>";
+      }
+
+      function doRun() {
+        var sh = currentSheet();
+        var cfg = {
+          sheetName: sh.name,
+          cols: {
+            domain: Number(document.getElementById("c_domain").value),
+            language: Number(document.getElementById("c_language").value),
+            structure: Number(document.getElementById("c_structure").value),
+            links: Number(document.getElementById("c_links").value),
+          },
+          rowStart: Number(document.getElementById("rowStart").value) || 0,
+          rowEnd: Number(document.getElementById("rowEnd").value) || 0,
+          keepImages: document.getElementById("keepImages").checked,
+        };
+        document.getElementById("run").disabled = true;
+        document.getElementById("result").innerHTML = "";
+        document.getElementById("status").innerHTML =
+          '<span class="spinner"></span>Exporting Docs… this can take a minute.';
+        google.script.run
+          .withSuccessHandler(onDone)
+          .withFailureHandler(onRunErr)
+          .runFromSidebar(cfg);
+      }
+
+      function onDone(res) {
+        document.getElementById("run").disabled = false;
+        document.getElementById("status").innerHTML =
+          '<span class="ok">Done.</span>';
+        var w = res.warnings || [];
+        var html =
+          '<div class="result">' +
+          "<div><b>" +
+          res.rows +
+          "</b> rows · <b>" +
+          res.docs +
+          "</b> docs" +
+          (res.docsFailed
+            ? ' (<span class="err">' + res.docsFailed + " failed</span>)"
+            : "") +
+          "</div>" +
+          '<div class="fname">' +
+          esc(res.fileName) +
+          "</div>" +
+          '<a class="dl" href="' +
+          res.downloadUrl +
+          '" target="_blank">Download JSON</a>';
+        if (w.length) {
+          html +=
+            '<div class="warn"><b>' +
+            w.length +
+            " warning(s):</b><br>" +
+            w.map(esc).join("<br>") +
+            "</div>";
+        }
+        html +=
+          '<div class="hint" style="margin-top:8px;">Then upload it in Content ' +
+          "Beast → Library → Import from Google Docs.</div>";
+        html += "</div>";
+        document.getElementById("result").innerHTML = html;
+      }
+
+      function onRunErr(e) {
+        document.getElementById("run").disabled = false;
+        document.getElementById("status").innerHTML =
+          '<span class="err">' +
+          esc(e && e.message ? e.message : String(e)) +
+          "</span>";
+      }
+
+      document.getElementById("run").addEventListener("click", doRun);
+      google.script.run
+        .withSuccessHandler(onReady)
+        .withFailureHandler(onMetaErr)
+        .getSheetMeta();
+    </script>
+  </body>
+</html>

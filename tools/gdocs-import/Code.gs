@@ -1,13 +1,13 @@
 /**
  * ===========================================================================
- * Content Beast — Google Docs → Custom CMS import extractor (Apps Script)
+ * Content Beast — Google Docs import extractor (Apps Script) + sidebar UI
  * ===========================================================================
  *
  * WHAT THIS IS
  * ------------
- * A standalone Google Apps Script that runs *as you* (your work Google
- * account), so it inherits your org access to the spreadsheet and to every
- * linked Google Doc. It reads a sheet that lists, per row:
+ * A Google Apps Script that runs *as you* (your work Google account), so it
+ * inherits your org access to the spreadsheet and to every linked Google Doc.
+ * It reads a sheet that lists, per row:
  *   - a target domain (or domains),
  *   - a language,
  *   - a "Structure" cell — the page list for that domain; its entries are the
@@ -16,60 +16,61 @@
  *     captured whether they're rich-text hyperlinks, =HYPERLINK() formulas,
  *     plain-text Doc URLs, OR Google Drive smart chips (the grey pills with a
  *     doc icon — these need the Sheets API, see SETUP). Hyperlinks placed
- *     directly on Structure entries are also captured. Each link's anchor text
- *     is later paired to a Structure entry to choose the slug (server-side).
+ *     directly on Structure entries are also captured.
  *
- * For every linked Doc it exports the Doc to HTML, and it emits ONE JSON file
- * to your Google Drive. You then download that JSON and upload it into Content
- * Beast (Library → Import from Google Docs), which does the messy part:
- * cleaning the HTML, AI-pairing each Structure page to its Doc by wording,
- * pulling the meta title / meta description out of the top of each Doc, and
- * building the bulk-publish table (single-site or multi-site, decided by how
- * many distinct domains appear).
+ * For every linked Doc it exports the Doc to HTML and emits ONE JSON file to
+ * your Google Drive. You then upload that JSON into Content Beast (Library →
+ * Import from Google Docs), which does the messy part: cleaning the HTML,
+ * AI-pairing each Structure page to its Doc by wording, pulling the meta title /
+ * description, and building the bulk table.
+ *
+ * TWO WAYS TO RUN
+ * ---------------
+ *   A) Sidebar (recommended). Bind this to your sheet (see SETUP). A
+ *      "Content Beast" menu appears in the sheet; open it → "Import Google
+ *      Docs…". A sidebar lets you pick the tab, MAP EACH COLUMN from dropdowns
+ *      (no editing code — auto-detected but overridable), set a row range and
+ *      options, and Extract with one click, then download the JSON. This is the
+ *      flexible, no-code path.
+ *   B) Headless run(). Edit the CONFIG block, Run the `run` function from the
+ *      editor, read the log for the file link. Auto-detects columns by header.
+ *      Handy for scripted / repeat runs.
  *
  * WHY APPS SCRIPT (and not a GCP service account / OAuth app)
  * ----------------------------------------------------------
- * Apps Script auto-provisions its own hidden Google Cloud project and runs
- * under YOUR identity when you click Run. That means no "create a GCP project"
- * rights are needed, and org-restricted Docs that only you can view are
- * readable here. The trade-off: it's a manual run-and-download step rather
- * than a server-side automation. For v1 that's the deal.
+ * Apps Script runs under YOUR identity, so org-restricted Docs that only you
+ * can view are readable here — no "create a GCP project" rights needed. The
+ * trade-off: a manual run-and-download step rather than a server automation.
  *
- * SETUP (one time, ~2 minutes)
- * ----------------------------
- *   1. Open https://script.google.com → New project.
- *   2. Delete the stub Code.gs contents and paste THIS file in.
- *   3. Click the gear (Project Settings) → tick
- *      "Show appsscript.json manifest file in editor".
- *   4. Open the now-visible appsscript.json and paste in the manifest shipped
- *      alongside this file (tools/gdocs-import/appsscript.json). It declares
- *      the OAuth scopes we need (sheets read, drive, external_request).
+ * SETUP (one time, ~2 minutes) — for the sidebar
+ * ----------------------------------------------
+ *   1. Open your Google Sheet → Extensions → Apps Script.
+ *   2. Replace the stub Code.gs with THIS file.
+ *   3. Add the sidebar UI: in the editor, click "＋" next to Files → HTML →
+ *      name it exactly `Sidebar` → paste in Sidebar.html (shipped alongside
+ *      this file).
+ *   4. Project Settings (gear) → tick "Show appsscript.json manifest file in
+ *      editor". Open appsscript.json and paste in the manifest shipped here
+ *      (tools/gdocs-import/appsscript.json) — it declares the OAuth scopes.
  *   5. IF your Doc links are smart chips (grey pills with a doc icon), add the
- *      Sheets API so the script can read them: in the editor, click
- *      "Services" (＋) → select "Google Sheets API" → Add. (Plain hyperlinks
- *      and =HYPERLINK() formulas work without this; chips need it.)
- *   6. Back in Code.gs, edit the CONFIG block below: set SHEET_URL (and
- *      SHEET_NAME if your tab isn't the first one).
- *   7. Run → choose the function `run`. Google will prompt you to authorize;
- *      review the scopes and Allow. (First run only.)
- *   8. When it finishes, check the Execution log: it prints the name and a
- *      direct link of the JSON file it wrote to your Drive ("My Drive" root by
- *      default). Download that JSON.
- *   9. Upload the JSON in Content Beast.
+ *      Sheets API: editor → "Services" (＋) → "Google Sheets API" → Add.
+ *      (Plain hyperlinks and =HYPERLINK() formulas work without this.)
+ *   6. Reload the spreadsheet tab. A "Content Beast" menu appears → "Import
+ *      Google Docs…". First run prompts you to authorize; review + Allow.
+ *   7. Map the columns, Extract, Download the JSON, upload it in Content Beast.
  *
  * BIG SHEETS / TIMEOUTS
  * ---------------------
- * Apps Script caps a single execution at ~6 minutes. Exporting many Docs is
- * the slow part. If you have a lot of rows, run in chunks: set ROW_START /
- * ROW_END (1-based sheet row numbers, header is row 1) to process a slice,
- * download that JSON, bump the range, run again. The importer accepts multiple
- * JSON files. Leave both at 0 to process every row.
+ * Apps Script caps a single execution at ~6 minutes; exporting many Docs is the
+ * slow part. For large sheets, set a row range (First/Last row in the sidebar,
+ * or ROW_START/ROW_END for run()) to process a slice, download that JSON, bump
+ * the range, run again. The importer accepts multiple JSON files.
  *
  * WHAT YOU DON'T NEED TO DO
  * -------------------------
- * No HTML cleanup, no link/structure matching, no meta extraction here — all
- * of that happens server-side in Content Beast where it can be reviewed and
- * re-run. This script's only job is faithful extraction.
+ * No HTML cleanup, no link/structure matching, no meta extraction here — all of
+ * that happens server-side in Content Beast. This script's only job is faithful
+ * extraction.
  *
  * ---------------------------------------------------------------------------
  * JSON CONTRACT (this is what the backend importer parses — keep in sync)
@@ -95,7 +96,7 @@
  *         { "label": "About us",
  *           "url": "https://docs.google.com/document/d/ID1/edit",
  *           "docId": "ID1",
- *           "kind": "hyperlink" }        // "hyperlink" | "plain"
+ *           "kind": "hyperlink" }        // "hyperlink" | "formula" | "plain" | "chip"
  *       ]
  *     }
  *   ],
@@ -108,31 +109,164 @@
  * ===========================================================================
  */
 
-// ======================= CONFIG — EDIT THESE =============================
+// ============ CONFIG — only used by the headless run(); the sidebar ignores it =
 
-/** Full URL of the spreadsheet (copy from the browser address bar). */
+/** Optional. Full spreadsheet URL for a HEADLESS run() from the editor. Leave
+ *  as-is (or "") when running bound-to-the-sheet via the sidebar — the sidebar
+ *  and a bound run() use the active spreadsheet. */
 var SHEET_URL = "PASTE_YOUR_SHEET_URL_HERE";
 
-/** Tab name. Leave "" to use the first sheet. */
+/** Tab name for run(). Leave "" to use the first sheet. */
 var SHEET_NAME = "";
 
 /** Process only rows in [ROW_START, ROW_END] (1-based, inclusive). 0 = no bound. */
 var ROW_START = 0;
 var ROW_END = 0;
 
-/** Keep images in exported HTML? (We export full HTML either way; the importer
- *  decides what to keep. This flag is informational, surfaced in the JSON.) */
+/** Keep images in exported HTML? (Informational — surfaced in the JSON; the
+ *  importer decides what to keep.) */
 var KEEP_IMAGES = true;
 
 // ========================================================================
 
 
-/** Entry point. Run this. */
+// ------------------------------- Sidebar UI -------------------------------
+
+/** Simple trigger: add the menu when the bound spreadsheet opens. */
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu("Content Beast")
+    .addItem("Import Google Docs…", "showSidebar")
+    .addToUi();
+}
+
+/** Open the importer sidebar (from the menu). */
+function showSidebar() {
+  var html = HtmlService.createHtmlOutputFromFile("Sidebar")
+    .setTitle("Content Beast — Docs import");
+  SpreadsheetApp.getUi().showSidebar(html);
+}
+
+/**
+ * Sidebar bootstrap: every tab with its header names + a suggested column
+ * mapping and data-row count, so the UI can build the dropdowns. Called via
+ * google.script.run when the sidebar loads.
+ */
+function getSheetMeta() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) {
+    throw new Error(
+      "No active spreadsheet. Open this from the sheet (Extensions → Apps " +
+      "Script bound to the sheet), not as a standalone project.");
+  }
+  var out = { spreadsheetName: ss.getName(), sheets: [] };
+  var sheets = ss.getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    var sh = sheets[i];
+    var lastCol = sh.getLastColumn();
+    var lastRow = sh.getLastRow();
+    var header = lastCol > 0 ? sh.getRange(1, 1, 1, lastCol).getDisplayValues()[0] : [];
+    var headers = [];
+    for (var c = 0; c < header.length; c++) {
+      headers.push({
+        index: c,
+        name: String(header[c] || "").trim() || ("Column " + (c + 1)),
+      });
+    }
+    out.sheets.push({
+      name: sh.getName(),
+      rowCount: Math.max(0, lastRow - 1),
+      headers: headers,
+      suggested: suggestColumns_(header),
+    });
+  }
+  return out;
+}
+
+/** Auto-detect the four roles' column indices by header text (-1 = none). */
+function suggestColumns_(header) {
+  function find(patterns) {
+    for (var c = 0; c < header.length; c++) {
+      var h = String(header[c] || "").trim().toLowerCase();
+      if (!h) continue;
+      for (var p = 0; p < patterns.length; p++) {
+        if (patterns[p].test(h)) return c;
+      }
+    }
+    return -1;
+  }
+  return {
+    domain: find([/^domains?$/, /domain/, /^sites?$/, /^urls?$/, /host/]),
+    language: find([/^lang/, /language/, /locale/]),
+    structure: find([/structure/, /pages?/, /sitemap/, /outline/]),
+    links: find([/links?/, /docs?$/, /google ?docs?/, /content/, /articles?/]),
+  };
+}
+
+/**
+ * Sidebar "Extract" handler. `cfg` = { sheetName, cols:{domain,language,
+ * structure,links} (0-based indices, -1 = none), rowStart, rowEnd, keepImages }.
+ * Runs the extraction, writes the JSON to Drive, and returns a small result the
+ * sidebar renders (filename, download link, counts, warnings).
+ */
+function runFromSidebar(cfg) {
+  cfg = cfg || {};
+  var res = extract_({
+    sheetName: cfg.sheetName || "",
+    cols: cfg.cols || null,
+    rowStart: Number(cfg.rowStart) || 0,
+    rowEnd: Number(cfg.rowEnd) || 0,
+    keepImages: cfg.keepImages !== false,
+  });
+  var file = writePayload_(res.payload, res.ss, res.rowStart, res.rowEnd, res.bounded);
+  return {
+    ok: true,
+    fileName: file.getName(),
+    fileUrl: file.getUrl(),
+    downloadUrl: "https://drive.google.com/uc?export=download&id=" + file.getId(),
+    rows: res.stats.rows,
+    docs: res.stats.docs,
+    docsFailed: res.stats.docsFailed,
+    warnings: res.payload.warnings,
+  };
+}
+
+
+// ------------------------------ Entry points ------------------------------
+
+/** Headless entry. Edit CONFIG above, then Run this from the editor. */
 function run() {
-  var ss = SpreadsheetApp.openByUrl(SHEET_URL);
-  var sheet = SHEET_NAME ? ss.getSheetByName(SHEET_NAME) : ss.getSheets()[0];
+  var res = extract_({
+    sheetName: SHEET_NAME,
+    cols: null, // auto-detect by header
+    rowStart: ROW_START,
+    rowEnd: ROW_END,
+    keepImages: KEEP_IMAGES,
+  });
+  var file = writePayload_(res.payload, res.ss, res.rowStart, res.rowEnd, res.bounded);
+  Logger.log("Done. %s rows, %s docs (%s failed), %s warnings.",
+    res.stats.rows, res.stats.docs, res.stats.docsFailed, res.stats.warnings);
+  Logger.log("JSON file: %s", file.getName());
+  Logger.log("Download here: %s", file.getUrl());
+  if (res.payload.warnings.length) {
+    Logger.log("Warnings:\n - %s", res.payload.warnings.join("\n - "));
+  }
+}
+
+
+// ------------------------------ Extraction core ---------------------------
+
+/**
+ * Read the sheet and build the JSON payload. `cfg.cols` is an explicit
+ * {domain,language,structure,links} index map (from the sidebar); when null,
+ * columns are auto-detected by header. Returns { payload, ss, rowStart, rowEnd,
+ * bounded, stats }.
+ */
+function extract_(cfg) {
+  var ss = openSpreadsheet_();
+  var sheet = cfg.sheetName ? ss.getSheetByName(cfg.sheetName) : ss.getSheets()[0];
   if (!sheet) {
-    throw new Error("Sheet not found: " + (SHEET_NAME || "(first sheet)"));
+    throw new Error("Sheet not found: " + (cfg.sheetName || "(first sheet)"));
   }
 
   var warnings = [];
@@ -146,7 +280,7 @@ function run() {
   }
 
   var header = values[0];
-  var cols = resolveColumns_(header, warnings);
+  var cols = colsFromConfig_(header, cfg.cols, warnings);
 
   // Smart-chip links (Insert > Smart chips > Drive file, or @file) are NOT
   // visible to getRichTextValues()/getLinkUrl() — only the Sheets API exposes
@@ -161,8 +295,10 @@ function run() {
       "links. Regular hyperlinks and =HYPERLINK() formulas still work.");
   }
 
-  var rowStart = ROW_START > 1 ? ROW_START : 2;   // never include the header
-  var rowEnd = ROW_END > 0 ? Math.min(ROW_END, values.length) : values.length;
+  var reqStart = Number(cfg.rowStart) || 0;
+  var reqEnd = Number(cfg.rowEnd) || 0;
+  var rowStart = reqStart > 1 ? reqStart : 2;   // never include the header
+  var rowEnd = reqEnd > 0 ? Math.min(reqEnd, values.length) : values.length;
 
   var docs = {};            // docId -> {ok,title,html,error}
   var rows = [];
@@ -227,11 +363,11 @@ function run() {
   var payload = {
     version: 1,
     generatedAt: new Date().toISOString(),
-    keepImages: KEEP_IMAGES,
+    keepImages: cfg.keepImages !== false,
     source: {
       spreadsheetId: ss.getId(),
       sheetName: sheet.getName(),
-      url: SHEET_URL,
+      url: ss.getUrl(),
     },
     columns: {
       domain: cols.domain,
@@ -244,24 +380,80 @@ function run() {
     warnings: warnings,
   };
 
-  var fileName = "gdocs-import-" + ss.getId().slice(0, 8) + "-" +
-    formatStamp_(new Date()) +
-    (ROW_START || ROW_END ? "-rows" + rowStart + "-" + rowEnd : "") + ".json";
-
-  var file = DriveApp.createFile(fileName, JSON.stringify(payload), "application/json");
-
-  Logger.log("Done. %s rows, %s docs (%s failed), %s warnings.",
-    rows.length,
-    Object.keys(docs).length,
-    Object.keys(docs).filter(function (k) { return !docs[k].ok; }).length,
-    warnings.length);
-  Logger.log("JSON file: %s", file.getName());
-  Logger.log("Download here: %s", file.getUrl());
-  if (warnings.length) {
-    Logger.log("Warnings:\n - %s", warnings.join("\n - "));
-  }
+  var docsFailed = Object.keys(docs).filter(function (k) { return !docs[k].ok; }).length;
+  return {
+    payload: payload,
+    ss: ss,
+    rowStart: rowStart,
+    rowEnd: rowEnd,
+    bounded: !!(reqStart || reqEnd),
+    stats: {
+      rows: rows.length,
+      docs: Object.keys(docs).length,
+      docsFailed: docsFailed,
+      warnings: warnings.length,
+    },
+  };
 }
 
+/** Active spreadsheet (bound run / sidebar), or SHEET_URL when set for run(). */
+function openSpreadsheet_() {
+  if (SHEET_URL && SHEET_URL.indexOf("PASTE_") !== 0 && SHEET_URL.trim()) {
+    return SpreadsheetApp.openByUrl(SHEET_URL);
+  }
+  var active = SpreadsheetApp.getActiveSpreadsheet();
+  if (!active) {
+    throw new Error(
+      "No spreadsheet available. Bind this script to your sheet (open the " +
+      "sheet → Extensions → Apps Script), or set SHEET_URL for a headless run().");
+  }
+  return active;
+}
+
+/**
+ * Build the {domain,language,structure,links} column map. With an explicit
+ * `mapping` (sidebar dropdowns, 0-based indices, -1 = none) use it verbatim;
+ * without one, fall back to header auto-detection (resolveColumns_).
+ */
+function colsFromConfig_(header, mapping, warnings) {
+  if (!mapping) return resolveColumns_(header, warnings);
+
+  function col(idx) {
+    idx = (idx == null) ? -1 : Number(idx);
+    if (isNaN(idx) || idx < 0 || idx >= header.length) {
+      return { header: "", index: -1 };
+    }
+    return {
+      header: String(header[idx] || "").trim() || ("col" + (idx + 1)),
+      index: idx,
+    };
+  }
+
+  var cols = {
+    domain: col(mapping.domain),
+    language: col(mapping.language),
+    structure: col(mapping.structure),
+    links: col(mapping.links),
+  };
+  if (cols.domain.index < 0) warnings.push("No domain column mapped.");
+  if (cols.structure.index < 0 && cols.links.index < 0) {
+    warnings.push(
+      "Neither a Structure nor a Links column mapped — no Google Docs will be " +
+      "found to export.");
+  }
+  return cols;
+}
+
+/** Write the payload as a JSON file to Drive (My Drive root). */
+function writePayload_(payload, ss, rowStart, rowEnd, bounded) {
+  var fileName = "gdocs-import-" + ss.getId().slice(0, 8) + "-" +
+    formatStamp_(new Date()) +
+    (bounded ? "-rows" + rowStart + "-" + rowEnd : "") + ".json";
+  return DriveApp.createFile(fileName, JSON.stringify(payload), "application/json");
+}
+
+
+// ------------------------------- Helpers ----------------------------------
 
 /**
  * Find which column is which by header text. Falls back to position heuristics
