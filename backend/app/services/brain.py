@@ -38,8 +38,35 @@ from app.services.app_settings_cache import (
     get_setting,
     invalidate as invalidate_setting,
 )
+from app.services.generation_limits import (
+    load_generation_limits,
+    resolve_max_output_tokens,
+)
 
 BRAIN_KEY = "brain"
+
+# Full-content transforms (translate / fix-links) return output roughly as long
+# as their input. A fixed 8192 cap silently truncated long cells mid-text — and
+# worse for non-Latin targets (Cyrillic tokenizes far less efficiently, so the
+# Russian output of an English cell can be 2–3× the token count) and for
+# thinking models (Gemini 2.5 / Sonnet bill reasoning against the SAME budget).
+# So size the ceiling to the source with generous headroom instead: floored at
+# the configured generation default, capped at a provider-safe ceiling.
+_OUTPUT_TOKEN_CEILING = 32768
+
+
+def _sized_output_tokens(source_len: int, floor: int) -> int:
+    """Output-token ceiling sized to the input length (chars).
+
+    ``floor`` (the configured global default) always wins for short inputs;
+    long inputs grow the ceiling — ~4 output tokens of headroom per source
+    token (≈4 chars) to cover script expansion + thinking — up to
+    ``_OUTPUT_TOKEN_CEILING``. An admin who sets the global default above the
+    ceiling keeps their explicit choice.
+    """
+    approx_src_tokens = max(1, source_len // 4)
+    sized = min(_OUTPUT_TOKEN_CEILING, approx_src_tokens * 4)
+    return max(floor, sized)
 
 
 class AiTextResult(NamedTuple):
@@ -380,12 +407,16 @@ async def translate_text(
         "{{target_language}}", expand_language_label(target_language)
     )
 
+    gen_limits = await load_generation_limits(db)
+    max_out = _sized_output_tokens(
+        len(source_text), resolve_max_output_tokens(None, gen_limits)
+    )
     result = await provider.generate(
         prompt=source_text,
         model=model,
         params=GenerationParams(
             temperature=0.2,
-            max_output_tokens=8192,
+            max_output_tokens=max_out,
             system=system,
         ),
     )
@@ -509,12 +540,16 @@ async def fix_links_text(
         content=content, expected_links=expected_links, violations=violations
     )
 
+    gen_limits = await load_generation_limits(db)
+    max_out = _sized_output_tokens(
+        len(content), resolve_max_output_tokens(None, gen_limits)
+    )
     result = await provider.generate(
         prompt=user_msg,
         model=model,
         params=GenerationParams(
             temperature=0.1,
-            max_output_tokens=8192,
+            max_output_tokens=max_out,
             system=system,
         ),
     )
