@@ -110,6 +110,9 @@ class GenerationParams:
     # model research the prompt against Google Search and return citations.
     # Only the Vertex Gemini path honors it; other providers ignore it.
     grounding: str | None = None
+    # Grounding blacklist (bare hostnames) — passed to the Vertex Google Search
+    # tool as `excludeDomains`. Ignored unless `grounding == 'google_search'`.
+    grounding_exclude_domains: list[str] | None = None
 
 
 class ProviderError(RuntimeError):

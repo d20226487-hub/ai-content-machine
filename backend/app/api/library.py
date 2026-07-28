@@ -1413,23 +1413,47 @@ async def update_column(
     for k, v in data.items():
         setattr(col, k, v)
     # Grounding only works on the Vertex Gemini path (the only place the Google
-    # Search tool is wired). Reject it on any other provider — where it would
-    # silently no-op — or on Claude, which can't ground. Raised before commit,
-    # so the transaction rolls back and nothing persists.
+    # Search tool is wired). Validate against the column's EFFECTIVE provider/
+    # model — i.e. resolve the workspace default when the column leaves them
+    # unset — so a Default-model column whose default is Vertex+Gemini can turn
+    # grounding on. Raised before commit, so the transaction rolls back.
     if col.grounding:
-        if col.provider_code != "vertex":
+        from app.db.models import Provider as _Provider
+        from app.services.ai_assist import first_enabled_provider_code
+
+        eff_provider = col.provider_code or await first_enabled_provider_code(db)
+        eff_model = (col.model or "").strip().lower()
+        if not eff_model and eff_provider:
+            prov = (
+                await db.execute(
+                    select(_Provider).where(_Provider.code == eff_provider)
+                )
+            ).scalar_one_or_none()
+            eff_model = (prov.default_model or "").strip().lower() if prov else ""
+        if eff_provider != "vertex":
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Grounding requires this column's provider to be Google "
-                    "Vertex AI with a Gemini model."
+                    "Grounding requires Google Vertex AI with a Gemini model. "
+                    "Set this column's provider to Vertex, or make Vertex the "
+                    "workspace default."
                 ),
             )
-        if (col.model or "").strip().lower().startswith("claude"):
+        if eff_model.startswith("claude"):
             raise HTTPException(
                 status_code=400,
                 detail="Grounding is a Gemini feature — pick a Gemini model, not Claude.",
             )
+    # Grounding blacklist: only meaningful with grounding on. Normalize entries
+    # to bare hosts; clear the list entirely when grounding is off.
+    if not col.grounding:
+        col.grounding_exclude_domains = None
+    elif col.grounding_exclude_domains is not None:
+        from app.services.grounding_domains import normalize_exclude_domains
+
+        col.grounding_exclude_domains = (
+            normalize_exclude_domains(col.grounding_exclude_domains) or None
+        )
     await _bump_table_updated(db, table_id)
     await db.commit()
     await db.refresh(col)

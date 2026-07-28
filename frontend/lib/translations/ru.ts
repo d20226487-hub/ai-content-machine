@@ -977,6 +977,9 @@ export const ru: Record<keyof typeof en, string> = {
     "Скопировать ссылки на источники в соседнюю колонку, которую можно проверить/починить через «Проверку ссылок».",
   "colCfg.groundingRequiresVertex":
     "Чтобы включить граундинг, выберите провайдера Google Vertex AI и модель Gemini.",
+  "colCfg.groundingExclude": "Исключить домены (чёрный список)",
+  "colCfg.groundingExcludeHint":
+    "По одному домену в строке — они исключаются из результатов поиска Google (напр. спам или сайты конкурентов). Ограничить поиск «белым списком» Google не позволяет; оставьте пустым, чтобы ничего не исключать.",
   "colCfg.preview": "Предпросмотр",
   "colCfg.previewLoading": "(загрузка или нечего показать)",
   "colCfg.unfilledVarsForRow":

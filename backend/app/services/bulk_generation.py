@@ -312,7 +312,9 @@ async def generate_one_cell(
     # never touch the cache.
     grounded = bool(col.grounding)
     gc_key = (
-        grounding_cache.cache_key(rendered, chosen_model, col.grounding)
+        grounding_cache.cache_key(
+            rendered, chosen_model, col.grounding, col.grounding_exclude_domains
+        )
         if grounded
         else None
     )
@@ -342,6 +344,7 @@ async def generate_one_cell(
                         # Per-column grounding (null = off). Only the Vertex
                         # Gemini path acts on it; other providers ignore it.
                         grounding=col.grounding,
+                        grounding_exclude_domains=col.grounding_exclude_domains,
                     ),
                     retry_max_attempts=provider_row.retry_max_attempts,
                     backoff_base_ms=provider_row.backoff_base_ms,

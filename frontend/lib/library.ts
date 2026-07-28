@@ -251,6 +251,8 @@ export interface UpdateColumnPayload {
   /** Grounding source; null clears it (off). Only valid on a Vertex + Gemini
    *  column — the server rejects it otherwise. */
   grounding?: "google_search" | null;
+  /** Grounding blacklist (bare hostnames); normalized server-side. */
+  grounding_exclude_domains?: string[] | null;
 }
 
 export function updateColumn(

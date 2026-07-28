@@ -193,6 +193,8 @@ export interface BulkColumn {
    *  "google_search" = research the topic with Gemini + Google Search on
    *  Vertex. Only the Vertex Gemini path honours it. */
   grounding?: "google_search" | null;
+  /** Grounding blacklist: bare hostnames excluded from Google Search results. */
+  grounding_exclude_domains?: string[] | null;
 }
 
 export interface BulkRow {

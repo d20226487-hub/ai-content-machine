@@ -947,6 +947,9 @@ export const en = {
     "Copy the cited source URLs into a sibling column you can validate/repair with Link-Check.",
   "colCfg.groundingRequiresVertex":
     "Set the provider to Google Vertex AI with a Gemini model to enable grounding.",
+  "colCfg.groundingExclude": "Exclude domains (blacklist)",
+  "colCfg.groundingExcludeHint":
+    "One domain per line — these are dropped from Google Search results (e.g. spam or competitor sites). Google Search can't restrict to an allowlist; leave empty for no exclusions.",
   "colCfg.preview": "Preview",
   "colCfg.previewLoading": "(loading or nothing to preview)",
   "colCfg.unfilledVarsForRow": "Unfilled variables for this row: {vars}",

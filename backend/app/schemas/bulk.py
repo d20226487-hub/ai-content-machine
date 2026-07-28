@@ -29,6 +29,8 @@ class ColumnRead(BaseModel):
     max_output_tokens: int | None = None
     # Grounding source (null = off). See GroundingSource.
     grounding: str | None = None
+    # Grounding blacklist: bare hostnames excluded from Google Search results.
+    grounding_exclude_domains: list[str] | None = None
 
 
 class ColumnCreate(BaseModel):
@@ -57,6 +59,9 @@ class ColumnUpdate(BaseModel):
     max_output_tokens: int | None = Field(default=None, ge=1, le=200000)
     # null clears grounding (back to off); omit to leave unchanged.
     grounding: GroundingSource | None = None
+    # Grounding blacklist (bare hostnames). Normalized server-side; omit to
+    # leave unchanged, [] or null to clear.
+    grounding_exclude_domains: list[str] | None = None
 
 
 # ----- Rows -----

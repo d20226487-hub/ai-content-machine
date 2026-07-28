@@ -69,6 +69,10 @@ export function ColumnConfigModal({ table, column, onClose, onSaved, onExtracted
   const [grounding, setGrounding] = useState<string | null>(
     column.grounding ?? null,
   );
+  // Grounding blacklist — one domain per line (normalized server-side).
+  const [excludeDomains, setExcludeDomains] = useState<string>(
+    (column.grounding_exclude_domains ?? []).join("\n"),
+  );
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -107,12 +111,22 @@ export function ColumnConfigModal({ table, column, onClose, onSaved, onExtracted
 
   const selectedProvider = providers.find((p) => p.code === providerCode);
 
+  // Workspace default = the first enabled provider that has a key (the backend
+  // orders by id and requires a key; listEnabledProviders uses the same order).
+  const defaultProvider = providers.find((p) => p.has_api_key);
+  // Effective provider/model once the workspace default is resolved.
+  const effProviderCode = providerCode ?? defaultProvider?.code ?? null;
+  const effProvider = providers.find((p) => p.code === effProviderCode);
+  const effModel = (model ?? effProvider?.default_model ?? "")
+    .trim()
+    .toLowerCase();
+
   // Grounding is a Vertex-Gemini capability (only that path wires the Google
-  // Search tool). Offer it only when the column runs on Vertex with a non-Claude
-  // model, matching the server-side guard.
+  // Search tool). Offer it whenever the column RESOLVES to Vertex with a
+  // non-Claude model — including via the workspace default — matching the
+  // server-side guard.
   const groundingAllowed =
-    providerCode === "vertex" &&
-    !(model ?? "").trim().toLowerCase().startsWith("claude");
+    effProviderCode === "vertex" && !effModel.startsWith("claude");
 
   // When prompt changes, fetch its detail (variables list).
   // Abort superseded fetches via an `ignored` flag so a stale result can't
@@ -232,6 +246,11 @@ export function ColumnConfigModal({ table, column, onClose, onSaved, onExtracted
         grounding: groundingAllowed
           ? (grounding as "google_search" | null)
           : null,
+        // Blacklist only when grounding is actually on; server normalizes it.
+        grounding_exclude_domains:
+          groundingAllowed && grounding
+            ? excludeDomains.split(/[\s,]+/).filter(Boolean)
+            : null,
       });
       onSaved(updated);
       onClose();
@@ -401,9 +420,12 @@ export function ColumnConfigModal({ table, column, onClose, onSaved, onExtracted
                   const v = e.target.value || null;
                   setProviderCode(v);
                   setModel(null);
-                  // Grounding only survives on Vertex — reset it otherwise so
-                  // the config can't be saved into a guaranteed 400.
-                  if (v !== "vertex") setGrounding(null);
+                  // Grounding only survives when the column resolves to Vertex —
+                  // reset it otherwise so the config can't be saved into a
+                  // guaranteed 400. "Default" counts when the workspace default
+                  // is Vertex.
+                  const eff = v ?? defaultProvider?.code ?? null;
+                  if (eff !== "vertex") setGrounding(null);
                 }}
                 className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-700 dark:bg-neutral-900"
               >
@@ -489,6 +511,24 @@ export function ColumnConfigModal({ table, column, onClose, onSaved, onExtracted
                 : t("colCfg.groundingRequiresVertex")}
             </span>
           </label>
+
+          {/* Grounding blacklist — only relevant when grounding is on. Google
+              Search has no allowlist, so this excludes unwanted domains. */}
+          {groundingAllowed && grounding === "google_search" && (
+            <label className="mt-3 block text-xs font-medium text-neutral-700 dark:text-neutral-300">
+              {t("colCfg.groundingExclude")}
+              <textarea
+                value={excludeDomains}
+                onChange={(e) => setExcludeDomains(e.target.value)}
+                rows={3}
+                placeholder="example.com&#10;spam.io"
+                className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+              />
+              <span className="mt-1 block font-normal text-neutral-500 dark:text-neutral-400">
+                {t("colCfg.groundingExcludeHint")}
+              </span>
+            </label>
+          )}
 
           {column.grounding && (
             <div className="mt-2 flex flex-wrap items-center gap-2">

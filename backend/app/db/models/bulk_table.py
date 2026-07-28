@@ -161,6 +161,12 @@ class BulkTableColumn(Base):
     # ('vertex_ai_search') need no migration. Only the Vertex Gemini path acts
     # on this; other providers ignore it. See migration 0066.
     grounding: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Grounding blacklist: bare hostnames the Google Search tool must exclude
+    # (Vertex `googleSearch.excludeDomains`). NULL/[] = no exclusions. Only
+    # meaningful when `grounding` is set. See migration 0071.
+    grounding_exclude_domains: Mapped[list | None] = mapped_column(
+        JSONB, nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

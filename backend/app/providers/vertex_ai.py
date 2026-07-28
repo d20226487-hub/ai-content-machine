@@ -192,7 +192,11 @@ class VertexAIProvider(BaseProvider):
         # prompt against live web results and returns citations. Gemini 2.0+
         # takes a bare `googleSearch`; the reply carries `groundingMetadata`.
         if params and params.grounding == "google_search":
-            body["tools"] = [{"googleSearch": {}}]
+            gs: dict = {}
+            # Optional blacklist: drop results from these domains.
+            if params.grounding_exclude_domains:
+                gs["excludeDomains"] = list(params.grounding_exclude_domains)
+            body["tools"] = [{"googleSearch": gs}]
 
         if sa_json:
             url, headers, params_qs = self._sa_target(sa_json, chosen_model)

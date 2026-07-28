@@ -29,15 +29,23 @@ log = logging.getLogger("acm.grounding_cache")
 _TTL_DAYS = 30
 
 
-def cache_key(rendered_prompt: str, model: str, grounding_source: str) -> str:
+def cache_key(
+    rendered_prompt: str,
+    model: str,
+    grounding_source: str,
+    exclude_domains: list[str] | None = None,
+) -> str:
     """Stable key for a grounded generation. NUL separators so
-    ``a|b`` and ``ab|`` can't collide."""
+    ``a|b`` and ``ab|`` can't collide. The exclude-domains blacklist is part of
+    the key — a different blacklist is a different result."""
     h = hashlib.sha256()
     h.update(rendered_prompt.encode("utf-8"))
     h.update(b"\x00")
     h.update((model or "").encode("utf-8"))
     h.update(b"\x00")
     h.update((grounding_source or "").encode("utf-8"))
+    h.update(b"\x00")
+    h.update((",".join(sorted(exclude_domains or []))).encode("utf-8"))
     return h.hexdigest()
 
 
