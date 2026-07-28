@@ -14,6 +14,7 @@ import {
   type AiHelperRunDetail,
 } from "@/lib/aiHelper";
 import { useT } from "@/lib/i18n-context";
+import { getTable } from "@/lib/library";
 
 const PAGE_SIZE = 25;
 const TERMINAL = new Set(["done", "failed", "cancelled"]);
@@ -29,11 +30,24 @@ export default function AiHelperRunPage({
   const { t } = useT();
 
   const [run, setRun] = useState<AiHelperRunDetail | null>(null);
+  const [colNames, setColNames] = useState<Record<number, string>>({});
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const pageRef = useRef(page);
   pageRef.current = page;
+
+  // Column names to label each output cell (columns aren't row-paginated).
+  useEffect(() => {
+    if (!Number.isFinite(tableId)) return;
+    getTable(tableId, { page: 1, page_size: 1 })
+      .then((tb) =>
+        setColNames(
+          Object.fromEntries((tb.columns ?? []).map((c) => [c.id, c.name])),
+        ),
+      )
+      .catch(() => {});
+  }, [tableId]);
 
   const load = useCallback(async () => {
     try {
@@ -103,8 +117,9 @@ export default function AiHelperRunPage({
           <div className="mt-4 rounded-lg border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
             <div className="flex items-center justify-between text-xs text-neutral-500 dark:text-neutral-400">
               <span>
-                {t("aiHelper.modeTag", {
-                  mode: t(`aiHelper.mode.${run.mode}` as never),
+                {t("aiHelper.engineTag", {
+                  engine: t(`aiHelper.engine.${run.engine}` as never),
+                  n: run.outputs?.length ?? 0,
                 })}
                 {run.reverted_at ? ` · ${t("aiHelper.reverted")}` : ""}
               </span>
@@ -174,6 +189,7 @@ export default function AiHelperRunPage({
                 <thead className="bg-neutral-50 text-xs uppercase tracking-wide text-neutral-500 dark:bg-neutral-900 dark:text-neutral-400">
                   <tr>
                     <th className="px-3 py-2 font-medium">{t("aiHelper.colRow")}</th>
+                    <th className="px-3 py-2 font-medium">{t("aiHelper.colColumn")}</th>
                     <th className="px-3 py-2 font-medium">{t("aiHelper.colState")}</th>
                     <th className="px-3 py-2 font-medium">{t("aiHelper.colResult")}</th>
                   </tr>
@@ -183,6 +199,9 @@ export default function AiHelperRunPage({
                     <tr key={c.id} className="align-top">
                       <td className="px-3 py-2 tabular-nums text-neutral-500">
                         #{c.row_position + 1}
+                      </td>
+                      <td className="px-3 py-2 text-neutral-600 dark:text-neutral-300">
+                        {colNames[c.column_id] ?? `#${c.column_id}`}
                       </td>
                       <td className="px-3 py-2">
                         <span

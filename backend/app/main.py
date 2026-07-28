@@ -29,6 +29,7 @@ from app.api import (
     publish_languages as publish_languages_router,
     settings as settings_router,
     share as share_router,
+    stats as stats_router,
     tags,
     users as users_module,
 )
@@ -124,6 +125,7 @@ app.include_router(publish_bulk_router.router)
 app.include_router(publish_languages_router.router)
 app.include_router(backup_router.router)
 app.include_router(brain_router.router)
+app.include_router(stats_router.router)
 
 
 @app.get("/")

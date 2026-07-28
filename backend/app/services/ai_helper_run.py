@@ -1,9 +1,11 @@
 """AI Helper runs — validate + seed a per-cell run, plus its lifecycle controls.
 
-The endpoint calls ``create_run`` (validates the prompt/mapping/config, seeds one
-``AiHelperCell`` per selected row, sets the run ``running``) then fans out the
-per-cell Celery tasks. Cancel / resume / retry-failed / revert mirror the
-link-fix tool. ``preview`` gives the pre-run cost estimate for the confirm gate.
+The endpoint calls ``create_run`` (validates the prompt(s)/mapping/config/outputs,
+seeds one ``AiHelperCell`` per (row, output column), sets the run ``running``)
+then fans out the work — one task per row (structured engine) or per cell
+(per_output engine). Cancel / resume / retry-failed / revert mirror the link-fix
+tool. ``preview`` gives the pre-run cost estimate (call count scaled by engine)
+for the confirm gate.
 """
 from __future__ import annotations
 
@@ -11,7 +13,6 @@ from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
@@ -24,12 +25,14 @@ from app.db.models import (
 )
 from app.schemas.ai_helper import (
     AiHelperCellRead,
+    AiHelperOutput,
     AiHelperPreview,
     AiHelperRunCreate,
     AiHelperRunDetail,
     AiHelperRunRead,
 )
 from app.services.ai_assist import first_enabled_provider_code
+from app.services.ai_helper_outputs import build_structured_suffix, effective_outputs
 from app.services.ai_helper_slice import slice_first_words
 from app.services.generation_limits import (
     load_generation_limits,
@@ -40,6 +43,7 @@ from app.services.prompts import extract_variables, render_template
 
 _PREVIEW_SAMPLE = 25  # rows sampled to estimate the average input size
 _CHARS_PER_TOKEN = 4  # rough token estimate
+_MAX_OUTPUTS = 20  # sanity cap on output columns per run
 
 
 def _bad_request(detail: str) -> HTTPException:
@@ -59,6 +63,7 @@ def _run_to_read(run: AiHelperRun) -> AiHelperRunRead:
         table_id=run.table_id,
         status=run.status,
         mode=run.mode,
+        engine=run.engine or "per_output",
         name=run.name,
         target_column_id=run.target_column_id,
         total=run.total,
@@ -83,6 +88,25 @@ def _cell_to_read(c: AiHelperCell) -> AiHelperCellRead:
         new_value=c.new_value,
         error=c.error,
     )
+
+
+async def list_runs(
+    db: AsyncSession, table_id: int, limit: int = 100
+) -> list[AiHelperRunRead]:
+    """AI Helper run history for a table, newest first (light rows, no cells)."""
+    runs = (
+        (
+            await db.execute(
+                select(AiHelperRun)
+                .where(AiHelperRun.table_id == table_id)
+                .order_by(AiHelperRun.created_at.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [_run_to_read(r) for r in runs]
 
 
 async def get_run_detail(
@@ -116,6 +140,7 @@ async def get_run_detail(
         **base.model_dump(),
         prompt=run.prompt,
         variable_map=run.variable_map or {},
+        outputs=[AiHelperOutput(**o) for o in effective_outputs(run)],
         provider_code=run.provider_code,
         model=run.model,
         input_scope=run.input_scope,
@@ -131,16 +156,18 @@ async def get_run_detail(
 # ----- validation + create -----
 
 
-async def _table_column_ids(db: AsyncSession, table_id: int) -> set[int]:
-    return set(
-        (
+async def _table_columns(db: AsyncSession, table_id: int) -> dict[int, str]:
+    """{column_id: name} for the table's columns."""
+    return {
+        cid: name
+        for cid, name in (
             await db.execute(
-                select(BulkTableColumn.id).where(BulkTableColumn.table_id == table_id)
+                select(BulkTableColumn.id, BulkTableColumn.name).where(
+                    BulkTableColumn.table_id == table_id
+                )
             )
-        )
-        .scalars()
-        .all()
-    )
+        ).all()
+    }
 
 
 async def _rows_for(
@@ -156,33 +183,87 @@ async def _rows_for(
     return [(rid, pos) for rid, pos in (await db.execute(stmt)).all()]
 
 
-def _validate(payload: AiHelperRunCreate, col_ids: set[int]) -> None:
-    prompt = (payload.prompt or "").strip()
-    if not prompt:
-        raise _bad_request("A prompt is required.")
-    if payload.mode not in ("read", "edit"):
-        raise _bad_request("Mode must be 'read' or 'edit'.")
+def _validate(payload: AiHelperRunCreate, columns: dict[int, str]) -> list[dict]:
+    """Validate the payload; return the normalized outputs list (with names)."""
+    col_ids = set(columns)
 
-    # variable_map values must be real columns; every {{var}} must be mapped.
+    engine = payload.engine
+    if engine not in ("structured", "per_output"):
+        raise _bad_request("Engine must be 'structured' or 'per_output'.")
+
+    outputs = payload.outputs or []
+    if not outputs:
+        raise _bad_request("Add at least one output column.")
+    if len(outputs) > _MAX_OUTPUTS:
+        raise _bad_request(f"At most {_MAX_OUTPUTS} output columns per run.")
+
+    # variable_map values must be real columns.
     for var, cid in (payload.variable_map or {}).items():
         if int(cid) not in col_ids:
             raise _bad_request(f"Mapped column for {{{{{var}}}}} is not in this table.")
-    unmapped = [v for v in extract_variables(prompt) if v not in (payload.variable_map or {})]
+    mapped_cols = {int(c) for c in (payload.variable_map or {}).values()}
+
+    base_prompt = (payload.prompt or "").strip()
+    if engine == "structured" and not base_prompt:
+        raise _bad_request("A prompt is required.")
+    # Prompts that supply {{variables}}: the base prompt (structured) or each
+    # output's own prompt (per_output).
+    prompt_texts: list[str] = [base_prompt] if engine == "structured" else []
+
+    seen_cols: set[int] = set()
+    seen_keys: set[str] = set()
+    norm: list[dict] = []
+    for o in outputs:
+        cid = int(o.column_id)
+        if cid not in col_ids:
+            raise _bad_request("An output column is not in this table.")
+        if cid in seen_cols:
+            raise _bad_request("Each output must target a different column.")
+        seen_cols.add(cid)
+
+        omode = "edit" if o.mode == "edit" else "write"
+        if omode == "edit" and cid not in mapped_cols:
+            raise _bad_request(
+                f"Edit output '{columns[cid]}' rewrites that column, so it must "
+                "also be a mapped input (map one of the prompt's {{variables}} to it)."
+            )
+
+        key = (o.key or "").strip()
+        oprompt = (o.prompt or "").strip()
+        if engine == "structured":
+            if not key:
+                raise _bad_request(f"Output '{columns[cid]}' needs a JSON key.")
+            if key in seen_keys:
+                raise _bad_request(f"Duplicate output key '{key}'.")
+            seen_keys.add(key)
+        else:  # per_output
+            if not oprompt:
+                raise _bad_request(f"Output '{columns[cid]}' needs a prompt.")
+            prompt_texts.append(oprompt)
+
+        norm.append(
+            {
+                "column_id": cid,
+                "mode": omode,
+                "key": key,
+                "prompt": oprompt,
+                "name": columns[cid],
+            }
+        )
+
+    # Every {{var}} across the active prompt(s) must be mapped.
+    used_vars: list[str] = []
+    for pt in prompt_texts:
+        for v in extract_variables(pt):
+            if v not in used_vars:
+                used_vars.append(v)
+    unmapped = [v for v in used_vars if v not in (payload.variable_map or {})]
     if unmapped:
         raise _bad_request(
-            "Map every prompt variable to a column. Unmapped: "
-            + ", ".join(unmapped)
+            "Map every prompt variable to a column. Unmapped: " + ", ".join(unmapped)
         )
 
-    if payload.target_column_id not in col_ids:
-        raise _bad_request("The target column is not in this table.")
-    mapped_cols = {int(c) for c in (payload.variable_map or {}).values()}
-    if payload.mode == "edit" and payload.target_column_id not in mapped_cols:
-        raise _bad_request(
-            "Edit mode rewrites the target column, so it must also be one of the "
-            "prompt's input columns (e.g. map {{Content}} to it)."
-        )
-
+    # Input word-slice.
     if payload.input_scope not in ("full", "first_pct"):
         raise _bad_request("Input scope must be 'full' or 'first_pct'.")
     if payload.input_scope == "first_pct":
@@ -190,13 +271,10 @@ def _validate(payload: AiHelperRunCreate, col_ids: set[int]) -> None:
             raise _bad_request("First-N% slicing needs a percent between 1 and 100.")
         if payload.slice_column_id is None:
             raise _bad_request("Pick which column to slice.")
-        if payload.mode == "edit" and payload.slice_column_id != payload.target_column_id:
-            raise _bad_request(
-                "In Edit mode the sliced column must be the target column "
-                "(the edited slice is spliced back into it)."
-            )
-        if payload.mode == "read" and payload.slice_column_id not in mapped_cols:
+        if int(payload.slice_column_id) not in mapped_cols:
             raise _bad_request("The sliced column must be one of the mapped inputs.")
+
+    return norm
 
 
 async def create_run(
@@ -205,26 +283,36 @@ async def create_run(
     payload: AiHelperRunCreate,
     user_id: int | None,
 ) -> tuple[AiHelperRun, list[int]]:
-    """Validate, seed one cell per selected row, mark the run running. Returns
-    (run, cell_ids); the caller fans out the per-cell tasks."""
-    col_ids = await _table_column_ids(db, table_id)
-    _validate(payload, col_ids)
+    """Validate, seed one cell per (row, output column), mark the run running.
+    Returns (run, cell_ids); the caller fans out per row or per cell by engine."""
+    columns = await _table_columns(db, table_id)
+    norm_outputs = _validate(payload, columns)
 
     rows = await _rows_for(db, table_id, payload.row_ids)
     if not rows:
         raise _bad_request("No rows to process.")
+
+    engine = payload.engine
+    base_prompt = (payload.prompt or "").strip()
+    # Snapshot a representative prompt: the shared base (structured) or the first
+    # output's prompt (per_output) so the run summary always has something.
+    stored_prompt = base_prompt or (norm_outputs[0]["prompt"] if norm_outputs else "")
+    # Legacy 'mode' is informational now; summarize the outputs.
+    summary_mode = "edit" if all(o["mode"] == "edit" for o in norm_outputs) else "read"
 
     now = datetime.now(timezone.utc)
     run = AiHelperRun(
         table_id=table_id,
         created_by_id=user_id,
         status="running",
-        mode=payload.mode,
+        mode=summary_mode,
+        engine=engine,
         name=(payload.name or "").strip() or None,
-        prompt=payload.prompt.strip(),
+        prompt=stored_prompt,
         prompt_id=payload.prompt_id,
         variable_map={k: int(v) for k, v in (payload.variable_map or {}).items()},
-        target_column_id=payload.target_column_id,
+        target_column_id=None,  # v1.1 runs use `outputs`
+        outputs=norm_outputs,
         provider_code=(payload.provider_code or "").strip() or None,
         model=(payload.model or "").strip() or None,
         max_output_tokens=payload.max_output_tokens,
@@ -234,7 +322,7 @@ async def create_run(
             payload.slice_column_id if payload.input_scope == "first_pct" else None
         ),
         row_ids=[rid for rid, _ in rows],
-        total=len(rows),
+        total=len(rows) * len(norm_outputs),
         started_at=now,
         last_progress_at=now,
     )
@@ -247,10 +335,11 @@ async def create_run(
                 run_id=run.id,
                 row_id=rid,
                 row_position=pos,
-                column_id=payload.target_column_id,
+                column_id=o["column_id"],
                 state="pending",
             )
             for rid, pos in rows
+            for o in norm_outputs
         ]
     )
     await db.commit()
@@ -364,14 +453,35 @@ async def revert_run(db: AsyncSession, run_id: int) -> AiHelperRunDetail:
 # ----- cost preview -----
 
 
+def _row_variables(
+    payload: AiHelperRunCreate, rv: dict[int, str]
+) -> dict[str, str]:
+    """Build the prompt variables for a sampled row, applying the word-slice."""
+    variables: dict[str, str] = {}
+    for var, cid in (payload.variable_map or {}).items():
+        cid = int(cid)
+        v = rv.get(cid, "")
+        if (
+            payload.input_scope == "first_pct"
+            and payload.slice_column_id == cid
+            and payload.input_pct
+        ):
+            v, _ = slice_first_words(v, int(payload.input_pct))
+        variables[var] = v
+    return variables
+
+
 async def preview(
     db: AsyncSession, table_id: int, payload: AiHelperRunCreate
 ) -> AiHelperPreview:
-    """Matched-row count + a best-effort upper-bound cost for the confirm gate."""
-    col_ids = await _table_column_ids(db, table_id)
-    _validate(payload, col_ids)
+    """Matched rows + total call count + a best-effort upper-bound cost."""
+    columns = await _table_columns(db, table_id)
+    norm_outputs = _validate(payload, columns)
     rows = await _rows_for(db, table_id, payload.row_ids)
     matched = len(rows)
+    n_outputs = len(norm_outputs)
+    engine = payload.engine
+    calls = matched if engine == "structured" else matched * n_outputs
 
     code = (payload.provider_code or "").strip() or await first_enabled_provider_code(db)
     provider_configured = bool(code)
@@ -385,46 +495,51 @@ async def preview(
     if matched == 0 or not code or not model:
         return AiHelperPreview(
             matched_rows=matched,
+            est_calls=calls,
             provider_code=code,
             model=model,
             provider_configured=provider_configured,
         )
 
-    # Sample a handful of rows, render the prompt, estimate avg input tokens.
+    # Sample a handful of rows and estimate the average input size PER CALL.
     sample_ids = [rid for rid, _ in rows[:_PREVIEW_SAMPLE]]
     values = await _row_values_bulk(db, sample_ids)
+    base_prompt = (payload.prompt or "").strip()
+    suffix = build_structured_suffix(norm_outputs) if engine == "structured" else ""
+
     total_chars = 0
+    n_calls_sampled = 0
     for rid in sample_ids:
-        rv = values.get(rid, {})
-        variables: dict[str, str] = {}
-        for var, cid in (payload.variable_map or {}).items():
-            v = rv.get(int(cid), "")
-            if (
-                payload.input_scope == "first_pct"
-                and payload.slice_column_id == int(cid)
-                and payload.input_pct
-            ):
-                v, _ = slice_first_words(v, int(payload.input_pct))
-            variables[var] = v
-        rendered, _ = render_template(payload.prompt, variables)
-        total_chars += len(rendered)
-    avg_input_tokens = int((total_chars / max(1, len(sample_ids))) / _CHARS_PER_TOKEN)
+        variables = _row_variables(payload, values.get(rid, {}))
+        if engine == "structured":
+            rendered, _ = render_template(base_prompt, variables)
+            total_chars += len(rendered) + len(suffix)
+            n_calls_sampled += 1
+        else:
+            for o in norm_outputs:
+                rendered, _ = render_template(o["prompt"], variables)
+                total_chars += len(rendered)
+                n_calls_sampled += 1
+    avg_input_tokens = int(
+        (total_chars / max(1, n_calls_sampled)) / _CHARS_PER_TOKEN
+    )
 
     gen_limits = await load_generation_limits(db)
     out_tokens = resolve_max_output_tokens(payload.max_output_tokens, gen_limits)
 
     rates = await load_pricing(db)
-    per_row = compute_cost_usd(
+    per_call = compute_cost_usd(
         rates,
         provider_code=code,
         model=model,
         prompt_tokens=avg_input_tokens,
         completion_tokens=out_tokens,
     )
-    est = float(per_row) * matched if per_row is not None else None
+    est = float(per_call) * calls if per_call is not None else None
 
     return AiHelperPreview(
         matched_rows=matched,
+        est_calls=calls,
         provider_code=code,
         model=model,
         est_cost_usd=round(est, 4) if est is not None else None,

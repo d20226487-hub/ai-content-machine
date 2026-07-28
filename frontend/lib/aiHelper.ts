@@ -1,12 +1,28 @@
 import { api } from "./api";
 
+/** Legacy v1 run-level mode (still returned for old runs). */
 export type AiHelperMode = "read" | "edit";
+/** v1.1 fan-out engine. */
+export type AiHelperEngine = "structured" | "per_output";
+/** Per-output mode: produce new content, or rewrite the column in place. */
+export type AiHelperOutputMode = "write" | "edit";
 export type AiHelperStatus =
   | "queued"
   | "running"
   | "cancelled"
   | "done"
   | "failed";
+
+export interface AiHelperOutput {
+  column_id: number;
+  mode: AiHelperOutputMode;
+  /** JSON key routed to this column (structured engine). */
+  key: string;
+  /** This output's own prompt (per_output engine). */
+  prompt: string;
+  /** Column name (populated by the backend on read). */
+  name?: string;
+}
 
 export interface AiHelperCell {
   id: number;
@@ -24,6 +40,7 @@ export interface AiHelperRunDetail {
   table_id: number;
   status: AiHelperStatus;
   mode: AiHelperMode;
+  engine: AiHelperEngine;
   name: string | null;
   target_column_id: number | null;
   total: number;
@@ -36,6 +53,7 @@ export interface AiHelperRunDetail {
   finished_at: string | null;
   prompt: string;
   variable_map: Record<string, number>;
+  outputs: AiHelperOutput[];
   provider_code: string | null;
   model: string | null;
   input_scope: string;
@@ -47,8 +65,24 @@ export interface AiHelperRunDetail {
   items_page_size: number;
 }
 
+/** Light run row for the tool-page history list (no cells). */
+export interface AiHelperRunListItem {
+  id: number;
+  status: AiHelperStatus;
+  engine: AiHelperEngine;
+  mode: AiHelperMode;
+  name: string | null;
+  total: number;
+  done: number;
+  failed: number;
+  skipped: number;
+  reverted_at: string | null;
+  created_at: string;
+}
+
 export interface AiHelperPreview {
   matched_rows: number;
+  est_calls: number;
   provider_code: string | null;
   model: string | null;
   est_cost_usd: number | null;
@@ -57,12 +91,12 @@ export interface AiHelperPreview {
 }
 
 export interface AiHelperRunCreate {
-  mode: AiHelperMode;
+  engine: AiHelperEngine;
   prompt: string;
   prompt_id?: number | null;
   name?: string | null;
   variable_map: Record<string, number>;
-  target_column_id: number;
+  outputs: AiHelperOutput[];
   provider_code?: string | null;
   model?: string | null;
   max_output_tokens?: number | null;
@@ -70,6 +104,24 @@ export interface AiHelperRunCreate {
   input_pct?: number | null;
   slice_column_id?: number | null;
   row_ids: number[];
+}
+
+/** Slug a column name into a JSON key: lowercase, non-alphanumerics → "_". */
+export function slugifyKey(name: string): string {
+  const base = (name || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return base || "field";
+}
+
+/** Slug `name`, suffixing _2, _3… so it doesn't collide with `taken`. */
+export function uniqueKey(name: string, taken: Set<string>): string {
+  const base = slugifyKey(name);
+  if (!taken.has(base)) return base;
+  let i = 2;
+  while (taken.has(`${base}_${i}`)) i += 1;
+  return `${base}_${i}`;
 }
 
 /** Same {{var}} rule as the backend (prompts.py): letters/digits/_-.  + internal
@@ -109,6 +161,14 @@ export function previewAiHelperRun(
     method: "POST",
     body: payload,
   });
+}
+
+export function listAiHelperRuns(
+  tableId: number,
+): Promise<AiHelperRunListItem[]> {
+  return api<AiHelperRunListItem[]>(
+    `/library/tables/${tableId}/ai-helper-runs`,
+  );
 }
 
 export function getAiHelperRun(

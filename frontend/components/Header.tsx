@@ -35,6 +35,7 @@ const NAV: NavItem[] = [
     ],
   },
   { href: "/users", labelKey: "nav.users", roles: ["admin", "manager"] },
+  { href: "/stats", labelKey: "nav.stats", roles: ["admin", "manager"] },
   { href: "/errors", labelKey: "nav.errors", roles: ["admin", "manager"] },
   { href: "/settings", labelKey: "nav.settings", roles: ["admin"] },
   { href: "/docs", labelKey: "nav.docs" },

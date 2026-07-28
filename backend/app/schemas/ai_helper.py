@@ -1,19 +1,36 @@
-"""Schemas for the AI Helper bulk-table mini-tool."""
+"""Schemas for the AI Helper bulk-table mini-tool (v1.1: multi-output)."""
 from datetime import datetime
 
 from pydantic import BaseModel
 
 
+class AiHelperOutput(BaseModel):
+    """One output column a run writes/edits."""
+
+    column_id: int
+    # 'write' (produce new content for the column) | 'edit' (rewrite in place;
+    # the column must also be a mapped input so the model sees its content).
+    mode: str = "write"
+    # JSON key the structured engine routes to this column (auto-slugged from the
+    # column name in the UI, editable). Unused by the per_output engine.
+    key: str = ""
+    # This output's own prompt (per_output engine only; may contain {{vars}}).
+    prompt: str = ""
+
+
 class AiHelperRunCreate(BaseModel):
-    # 'read' (write to a target output column) | 'edit' (rewrite in place)
-    mode: str = "read"
-    prompt: str
+    # 'structured' (1 AI call/row → JSON keyed by output) | 'per_output'
+    # (1 AI call per output, each with its own prompt).
+    engine: str = "structured"
+    # Structured: the shared base prompt. per_output: optional (each output
+    # carries its own prompt); kept for the run summary.
+    prompt: str = ""
     prompt_id: int | None = None  # provenance if loaded from the library
     name: str | None = None
-    # {var_name: source_column_id} — the columns the prompt reads.
+    # {var_name: source_column_id} — the columns the prompt(s) read.
     variable_map: dict[str, int] = {}
-    # read: output column; edit: column rewritten (must be a mapped input).
-    target_column_id: int
+    # The columns this run writes/edits (≥1; column ids unique).
+    outputs: list[AiHelperOutput] = []
     provider_code: str | None = None
     model: str | None = None
     max_output_tokens: int | None = None
@@ -41,7 +58,8 @@ class AiHelperRunRead(BaseModel):
     id: int
     table_id: int
     status: str  # queued | running | cancelled | done | failed
-    mode: str
+    mode: str  # legacy single-output mode (v1.1 runs: informational)
+    engine: str  # structured | per_output
     name: str | None = None
     target_column_id: int | None = None
     total: int
@@ -57,6 +75,8 @@ class AiHelperRunRead(BaseModel):
 class AiHelperRunDetail(AiHelperRunRead):
     prompt: str = ""
     variable_map: dict = {}
+    # Effective outputs (synthesized from target_column_id/mode for legacy runs).
+    outputs: list[AiHelperOutput] = []
     provider_code: str | None = None
     model: str | None = None
     input_scope: str = "full"
@@ -72,6 +92,8 @@ class AiHelperPreview(BaseModel):
     """Pre-run estimate for the cost gate."""
 
     matched_rows: int
+    # Total AI calls: matched_rows (structured) or matched_rows × #outputs.
+    est_calls: int = 0
     provider_code: str | None = None
     model: str | None = None
     # Best-effort upper-bound cost; null when the model has no configured rate.

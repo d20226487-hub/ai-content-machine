@@ -39,14 +39,23 @@ class AiHelperRun(Base):
 
     # queued → running → (cancelled | done | failed)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
-    # 'read' (write to a target output column) | 'edit' (rewrite in place)
+    # v1 single-output mode: 'read' (write to a target column) | 'edit' (rewrite
+    # in place). Retained for legacy runs; v1.1 runs use ``outputs`` instead.
     mode: Mapped[str] = mapped_column(
         String(8), nullable=False, default="read", server_default="read"
+    )
+    # v1.1 fan-out engine: 'structured' (one AI call/row returning a JSON object
+    # whose keys route to the output columns — cheapest, default) | 'per_output'
+    # (one focused AI call per output column).
+    engine: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="structured", server_default="per_output"
     )
     # Optional user label (NULL → UI shows a "<tool> #<id>" fallback).
     name: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
-    # The task prompt, snapshotted (contains {{var}} placeholders).
+    # The task prompt, snapshotted (contains {{var}} placeholders). For the
+    # structured engine this is the shared base prompt; for per_output it is the
+    # first output's prompt (kept for the run summary — each output has its own).
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     # Provenance if loaded from the library (SET NULL keeps the snapshot).
     prompt_id: Mapped[int | None] = mapped_column(
@@ -54,10 +63,17 @@ class AiHelperRun(Base):
     )
     # {var_name: source_column_id} — the input columns the prompt reads.
     variable_map: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    # Read: column the output is written to. Edit: column rewritten.
+    # v1 single-output target (legacy). Read: column written; Edit: column
+    # rewritten. v1.1 uses ``outputs`` — this stays NULL for new multi-out runs.
     target_column_id: Mapped[int | None] = mapped_column(
         ForeignKey("bulk_table_columns.id", ondelete="SET NULL"), nullable=True
     )
+    # v1.1 output columns: list of
+    # ``{"column_id": int, "mode": "write"|"edit", "key": str, "prompt": str}``.
+    # ``key`` routes the structured engine's JSON; ``prompt`` is the per-output
+    # prompt for the per_output engine. Empty for legacy runs (synthesized from
+    # target_column_id/mode on read). Column ids are unique within the list.
+    outputs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
 
     # Per-run AI config (NULL = first-enabled provider + its default model).
     provider_code: Mapped[str | None] = mapped_column(String(50), nullable=True)

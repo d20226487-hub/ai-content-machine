@@ -178,6 +178,7 @@ from app.tasks.link_fix import fix_cell as fix_cell_task, resume_link_fix
 from app.tasks.structure_format import resume_sf, run_sf
 from app.tasks.ai_helper import (
     process_cell as ai_helper_process_cell,
+    process_row as ai_helper_process_row,
     resume_ai_helper,
 )
 from app.services import ai_helper_run as ai_helper_svc
@@ -185,6 +186,7 @@ from app.schemas.ai_helper import (
     AiHelperPreview,
     AiHelperRunCreate,
     AiHelperRunDetail,
+    AiHelperRunRead,
 )
 
 router = APIRouter(
@@ -6570,6 +6572,21 @@ async def _get_ai_helper_run_or_404(
     return run
 
 
+@router.get(
+    "/tables/{table_id}/ai-helper-runs",
+    response_model=list[AiHelperRunRead],
+)
+async def list_ai_helper_runs(
+    table_id: int,
+    limit: int = Query(default=100, ge=1, le=500),
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[AiHelperRunRead]:
+    """AI Helper run history for a table, newest first."""
+    await _get_table_or_404(db, table_id, actor, level="read")
+    return await ai_helper_svc.list_runs(db, table_id, limit)
+
+
 @router.post(
     "/tables/{table_id}/ai-helper",
     response_model=AiHelperRunDetail,
@@ -6581,11 +6598,19 @@ async def create_ai_helper_run(
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> AiHelperRunDetail:
-    """Validate + seed a run, fan out one AI call per selected row (202)."""
+    """Validate + seed a run, then fan out the work (202).
+
+    Structured engine → one ``process_row`` task per row (1 call/row → JSON).
+    per_output engine → one ``process_cell`` task per cell (1 call per output).
+    """
     await _get_table_or_404(db, table_id, actor, level="write")
     run, cell_ids = await ai_helper_svc.create_run(db, table_id, payload, actor.id)
-    for cid in cell_ids:
-        ai_helper_process_cell.delay(run.id, cid)
+    if run.engine == "structured":
+        for rid in run.row_ids or []:
+            ai_helper_process_row.delay(run.id, rid)
+    else:
+        for cid in cell_ids:
+            ai_helper_process_cell.delay(run.id, cid)
     return await ai_helper_svc.get_run_detail(db, run.id, 1, 50)
 
 
