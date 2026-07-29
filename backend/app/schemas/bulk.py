@@ -1072,6 +1072,10 @@ class LinkCheckRunDetail(LinkCheckRunRead):
     status_3xx: int = 0
     status_404: int = 0
     status_5xx: int = 0
+    # "Неудачные" — links that couldn't be crawled (no HTTP response: timeout /
+    # DNS / connection / blocked) plus 5xx server errors. This is the retry set
+    # for "Повторить неудачные"; 404/other 4xx are broken links, not retried.
+    failed_count: int = 0
     items: list[LinkViolationRead]
 
 

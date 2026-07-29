@@ -32,6 +32,7 @@ from app.db.models import (
     BulkTable,
     BulkTableColumn,
     BulkTableRow,
+    User,
 )
 from app.schemas.autotool import (
     AutotoolConfigRead,
@@ -233,6 +234,21 @@ async def list_shared_tables(
             ).all()
         )
 
+    # Owner (table creator) display name per table — full name, else email.
+    owners: dict[int, str] = {}
+    owner_ids = {t.created_by_id for t in tables if t.created_by_id is not None}
+    if owner_ids:
+        owners = {
+            uid: (full or email)
+            for uid, full, email in (
+                await db.execute(
+                    select(User.id, User.full_name, User.email).where(
+                        User.id.in_(owner_ids)
+                    )
+                )
+            ).all()
+        }
+
     items = []
     for t in tables:
         # Columns exposed to Autotool: the operator's selection, or all when null.
@@ -246,6 +262,7 @@ async def list_shared_tables(
             AutotoolTableItem(
                 id=t.id,
                 name=t.name,
+                owner_name=owners.get(t.created_by_id) if t.created_by_id else None,
                 autotool_token=t.autotool_token,
                 csv_path=(
                     f"/autotool/{t.autotool_token}.csv" if t.autotool_token else None

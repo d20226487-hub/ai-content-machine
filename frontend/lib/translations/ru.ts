@@ -277,6 +277,7 @@ export const ru: Record<keyof typeof en, string> = {
   "settings.tab.providers": "Провайдеры",
   "settings.tab.generation": "Генерация",
   "settings.tab.publishing": "Публикация",
+  "settings.tab.autotool": "Autotool",
   "settings.tab.pricing": "Цены",
   "settings.tab.backups": "Бэкапы",
   "settings.tab.trash": "Корзина",
@@ -1223,7 +1224,7 @@ export const ru: Record<keyof typeof en, string> = {
   "autotoolCfg.colsCount": "{cols} колонок",
   "autotoolCfg.colsToggleHint": "Показать колонки, отправляемые в Autotool",
   "autotoolCfg.colsSentHeading": "Отправляемые в Autotool колонки",
-  "autotoolCfg.viewRequest": "Показать POST-запрос",
+  "autotoolCfg.viewRequest": "Отправить на сайты",
   "autotoolCfg.previewTitle": "POST-запрос — {name}",
   "autotoolCfg.noTarget": "Целевой URL не задан — настройте выше.",
   "autotoolCfg.noKey": "API-ключ не задан — настройте выше.",
@@ -2345,9 +2346,9 @@ export const ru: Record<keyof typeof en, string> = {
     "Продолжить обход с того места, где он был приостановлен (или подтолкнуть зависший обход).",
   "linkCheckRun.retryFailed": "Повторить неудачные ({n})",
   "linkCheckRun.retryFailedHint":
-    "Повторно обойти только неудачные ссылки ({n}) — рабочие ссылки не перепроверяются.",
+    "Повторно обойти только ссылки, которые не удалось проверить ({n}) — таймауты, ошибки сети и 5xx. Битые (404) и рабочие ссылки не затрагиваются.",
   "linkCheckRun.confirmRetryFailed":
-    "Повторно обойти неудачные ссылки ({n})? Временные ошибки (таймауты, 5xx) могут пройти; рабочие ссылки не затрагиваются.",
+    "Повторно обойти неудачные ссылки ({n})? Временные ошибки (таймауты, сеть, 5xx) могут пройти. Битые (404) и рабочие ссылки не затрагиваются.",
   "linkCheckRun.confirmCancel": "Остановить проверку ссылок?",
   "linkCheckRun.crawling": "Обход {done} / {total} ссылок…",
   "linkCheckRun.preparing": "Подготовка…",

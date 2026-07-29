@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 
 import { Modal } from "@/components/Modal";
 import { Pagination } from "@/components/Pagination";
+import { UserChip } from "@/components/UserChip";
 import { ApiError } from "@/lib/api";
 import {
   createAutotoolRun,
@@ -48,7 +49,7 @@ export function AutotoolSharedTables() {
   useEffect(() => load(), [load]);
 
   return (
-    <section className="max-w-3xl">
+    <section className="max-w-5xl">
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
           {t("autotoolCfg.sharedHeading")}
@@ -103,6 +104,12 @@ export function AutotoolSharedTables() {
                       >
                         {t("autotoolCfg.colsCount", { cols: it.column_count })}
                       </button>
+                      {it.owner_name && (
+                        <>
+                          {" · "}
+                          <UserChip name={it.owner_name} />
+                        </>
+                      )}
                     </span>
                   </span>
                   <button

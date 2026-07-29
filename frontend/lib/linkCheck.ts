@@ -121,6 +121,9 @@ export interface LinkCheckRunDetail extends LinkCheckRun {
   status_3xx: number;
   status_404: number;
   status_5xx: number;
+  /** "Неудачные" — couldn't-be-crawled links (no HTTP response, or 5xx). The
+   *  retry-failed set; 404/other 4xx broken links are excluded. */
+  failed_count: number;
   items: LinkViolation[];
 }
 

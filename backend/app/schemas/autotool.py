@@ -46,6 +46,10 @@ class AutotoolTestResult(BaseModel):
 class AutotoolTableItem(BaseModel):
     id: int
     name: str
+    # Display name (full name or email) of the table's owner/creator, so the
+    # shared list shows who each table belongs to. None if the owner is unset
+    # or deleted.
+    owner_name: str | None = None
     autotool_token: str | None = None
     csv_path: str | None = None
     row_count: int = 0

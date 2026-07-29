@@ -1,9 +1,10 @@
-"""Autotool connection config endpoints (admin + manager).
+"""Autotool endpoints (auth-gated).
 
 Separate from app/api/autotool.py (which is the PUBLIC, unauthenticated CSV
-route) — this router is fully auth-gated. It backs the Autotool tab under
-/publish: set + test the X-Api-Key and target ImportPosts URL used to hand off
-exported tables to the external Autotool proxy.
+route). The connection **config** (X-Api-Key + target ImportPosts URL) is
+**admin-only** — it lives on the admin Settings page. The **shared tables** +
+**send runs** stay admin+manager so managers can still publish exported tables
+to the external Autotool proxy without touching the connection credentials.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -32,7 +33,7 @@ router = APIRouter(prefix="/autotool", tags=["autotool"])
 
 @router.get("/config", response_model=AutotoolConfigRead)
 async def get_autotool_config(
-    _actor: User = Depends(require_role("admin", "manager")),
+    _actor: User = Depends(require_role("admin")),
     db: AsyncSession = Depends(get_db),
 ) -> AutotoolConfigRead:
     return await svc.read_config(db)
@@ -41,7 +42,7 @@ async def get_autotool_config(
 @router.put("/config", response_model=AutotoolConfigRead)
 async def put_autotool_config(
     payload: AutotoolConfigUpdate,
-    actor: User = Depends(require_role("admin", "manager")),
+    actor: User = Depends(require_role("admin")),
     db: AsyncSession = Depends(get_db),
 ) -> AutotoolConfigRead:
     return await svc.update_config(db, payload, actor.id)
@@ -49,7 +50,7 @@ async def put_autotool_config(
 
 @router.post("/config/test", response_model=AutotoolTestResult)
 async def test_autotool_config(
-    _actor: User = Depends(require_role("admin", "manager")),
+    _actor: User = Depends(require_role("admin")),
     db: AsyncSession = Depends(get_db),
 ) -> AutotoolTestResult:
     return await svc.test_connection(db)

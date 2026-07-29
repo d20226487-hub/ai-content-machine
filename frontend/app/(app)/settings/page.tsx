@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
+import { AutotoolConfigCard } from "@/components/AutotoolConfigCard";
 import { BackupCard } from "@/components/BackupCard";
 import { BrainCard } from "@/components/BrainCard";
 import { GenerationDefaultsCard } from "@/components/GenerationDefaultsCard";
@@ -20,6 +21,7 @@ type TabKey =
   | "providers"
   | "generation"
   | "publishing"
+  | "autotool"
   | "pricing"
   | "backups"
   | "trash"
@@ -29,6 +31,7 @@ const TABS: { key: TabKey; labelKey: TranslationKey }[] = [
   { key: "providers", labelKey: "settings.tab.providers" },
   { key: "generation", labelKey: "settings.tab.generation" },
   { key: "publishing", labelKey: "settings.tab.publishing" },
+  { key: "autotool", labelKey: "settings.tab.autotool" },
   { key: "pricing", labelKey: "settings.tab.pricing" },
   { key: "backups", labelKey: "settings.tab.backups" },
   { key: "trash", labelKey: "settings.tab.trash" },
@@ -155,6 +158,7 @@ export default function SettingsPage() {
 
         {tab === "generation" && <GenerationDefaultsCard />}
         {tab === "publishing" && <PublishDefaultsCard />}
+        {tab === "autotool" && <AutotoolConfigCard />}
         {tab === "pricing" && <PricingCard />}
         {tab === "backups" && <BackupCard />}
         {tab === "trash" && <TrashRetentionCard />}

@@ -269,6 +269,7 @@ export const en = {
   "settings.tab.providers": "Providers",
   "settings.tab.generation": "Generation",
   "settings.tab.publishing": "Publishing",
+  "settings.tab.autotool": "Autotool",
   "settings.tab.pricing": "Pricing",
   "settings.tab.backups": "Backups",
   "settings.tab.trash": "Trash",
@@ -1180,7 +1181,7 @@ export const en = {
   "autotoolCfg.colsCount": "{cols} cols",
   "autotoolCfg.colsToggleHint": "Show the columns sent to Autotool",
   "autotoolCfg.colsSentHeading": "Columns sent to Autotool",
-  "autotoolCfg.viewRequest": "View POST request",
+  "autotoolCfg.viewRequest": "Send to sites",
   "autotoolCfg.previewTitle": "POST request — {name}",
   "autotoolCfg.noTarget": "No target URL set — configure it above.",
   "autotoolCfg.noKey": "No API key set — configure it above.",
@@ -2278,9 +2279,9 @@ export const en = {
     "Continue the crawl from where it was paused (or nudge a stalled crawl).",
   "linkCheckRun.retryFailed": "Retry failed ({n})",
   "linkCheckRun.retryFailedHint":
-    "Re-crawl only the {n} failed link(s) — healthy links aren't re-checked.",
+    "Re-crawl only the {n} link(s) that couldn't be checked — timeouts, network errors and 5xx. Broken (404) and healthy links are left as-is.",
   "linkCheckRun.confirmRetryFailed":
-    "Re-crawl the {n} failed link(s) in place? Transient errors (timeouts, 5xx) may now pass; healthy links are left as-is.",
+    "Re-crawl the {n} link(s) that failed to load? Transient errors (timeouts, network, 5xx) may now pass. Broken (404) and healthy links are left as-is.",
   "linkCheckRun.confirmCancel": "Stop this link check?",
   "linkCheckRun.crawling": "Crawling {done} / {total} links…",
   "linkCheckRun.preparing": "Preparing…",

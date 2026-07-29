@@ -42,6 +42,8 @@ export function testAutotoolConfig(): Promise<AutotoolTestResult> {
 export interface AutotoolTableItem {
   id: number;
   name: string;
+  /** Display name of the table's owner (creator); null if unset/deleted. */
+  owner_name: string | null;
   autotool_token: string | null;
   csv_path: string | null;
   row_count: number;

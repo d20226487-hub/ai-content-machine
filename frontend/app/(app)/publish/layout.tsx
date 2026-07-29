@@ -6,9 +6,9 @@ import { usePathname } from "next/navigation";
 import { useT, type TranslationKey } from "@/lib/i18n-context";
 
 const TABS: { href: string; labelKey: TranslationKey }[] = [
+  { href: "/publish/autotool", labelKey: "publish.tabAutotool" },
   { href: "/publish/domains", labelKey: "publish.tabDomains" },
   { href: "/publish/languages", labelKey: "publish.tabLanguages" },
-  { href: "/publish/autotool", labelKey: "publish.tabAutotool" },
   { href: "/publish/post", labelKey: "publish.tabSingleRuns" },
   { href: "/publish/runs", labelKey: "publish.tabBulkRuns" },
   { href: "/publish/cache/runs", labelKey: "publish.tabCacheRuns" },

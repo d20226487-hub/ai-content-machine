@@ -253,7 +253,7 @@ export default function LinkCheckRunPage({
   // loop — otherwise the UI would never see the re-crawl finish.
   async function onRetryFailed() {
     if (!run || retrying) return;
-    if (!window.confirm(t("linkCheckRun.confirmRetryFailed", { n: run.broken_count })))
+    if (!window.confirm(t("linkCheckRun.confirmRetryFailed", { n: run.failed_count })))
       return;
     setRetrying(true);
     try {
@@ -476,17 +476,17 @@ export default function LinkCheckRunPage({
                   {t("linkCheckRun.rerunWithChanges")}
                 </Link>
               )}
-              {isTerminal && run.check_crawl && run.broken_count > 0 && (
+              {isTerminal && run.check_crawl && run.failed_count > 0 && (
                 <button
                   type="button"
                   onClick={onRetryFailed}
                   disabled={retrying}
-                  title={t("linkCheckRun.retryFailedHint", { n: run.broken_count })}
+                  title={t("linkCheckRun.retryFailedHint", { n: run.failed_count })}
                   className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-60 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
                 >
                   {retrying
                     ? t("common.loading")
-                    : t("linkCheckRun.retryFailed", { n: run.broken_count })}
+                    : t("linkCheckRun.retryFailed", { n: run.failed_count })}
                 </button>
               )}
               {isRunning && run.check_crawl && (

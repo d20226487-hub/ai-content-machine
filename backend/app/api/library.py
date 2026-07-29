@@ -4891,8 +4891,13 @@ async def get_link_check_run(
     # Per-status-class breakdown for the crawl overview (unique-URL based,
     # from the crawl-targets table — consistent with ok_count/broken_count,
     # and the only source that has 2xx/3xx codes when include_ok is off).
-    # "Битые" is now exactly 404; 5xx/3xx/2xx are whole-class buckets.
+    # "Битые" is exactly 404; 5xx/3xx/2xx are whole-class buckets.
+    # failed_count = the retry-worthy "Неудачные" set: links that couldn't be
+    # crawled — no HTTP response at all (timeout / DNS / connection / blocked →
+    # status_code NULL) plus 5xx server errors. A 404 or other 4xx is a broken
+    # link, NOT a crawl failure, so it's excluded (retrying it is pointless).
     s_2xx = s_3xx = s_404 = s_5xx = 0
+    failed_ct = 0
     if run.check_crawl:
         agg = (
             await db.execute(
@@ -4907,10 +4912,17 @@ async def get_link_check_run(
                     func.count().filter(
                         LinkCheckCrawlTarget.status_code.between(200, 299)
                     ),
+                    func.count().filter(
+                        LinkCheckCrawlTarget.ok.is_(False),
+                        or_(
+                            LinkCheckCrawlTarget.status_code.is_(None),
+                            LinkCheckCrawlTarget.status_code.between(500, 599),
+                        ),
+                    ),
                 ).where(LinkCheckCrawlTarget.run_id == run_id)
             )
         ).one()
-        s_404, s_5xx, s_3xx, s_2xx = (int(x) for x in agg)
+        s_404, s_5xx, s_3xx, s_2xx, failed_ct = (int(x) for x in agg)
 
     return LinkCheckRunDetail(
         id=run.id,
@@ -4944,6 +4956,7 @@ async def get_link_check_run(
         status_3xx=s_3xx,
         status_404=s_404,
         status_5xx=s_5xx,
+        failed_count=failed_ct,
         items=[LinkViolationRead.model_validate(v) for v in rows],
     )
 
@@ -5580,15 +5593,19 @@ async def retry_failed_link_check(
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LinkCheckRun:
-    """Re-crawl ONLY the failed links of a finished crawl run, in place.
+    """Re-crawl ONLY the "Неудачные" (failed-to-crawl) links of a finished
+    crawl run, in place.
 
-    Resets every target that came back not-OK (4xx / 5xx / network error) to
-    ``pending``, drops the ``broken`` violations it produced, re-baselines the
-    counters, flips the run back to ``running`` and re-enqueues the crawl. So a
-    transient failure (timeout, momentary 5xx, DNS blip) can be re-checked
-    without re-crawling the healthy links or starting a fresh run. Healthy
-    (``ok``) links and any juxtapose violations are untouched. 400 if the run
-    never crawled or has no failed links; 409 while it's still active."""
+    "Неудачные" = links that never yielded a usable HTTP result: no response at
+    all (timeout / DNS / connection error / SSRF-blocked → status_code NULL) or
+    a 5xx server error. Those are transient and worth re-checking. A 404 (or any
+    other 4xx) is a genuinely broken link — retrying it just re-confirms it — so
+    it's left untouched, as are healthy links and juxtapose violations.
+
+    Resets that set to ``pending``, drops only the ``broken`` violations it
+    produced, re-baselines the counters, flips the run back to ``running`` and
+    re-enqueues the crawl. 400 if the run never crawled or has nothing to
+    retry; 409 while it's still active."""
     run = await _get_link_check_run_or_404(db, run_id)
     await _get_table_or_404(db, run.table_id, actor, level="write")
     if not run.check_crawl:
@@ -5602,6 +5619,12 @@ async def retry_failed_link_check(
             detail=f"Run is {run.status}; wait for it to finish before retrying.",
         )
 
+    # The retry-worthy set: crawled-but-not-OK targets with no response
+    # (status_code NULL) or a 5xx. Excludes 404 and other 4xx broken links.
+    uncrawled = or_(
+        LinkCheckCrawlTarget.status_code.is_(None),
+        LinkCheckCrawlTarget.status_code.between(500, 599),
+    )
     failed = (
         await db.execute(
             select(func.count())
@@ -5609,21 +5632,23 @@ async def retry_failed_link_check(
             .where(
                 LinkCheckCrawlTarget.run_id == run_id,
                 LinkCheckCrawlTarget.ok.is_(False),
+                uncrawled,
             )
         )
     ).scalar_one()
     if failed == 0:
         raise HTTPException(status_code=400, detail="No failed links to retry.")
 
-    # Reset the failed targets and drop the broken violations they produced —
-    # the re-crawl writes fresh ones. A 'broken' violation always maps to an
-    # ok=False target, so that's the exact set to clear; 'ok' violations
+    # Reset just those targets and drop only the broken violations they produced
+    # (matched by the same status shape) — the re-crawl writes fresh ones. 404 /
+    # other 4xx broken links and their violations are preserved; 'ok' violations
     # (healthy links, include_ok mode) are left alone.
     await db.execute(
         update(LinkCheckCrawlTarget)
         .where(
             LinkCheckCrawlTarget.run_id == run_id,
             LinkCheckCrawlTarget.ok.is_(False),
+            uncrawled,
         )
         .values(state="pending", ok=None, status_code=None, detail_code=None)
     )
@@ -5631,6 +5656,10 @@ async def retry_failed_link_check(
         delete(LinkCheckViolation).where(
             LinkCheckViolation.run_id == run_id,
             LinkCheckViolation.problem == "broken",
+            or_(
+                LinkCheckViolation.status_code.is_(None),
+                LinkCheckViolation.status_code.between(500, 599),
+            ),
         )
     )
 
