@@ -16,6 +16,7 @@ import { getTable, upsertCells } from "@/lib/library";
 import {
   cancelLinkCheckRun,
   getLinkCheckRun,
+  pauseLinkCheckRun,
   resumeLinkCheckRun,
   retryFailedLinkCheckRun,
   stripCrawlLinks,
@@ -72,8 +73,13 @@ export default function LinkCheckRunPage({
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [pausing, setPausing] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  // Bumping this re-runs the polling effect, restarting its self-scheduling
+  // loop. Needed after actions that flip a stopped (terminal) or paused run
+  // back to running — the loop has already exited and won't revive on its own.
+  const [pollNonce, setPollNonce] = useState(0);
   const [columns, setColumns] = useState<BulkColumn[]>([]);
   const [cellValues, setCellValues] = useState<Map<string, string>>(new Map());
   const [editing, setEditing] = useState<LinkViolation | null>(null);
@@ -115,7 +121,15 @@ export default function LinkCheckRunPage({
         if (isStale?.()) return;
         setRun(r);
         setError(null);
-        if (r.status === "done" || r.status === "cancelled" || r.status === "failed") {
+        // Stop polling once nothing will change without a user action: a
+        // terminal status, or a manual pause. Resume/retry bump pollNonce,
+        // which re-runs the effect and revives the loop.
+        if (
+          r.status === "done" ||
+          r.status === "cancelled" ||
+          r.status === "failed" ||
+          r.status === "paused"
+        ) {
           stoppedRef.current = true;
         }
       } catch (e) {
@@ -144,7 +158,7 @@ export default function LinkCheckRunPage({
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [rid, page, tick]);
+  }, [rid, page, tick, pollNonce]);
 
   const loadCells = useCallback(() => {
     if (!Number.isFinite(tableId)) return;
@@ -202,13 +216,31 @@ export default function LinkCheckRunPage({
     }
   }
 
+  // Pause an in-flight crawl. It stays visible (status "paused") with a Resume
+  // button; workers stop between batches, leaving the rest pending.
+  async function onPause() {
+    if (!run || pausing) return;
+    setPausing(true);
+    try {
+      await pauseLinkCheckRun(run.id);
+      // Refetch the full detail so the status chip + controls flip to paused;
+      // tick() then sets stoppedRef, letting the poll loop wind down.
+      await tick(page);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setPausing(false);
+    }
+  }
+
   async function onResume() {
     if (!run || resuming) return;
     setResuming(true);
     try {
       await resumeLinkCheckRun(run.id);
-      stoppedRef.current = false;
-      await tick(page);
+      // The run flips back to running; restart the poll loop (it may have
+      // stopped while paused/terminal) so progress paints in again.
+      setPollNonce((n) => n + 1);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {
@@ -217,7 +249,8 @@ export default function LinkCheckRunPage({
   }
 
   // Re-crawl just the failed links (transient 5xx / timeout / DNS) in place;
-  // the run flips back to running, so restart polling.
+  // the run flips from terminal back to running, so restart the (stopped) poll
+  // loop — otherwise the UI would never see the re-crawl finish.
   async function onRetryFailed() {
     if (!run || retrying) return;
     if (!window.confirm(t("linkCheckRun.confirmRetryFailed", { n: run.broken_count })))
@@ -225,8 +258,7 @@ export default function LinkCheckRunPage({
     setRetrying(true);
     try {
       await retryFailedLinkCheckRun(run.id);
-      stoppedRef.current = false;
-      await tick(page);
+      setPollNonce((n) => n + 1);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {
@@ -251,6 +283,15 @@ export default function LinkCheckRunPage({
     columns.find((c) => c.id === colId)?.kind ?? "input";
 
   const isActive = run?.status === "queued" || run?.status === "running";
+  const isRunning = run?.status === "running";
+  const isPaused = run?.status === "paused";
+  // Terminal = no more work will happen without an explicit retry. A paused run
+  // is NOT terminal (it can be resumed), so it gets pause/resume controls, not
+  // the "retry failed" action.
+  const isTerminal =
+    run?.status === "done" ||
+    run?.status === "failed" ||
+    run?.status === "cancelled";
 
   // Translation runs reuse the juxtapose machinery but the omitted/hallucinated
   // problems mean "missing localized link" / "wrong (non-localized) link" —
@@ -357,19 +398,20 @@ export default function LinkCheckRunPage({
     (run?.hallucinated_count ?? 0);
   const canFix =
     !!run &&
-    !isActive &&
+    isTerminal &&
     (run.expected_column_ids.length > 0 || isTranslation) &&
     fixableCount > 0;
   // Strip (drop the <a>, keep the anchor) is offered for crawl (HTTP-status)
-  // violations of a finished run that actually crawled. Per-violation
-  // checkboxes carry the selection; the action bar shows once any are picked.
-  const canStrip = !!run && !isActive && run.check_crawl;
+  // violations of a finished run that actually crawled. Gated on a terminal
+  // run — a paused crawl's results are incomplete. Per-violation checkboxes
+  // carry the selection; the action bar shows once any are picked.
+  const canStrip = !!run && isTerminal && run.check_crawl;
   // Without expected columns there's nothing to fix typos against — surface
   // why the fix buttons aren't offered. Translation runs recompute expected
   // links server-side, so they're never blocked for this reason.
   const fixBlockedNoExpected =
     !!run &&
-    !isActive &&
+    isTerminal &&
     run.expected_column_ids.length === 0 &&
     !isTranslation &&
     fixableCount > 0;
@@ -434,7 +476,7 @@ export default function LinkCheckRunPage({
                   {t("linkCheckRun.rerunWithChanges")}
                 </Link>
               )}
-              {!isActive && run.check_crawl && run.broken_count > 0 && (
+              {isTerminal && run.check_crawl && run.broken_count > 0 && (
                 <button
                   type="button"
                   onClick={onRetryFailed}
@@ -447,7 +489,18 @@ export default function LinkCheckRunPage({
                     : t("linkCheckRun.retryFailed", { n: run.broken_count })}
                 </button>
               )}
-              {isActive && run.check_crawl && (
+              {isRunning && run.check_crawl && (
+                <button
+                  type="button"
+                  onClick={onPause}
+                  disabled={pausing}
+                  title={t("linkCheckRun.pauseHint")}
+                  className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-60 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                >
+                  {pausing ? t("common.loading") : t("linkCheckRun.pause")}
+                </button>
+              )}
+              {isPaused && (
                 <button
                   type="button"
                   onClick={onResume}
@@ -458,7 +511,7 @@ export default function LinkCheckRunPage({
                   {resuming ? t("common.loading") : t("linkCheckRun.resume")}
                 </button>
               )}
-              {isActive && (
+              {!isTerminal && (
                 <button
                   type="button"
                   onClick={onCancel}
@@ -471,8 +524,8 @@ export default function LinkCheckRunPage({
             </div>
           </header>
 
-          {/* crawl progress while running */}
-          {run.check_crawl && isActive && (
+          {/* crawl progress while running / queued / paused */}
+          {run.check_crawl && !isTerminal && (
             <div className="mt-4 rounded-lg border border-neutral-200 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-900">
               <p className="mb-1.5 text-xs text-neutral-600 dark:text-neutral-400">
                 {run.total_links > 0
@@ -730,7 +783,7 @@ export default function LinkCheckRunPage({
           {/* violations (crawl / juxtapose runs only) */}
           {!isTranslation &&
             (run.total_violations === 0 ? (
-            !isActive &&
+            isTerminal &&
             (anyFilterActive(filterProblem, filterStatus, filterResolution, q) ? (
               <p className="mt-4 rounded-md bg-neutral-50 px-4 py-3 text-sm text-neutral-600 dark:bg-neutral-900 dark:text-neutral-400">
                 {t("linkCheckRun.noMatches")}

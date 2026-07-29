@@ -2262,6 +2262,7 @@ export const en = {
   "linkCheck.statusDone": "Done",
   "linkCheck.statusCancelled": "Cancelled",
   "linkCheck.statusFailed": "Failed",
+  "linkCheck.statusPaused": "Paused",
 
   // ---------- link check run detail ----------
   "linkCheckRun.backToTool": "← Link checker",
@@ -2269,9 +2270,12 @@ export const en = {
   "linkCheckRun.title": "Link check #{id}",
   "linkCheckRun.meta": "by {by} · {when}",
   "linkCheckRun.cancel": "Cancel",
+  "linkCheckRun.pause": "Pause",
+  "linkCheckRun.pauseHint":
+    "Pause the crawl. Remaining links are kept and can be resumed later.",
   "linkCheckRun.resume": "Resume",
   "linkCheckRun.resumeHint":
-    "Re-enqueue any pending links if the crawl looks stuck (also happens automatically).",
+    "Continue the crawl from where it was paused (or nudge a stalled crawl).",
   "linkCheckRun.retryFailed": "Retry failed ({n})",
   "linkCheckRun.retryFailedHint":
     "Re-crawl only the {n} failed link(s) — healthy links aren't re-checked.",

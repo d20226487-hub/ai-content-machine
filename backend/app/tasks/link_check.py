@@ -484,7 +484,9 @@ async def _seed_translation(db: AsyncSession, run: LinkCheckRun) -> None:
 
 async def _crawl_chunk(db: AsyncSession, run_id: int, chunk_index: int) -> None:
     run = await db.get(LinkCheckRun, run_id)
-    if run is None or run.status in ("done", "failed", "cancelled"):
+    if run is None or run.status in ("done", "failed", "cancelled", "paused"):
+        # A chunk task that starts while the run is terminal or paused bails
+        # immediately, leaving its targets pending for a later resume.
         return
 
     targets = (
@@ -507,7 +509,9 @@ async def _crawl_chunk(db: AsyncSession, run_id: int, chunk_index: int) -> None:
     async with make_crawl_client() as client:
         for sub in _batches(list(targets), CRAWL_BATCH):
             await db.refresh(run)
-            if run.status == "cancelled":
+            if run.status in ("cancelled", "paused"):
+                # Stop between batches on cancel or pause; the untouched targets
+                # stay pending so Resume re-enqueues exactly what's left.
                 return
             results = await crawl_batch(client, [t.url for t in sub])
             new_violations: list[LinkCheckViolation] = []

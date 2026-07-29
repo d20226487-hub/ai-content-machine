@@ -6,6 +6,7 @@ import type { LinkFixRun } from "./linkFix";
 export type LinkCheckStatus =
   | "queued"
   | "running"
+  | "paused"
   | "cancelled"
   | "done"
   | "failed";
@@ -315,6 +316,14 @@ export function stripCrawlLinks(
 
 export function cancelLinkCheckRun(runId: number): Promise<LinkCheckRun> {
   return api<LinkCheckRun>(`/library/link-check-runs/${runId}/cancel`, {
+    method: "POST",
+  });
+}
+
+/** Pause an in-flight crawl. Workers stop between batches and leave the
+ *  remaining targets pending; Resume picks them back up. */
+export function pauseLinkCheckRun(runId: number): Promise<LinkCheckRun> {
+  return api<LinkCheckRun>(`/library/link-check-runs/${runId}/pause`, {
     method: "POST",
   });
 }

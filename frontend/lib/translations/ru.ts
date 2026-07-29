@@ -2329,6 +2329,7 @@ export const ru: Record<keyof typeof en, string> = {
   "linkCheck.statusDone": "Готово",
   "linkCheck.statusCancelled": "Отменено",
   "linkCheck.statusFailed": "Сбой",
+  "linkCheck.statusPaused": "Пауза",
 
   // ---------- детали проверки ссылок ----------
   "linkCheckRun.backToTool": "← Проверка ссылок",
@@ -2336,9 +2337,12 @@ export const ru: Record<keyof typeof en, string> = {
   "linkCheckRun.title": "Проверка ссылок #{id}",
   "linkCheckRun.meta": "{by} · {when}",
   "linkCheckRun.cancel": "Отменить",
+  "linkCheckRun.pause": "Пауза",
+  "linkCheckRun.pauseHint":
+    "Приостановить обход. Оставшиеся ссылки сохранятся, их можно возобновить позже.",
   "linkCheckRun.resume": "Возобновить",
   "linkCheckRun.resumeHint":
-    "Повторно поставить в очередь оставшиеся ссылки, если обход завис (также происходит автоматически).",
+    "Продолжить обход с того места, где он был приостановлен (или подтолкнуть зависший обход).",
   "linkCheckRun.retryFailed": "Повторить неудачные ({n})",
   "linkCheckRun.retryFailedHint":
     "Повторно обойти только неудачные ссылки ({n}) — рабочие ссылки не перепроверяются.",

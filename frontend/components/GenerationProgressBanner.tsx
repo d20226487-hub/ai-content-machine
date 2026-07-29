@@ -51,10 +51,14 @@ export function GenerationProgressBanner({
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const finishedRef = useRef<number | null>(null);
-  // When the run's settled-cell count last advanced. Reset whenever it moves,
-  // so a count that sits still past STALL_MS distinguishes a frozen run from a
-  // merely slow one and surfaces the Recover button.
-  const progressRef = useRef<{ value: number; since: number }>({
+  // Stall clock for the *currently active* run. `since` marks when the settled
+  // count last advanced; it's reset whenever the count moves, whenever a
+  // different run appears, and whenever there's no active run — so a count that
+  // then sits still past STALL_MS distinguishes a frozen run from a merely slow
+  // one and surfaces the Recover button. `runId` scopes the clock to one run so
+  // idle dwell time before the user clicks Generate can't leak in (see tick()).
+  const progressRef = useRef<{ runId: number; value: number; since: number }>({
+    runId: -1,
     value: -1,
     since: 0,
   });
@@ -63,12 +67,23 @@ export function GenerationProgressBanner({
     try {
       const r = await getActiveGenerationRun(tableId);
       setRun(r);
-      // Stall tracking: bump the "last advanced" timestamp whenever the
-      // settled count moves. A count that then sits still past STALL_MS is
-      // what surfaces the Recover button.
-      const prog = r ? r.done + r.failed + r.skipped : 0;
-      if (prog !== progressRef.current.value) {
-        progressRef.current = { value: prog, since: Date.now() };
+      // Stall tracking: the clock runs only while a single active run is in
+      // flight. Reset `since` when there's no run, when a *different* run
+      // appears (null→running, or one run to the next), or when the settled
+      // count advances. This keeps idle dwell time before Generate — and a
+      // previous run's staleness — from leaking into a fresh run and firing a
+      // bogus Recover button. A count that then sits still past STALL_MS is
+      // what genuinely surfaces the Recover button.
+      if (r == null) {
+        progressRef.current = { runId: -1, value: -1, since: 0 };
+      } else {
+        const prog = r.done + r.failed + r.skipped;
+        if (
+          r.id !== progressRef.current.runId ||
+          prog !== progressRef.current.value
+        ) {
+          progressRef.current = { runId: r.id, value: prog, since: Date.now() };
+        }
       }
       // First-time observation of a terminal status: notify parent.
       // We dedupe by run id so a fast-polling tick that re-fires while
@@ -175,6 +190,7 @@ export function GenerationProgressBanner({
       );
       // Reset the stall clock so the button hides until the run stalls again.
       progressRef.current = {
+        runId: updated.id,
         value: updated.done + updated.failed + updated.skipped,
         since: Date.now(),
       };

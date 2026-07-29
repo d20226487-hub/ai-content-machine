@@ -5525,20 +5525,49 @@ async def cancel_link_check_run(
     return run
 
 
+@router.post("/link-check-runs/{run_id}/pause", response_model=LinkCheckRunRead)
+async def pause_link_check_run(
+    run_id: int,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LinkCheckRun:
+    """Pause an in-flight crawl. The worker checks ``status`` between crawl
+    batches (and when a queued chunk task starts) and stops, leaving the
+    remaining targets ``pending`` so Resume can pick them up. Only a running
+    crawl can be paused — no-op otherwise (juxtapose runs are synchronous and
+    have nothing to pause)."""
+    run = await _get_link_check_run_or_404(db, run_id)
+    await _get_table_or_404(db, run.table_id, actor, level="write")
+    if run.status == "running" and run.check_crawl:
+        run.status = "paused"
+        await db.commit()
+        await db.refresh(run)
+    return run
+
+
 @router.post("/link-check-runs/{run_id}/resume", response_model=LinkCheckRunRead)
 async def resume_link_check_run(
     run_id: int,
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LinkCheckRun:
-    """Manually nudge a stalled run: re-enqueue its pending crawl chunks
-    (or re-seed if it never started). A watchdog does this automatically for
-    stalled runs; this is the operator's immediate override. No-op on
+    """Resume a paused run, or manually nudge a stalled one: re-enqueue its
+    pending crawl chunks (or re-seed if it never started). A watchdog does the
+    nudge automatically for stalled ``running`` runs; this is the operator's
+    immediate override, and the only way to lift a manual pause. No-op on
     terminal states."""
     run = await _get_link_check_run_or_404(db, run_id)
     await _get_table_or_404(db, run.table_id, actor, level="write")
     if run.status in ("done", "failed", "cancelled"):
         return run
+    # Lift a manual pause before the task runs, so the crawl-chunk bail checks
+    # (and the frontend) see "running" again. last_progress_at is refreshed so
+    # the stall watchdog doesn't immediately re-pick the just-resumed run.
+    if run.status == "paused":
+        run.status = "running"
+        run.last_progress_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(run)
     resume_link_check.delay(run.id)
     return run
 

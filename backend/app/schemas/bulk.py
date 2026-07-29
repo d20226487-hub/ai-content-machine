@@ -913,7 +913,9 @@ class NormalizeRunDetail(NormalizeRunRead):
 
 # ----- Link checker (added in migration 0034) -----
 
-LinkCheckStatus = Literal["queued", "running", "cancelled", "done", "failed"]
+LinkCheckStatus = Literal[
+    "queued", "running", "paused", "cancelled", "done", "failed"
+]
 LinkProblem = Literal["omitted", "hallucinated", "broken", "ok"]
 
 
