@@ -513,6 +513,7 @@ export const ru: Record<keyof typeof en, string> = {
   "test.legendFilled": "подставлено",
   "test.legendEmpty": "не заполнено — уйдёт как есть",
   "test.previewEmpty": "У этой версии промпта пустой текст.",
+  "test.openLastResult": "Открыть последний результат",
   "test.groundingLabel": "Grounding (поиск Google)",
   "test.groundingHint":
     "Модель исследует запрос через поиск Google и вернёт источники. Оплачивается отдельно за каждый запуск.",

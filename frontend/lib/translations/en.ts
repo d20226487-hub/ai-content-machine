@@ -500,6 +500,7 @@ export const en = {
   "test.legendFilled": "filled in",
   "test.legendEmpty": "not filled — sent as-is",
   "test.previewEmpty": "This prompt version has no text.",
+  "test.openLastResult": "Open last result",
   "test.groundingLabel": "Grounding (Google Search)",
   "test.groundingHint":
     "The model researches the prompt against Google Search and returns its sources. Billed per run on top of tokens.",

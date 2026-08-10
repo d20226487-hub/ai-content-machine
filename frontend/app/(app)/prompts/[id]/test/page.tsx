@@ -7,7 +7,9 @@ import { useParams, useRouter } from "next/navigation";
 import { ErrorPanel } from "@/components/ErrorPanel";
 import { PromptPreview } from "@/components/PromptPreview";
 import { ApiError } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import { generateSingle, listEnabledProviders } from "@/lib/generate";
+import { markPendingNav } from "@/lib/pendingNav";
 import { getPrompt } from "@/lib/prompts";
 import { useT } from "@/lib/i18n-context";
 import { readTestSession, updateTestSession } from "@/lib/testSession";
@@ -25,6 +27,7 @@ export default function TestPromptPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const { t } = useT();
+  const { user } = useAuth();
   const promptId = Number(params.id);
 
   const [prompt, setPrompt] = useState<PromptDetail | null>(null);
@@ -35,6 +38,13 @@ export default function TestPromptPage() {
   const [providerCode, setProviderCode] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
   const [grounding, setGrounding] = useState(false);
+  // A result for THIS prompt already sitting in the session — either from a
+  // Back-to-form, or from a run whose navigation never landed. Surfaced as an
+  // "open last result" link so a paid generation is never stranded.
+  const [lastRun, setLastRun] = useState<{
+    at: string | null;
+    by: string | null;
+  } | null>(null);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -53,6 +63,12 @@ export default function TestPromptPage() {
 
         const snap = readTestSession();
         const fromSnap = snap && snap.form.promptId === promptId;
+        if (fromSnap && snap.result) {
+          setLastRun({
+            at: snap.form.generatedAt ?? null,
+            by: snap.form.generatedBy ?? null,
+          });
+        }
         if (fromSnap) {
           // Carry over only variables that still exist on this prompt
           // version — a prompt edit between sessions could drop one.
@@ -125,13 +141,20 @@ export default function TestPromptPage() {
           providerCode,
           model,
           grounding: groundingActive,
+          generatedAt: new Date().toISOString(),
+          generatedBy: user ? user.full_name || user.email : null,
         },
         result: r,
         // A fresh generation invalidates any prior translations — they
         // belonged to the previous output.
         localTranslations: {},
       });
-      router.push(`/prompts/${prompt.id}/test/output`);
+      // Mark the destination so a chunk-load failure during this push recovers
+      // to the output page instead of reloading the form and stranding the
+      // (already paid for) result.
+      const dest = `/prompts/${prompt.id}/test/output`;
+      markPendingNav(dest);
+      router.push(dest);
     } catch (err) {
       console.error("[Test] generation failed", err);
       setError(err);
@@ -193,6 +216,31 @@ export default function TestPromptPage() {
           {t("test.pageSubtitle")}
         </p>
       </header>
+
+      {/* A finished run for this prompt is still in the session — offer it
+       *  rather than making the user re-generate (and re-pay). */}
+      {lastRun && (
+        <Link
+          href={`/prompts/${prompt.id}/test/output`}
+          data-testid="test-open-last-result"
+          className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900 hover:bg-blue-100 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-100 dark:hover:bg-blue-950/50"
+        >
+          <span className="font-medium">{t("test.openLastResult")}</span>
+          {(lastRun.at || lastRun.by) && (
+            <span className="text-xs text-blue-700 dark:text-blue-300">
+              {[
+                lastRun.at ? new Date(lastRun.at).toLocaleString() : null,
+                lastRun.by,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </span>
+          )}
+          <span aria-hidden="true" className="ml-auto">
+            →
+          </span>
+        </Link>
+      )}
 
       {/* Split view: variable form on the left, the prompt those variables
        *  land in on the right. Stacks to one column below lg. */}

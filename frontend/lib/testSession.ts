@@ -30,6 +30,11 @@ export interface TestFormSnapshot {
   /** Whether the run used Google Search grounding. Optional so a session
    *  written before this field existed still restores. */
   grounding?: boolean;
+  /** When the run was generated (ISO) and who ran it — shown on the form's
+   *  "open last result" link so a recovered result is identifiable. Optional
+   *  so a session written before these existed still restores. */
+  generatedAt?: string;
+  generatedBy?: string | null;
 }
 
 export interface TestSession {

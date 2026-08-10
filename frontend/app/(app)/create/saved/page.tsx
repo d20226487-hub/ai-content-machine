@@ -14,6 +14,7 @@ import {
   renameSavedGeneration,
 } from "@/lib/generate";
 import { useT } from "@/lib/i18n-context";
+import { markPendingNav } from "@/lib/pendingNav";
 import type { SavedGenerationListItem } from "@/lib/types";
 
 const PAGE_SIZE = 25;
@@ -82,6 +83,7 @@ export default function SavedGenerationsPage() {
         viewingSaved: s,
         localTranslations: {},
       });
+      markPendingNav("/create/output");
       router.push("/create/output");
     } catch (e) {
       console.error("[Saved] load failed", e);

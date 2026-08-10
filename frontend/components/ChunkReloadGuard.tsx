@@ -20,7 +20,18 @@
  * Circuit breaker: a sessionStorage timestamp prevents reload loops if
  * the build is genuinely broken — two failures within 8 seconds and
  * we surface the error instead of cycling the user.
+ *
+ * Pending navigation: a plain reload re-renders the page the user is ON,
+ * which silently drops whatever navigation was in flight. When the failing
+ * chunk was the destination of a `router.push` — the usual case, since that
+ * push is what fetches the chunk — recovering to the CURRENT url strands the
+ * result the caller just saved (see lib/pendingNav.ts). So if a fresh
+ * pending-navigation marker exists, recover to that destination instead. The
+ * marker is consumed here, so a second failure falls back to a plain reload
+ * rather than bouncing between routes.
  */
+import { PENDING_NAV_KEY, PENDING_NAV_TTL_MS } from "@/lib/pendingNav";
+
 export const chunkReloadScript = `
 (function() {
   if (typeof window === "undefined") return;
@@ -45,6 +56,26 @@ export const chunkReloadScript = `
         return;
       }
       sessionStorage.setItem(RELOAD_KEY, String(now));
+
+      // Resume an interrupted navigation, if one was marked recently. Consumed
+      // unconditionally so a repeat failure can't ping-pong between routes.
+      var dest = "";
+      try {
+        var raw = sessionStorage.getItem("${PENDING_NAV_KEY}");
+        if (raw) {
+          sessionStorage.removeItem("${PENDING_NAV_KEY}");
+          var pn = JSON.parse(raw);
+          if (pn && pn.url && (now - Number(pn.at || 0)) < ${PENDING_NAV_TTL_MS}) {
+            dest = String(pn.url);
+          }
+        }
+      } catch (e) { /* malformed marker - fall through to a plain reload */ }
+
+      if (dest) {
+        console.warn("[ChunkReloadGuard] chunk load failed - resuming nav to", dest, reason);
+        window.location.replace(dest);
+        return;
+      }
       console.warn("[ChunkReloadGuard] chunk load failed - reloading", reason);
       window.location.reload();
     } catch (e) {

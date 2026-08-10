@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { SingleOutputView } from "@/components/SingleOutputView";
 import { type CreateSession, readSession } from "@/lib/createSession";
 import { useT } from "@/lib/i18n-context";
+import { clearPendingNav } from "@/lib/pendingNav";
 
 /**
  * Dedicated view for the most recent /create generation. Lets the
@@ -26,6 +27,8 @@ export default function CreateOutputPage() {
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
+    // Arrived — drop the recovery marker so it can't affect a later failure.
+    clearPendingNav();
     const s = readSession();
     setSession(s);
     setHydrated(true);

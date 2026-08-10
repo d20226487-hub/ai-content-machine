@@ -8,6 +8,7 @@ import { HtmlViewer } from "@/components/HtmlViewer";
 import { TranslationPanel } from "@/components/TranslationPanel";
 import { getBrainPrompts, translateRawText } from "@/lib/brain";
 import { useT } from "@/lib/i18n-context";
+import { clearPendingNav } from "@/lib/pendingNav";
 import {
   readTestSession,
   type TestSession,
@@ -40,6 +41,8 @@ export default function TestOutputPage() {
   >({});
 
   useEffect(() => {
+    // Arrived — drop the recovery marker so it can't affect a later failure.
+    clearPendingNav();
     const s = readTestSession();
     setSession(s);
     setLocalTranslations(s?.localTranslations ?? {});
