@@ -129,6 +129,11 @@ export default function TestOutputPage() {
             model: result.model_used,
           })}
           {result.finish_reason && ` · ${result.finish_reason}`}
+          {/* When + who — provenance for the result being viewed. Optional so
+           *  a session written before these fields existed still renders. */}
+          {session.form.generatedAt &&
+            ` · ${new Date(session.form.generatedAt).toLocaleString()}`}
+          {session.form.generatedBy && ` · ${session.form.generatedBy}`}
         </p>
 
         {translateOpen ? (
