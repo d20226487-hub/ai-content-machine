@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 
 import { ErrorPanel } from "@/components/ErrorPanel";
+import { PromptPreview } from "@/components/PromptPreview";
 import { ApiError } from "@/lib/api";
 import { generateSingle, listEnabledProviders } from "@/lib/generate";
 import { getPrompt } from "@/lib/prompts";
@@ -29,6 +30,8 @@ export default function TestPromptPage() {
   const [prompt, setPrompt] = useState<PromptDetail | null>(null);
   const [providers, setProviders] = useState<EnabledProvider[]>([]);
   const [varValues, setVarValues] = useState<Record<string, string>>({});
+  // Variable whose textarea is focused — highlights its spans in the preview.
+  const [activeVar, setActiveVar] = useState<string | null>(null);
   const [providerCode, setProviderCode] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
 
@@ -149,8 +152,13 @@ export default function TestPromptPage() {
     );
   }
 
+  const promptContent = prompt.current_version?.content ?? "";
+  const filledCount = prompt.variables.filter(
+    (v) => (varValues[v] ?? "").trim() !== "",
+  ).length;
+
   return (
-    <main className="mx-auto max-w-3xl p-8">
+    <main className="mx-auto max-w-7xl p-8">
       <Link
         href={`/prompts/${prompt.id}`}
         className="inline-flex items-center gap-1 text-xs font-medium text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200"
@@ -167,41 +175,54 @@ export default function TestPromptPage() {
         </p>
       </header>
 
-      <section className="mt-6 rounded-lg border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
-        <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
-          {prompt.name}
-        </h2>
-        <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
-          {t("prompts.versionPrefix")}
-          {prompt.current_version?.version_number ?? "?"} ·{" "}
-          {t("single.variablesCount", { count: prompt.variables.length })}
-        </p>
-      </section>
+      {/* Split view: variable form on the left, the prompt those variables
+       *  land in on the right. Stacks to one column below lg. */}
+      <div className="mt-6 grid gap-6 lg:grid-cols-2 lg:items-start">
+        <form onSubmit={onGenerate} className="space-y-4">
+          <section className="rounded-lg border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
+            <div className="flex items-baseline justify-between gap-3">
+              <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+                {t("test.varsHeading")}
+              </h2>
+              {prompt.variables.length > 0 && (
+                <span className="shrink-0 text-xs text-neutral-500 dark:text-neutral-400">
+                  {t("test.varsFilled", {
+                    filled: filledCount,
+                    total: prompt.variables.length,
+                  })}
+                </span>
+              )}
+            </div>
 
-      <form onSubmit={onGenerate} className="mt-5 space-y-4">
-        {prompt.variables.length === 0 && (
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">
-            {t("single.noVariables")}
-          </p>
-        )}
-        {prompt.variables.map((v) => (
-          <label
-            key={v}
-            className="block text-sm font-medium text-neutral-700 dark:text-neutral-300"
-          >
-            <span className="font-mono">{`{{${v}}}`}</span>
-            <textarea
-              rows={2}
-              value={varValues[v] ?? ""}
-              onChange={(e) =>
-                setVarValues((cur) => ({ ...cur, [v]: e.target.value }))
-              }
-              className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-700 dark:bg-neutral-900"
-            />
-          </label>
-        ))}
+            {prompt.variables.length === 0 ? (
+              <p className="mt-3 text-sm text-neutral-500 dark:text-neutral-400">
+                {t("single.noVariables")}
+              </p>
+            ) : (
+              <div className="mt-3 space-y-4">
+                {prompt.variables.map((v) => (
+                  <label
+                    key={v}
+                    className="block text-sm font-medium text-neutral-700 dark:text-neutral-300"
+                  >
+                    <span className="font-mono">{`{{${v}}}`}</span>
+                    <textarea
+                      rows={2}
+                      value={varValues[v] ?? ""}
+                      onChange={(e) =>
+                        setVarValues((cur) => ({ ...cur, [v]: e.target.value }))
+                      }
+                      onFocus={() => setActiveVar(v)}
+                      onBlur={() => setActiveVar(null)}
+                      className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-700 dark:bg-neutral-900"
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
+          </section>
 
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 rounded-lg border border-neutral-200 bg-white p-5 shadow-sm sm:grid-cols-2 dark:border-neutral-800 dark:bg-neutral-900">
           <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
             {t("single.providerLabel")}
             {noProviders ? (
@@ -266,6 +287,49 @@ export default function TestPromptPage() {
           </button>
         </div>
       </form>
+
+      {/* Right pane: the prompt itself, with each variable rendered in place —
+       *  filled values green, still-empty placeholders amber (those reach the
+       *  model as literal {{text}}). Sticky so it stays in view while the
+       *  user works down a long variable list. */}
+      <aside className="rounded-lg border border-neutral-200 bg-white shadow-sm lg:sticky lg:top-6 dark:border-neutral-800 dark:bg-neutral-900">
+        <div className="border-b border-neutral-200 px-5 py-3 dark:border-neutral-800">
+          <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+            {prompt.name}
+          </h2>
+          <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
+            {t("prompts.versionPrefix")}
+            {prompt.current_version?.version_number ?? "?"} ·{" "}
+            {t("single.variablesCount", { count: prompt.variables.length })}
+          </p>
+          {prompt.variables.length > 0 && (
+            <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+              <span className="inline-flex items-center gap-1">
+                <span className="inline-block h-2.5 w-2.5 rounded-sm bg-emerald-200 dark:bg-emerald-800" />
+                {t("test.legendFilled")}
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="inline-block h-2.5 w-2.5 rounded-sm bg-amber-200 dark:bg-amber-800" />
+                {t("test.legendEmpty")}
+              </span>
+            </p>
+          )}
+        </div>
+        <div className="max-h-[65vh] overflow-auto p-5">
+          {promptContent.trim() === "" ? (
+            <p className="text-sm text-neutral-500 dark:text-neutral-400">
+              {t("test.previewEmpty")}
+            </p>
+          ) : (
+            <PromptPreview
+              content={promptContent}
+              values={varValues}
+              activeVar={activeVar}
+            />
+          )}
+        </div>
+      </aside>
+      </div>
     </main>
   );
 }
