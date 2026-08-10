@@ -128,6 +128,9 @@ export interface GenerateSingleResponse {
   model_used: string;
   finish_reason: string | null;
   missing_variables: string[];
+  /** Search queries + cited sources when the run was grounded; null when
+   *  grounding was off. Source URIs are Vertex redirect links that expire. */
+  grounding_sources?: GroundingSources | null;
 }
 
 export interface RenderPromptResponse {

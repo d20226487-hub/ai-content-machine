@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -25,6 +27,12 @@ class GenerateSingleRequest(BaseModel):
     model: str | None = None  # default: provider.default_model
     temperature: float | None = Field(default=None, ge=0, le=2)
     max_output_tokens: int | None = Field(default=None, ge=1, le=32000)
+    # Retrieval grounding for this run. None = off; 'google_search' researches
+    # the prompt against Google Search and returns citations. Only the Vertex
+    # Gemini path supports it — the endpoint rejects other combinations rather
+    # than silently returning an ungrounded answer. Carries a flat per-request
+    # surcharge (see services/usage.record_grounding_surcharge).
+    grounding: Literal["google_search"] | None = None
 
 
 class GenerateSingleResponse(BaseModel):
@@ -34,6 +42,11 @@ class GenerateSingleResponse(BaseModel):
     model_used: str
     finish_reason: str | None = None
     missing_variables: list[str] = []  # variables that were left unsubstituted (for transparency)
+    # Grounding provenance when the run was grounded: the search queries the
+    # model ran and the web sources it cited, shaped
+    # {"queries": [...], "sources": [{"uri","title"}, ...]}. None when grounding
+    # was off or the provider returned no grounding metadata.
+    grounding_sources: dict | None = None
 
 
 class RenderPromptRequest(BaseModel):

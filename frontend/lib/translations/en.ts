@@ -500,6 +500,16 @@ export const en = {
   "test.legendFilled": "filled in",
   "test.legendEmpty": "not filled — sent as-is",
   "test.previewEmpty": "This prompt version has no text.",
+  "test.groundingLabel": "Grounding (Google Search)",
+  "test.groundingHint":
+    "The model researches the prompt against Google Search and returns its sources. Billed per run on top of tokens.",
+  "test.groundingUnsupported":
+    "Available only on Google Vertex AI with a Gemini model — select those above.",
+  "test.sourcesHeading": "Sources (grounding)",
+  "test.sourcesQueries": "Search queries",
+  "test.sourcesNone": "The model returned no sources for this answer.",
+  "test.sourcesExpiry":
+    "Links go through a Vertex redirect and stop working after about 30 days.",
   "promptDetail.variables": "Variables",
   "promptDetail.versionHistory": "Version history ({count})",
   "promptDetail.versionCurrent": "current",

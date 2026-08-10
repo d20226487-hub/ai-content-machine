@@ -34,6 +34,7 @@ export default function TestPromptPage() {
   const [activeVar, setActiveVar] = useState<string | null>(null);
   const [providerCode, setProviderCode] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
+  const [grounding, setGrounding] = useState(false);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -60,6 +61,7 @@ export default function TestPromptPage() {
           setVarValues(restored);
           setProviderCode(snap.form.providerCode);
           setModel(snap.form.model);
+          setGrounding(snap.form.grounding ?? false);
         } else {
           // Fresh test: blank vars + first usable provider.
           const init: Record<string, string> = {};
@@ -86,6 +88,21 @@ export default function TestPromptPage() {
   );
   const noProviders = providers.length === 0;
 
+  // Grounding is wired only on the Vertex Gemini path — mirror the backend
+  // rule (api/generate.py) so the toggle is offered only when the run really
+  // would be grounded. The effective model falls back to the provider default,
+  // exactly as the server resolves it.
+  const effectiveModel = (
+    model ??
+    currentProvider?.default_model ??
+    ""
+  ).toLowerCase();
+  const groundingSupported =
+    providerCode === "vertex" && !effectiveModel.startsWith("claude");
+  // Guard against a stale `true` after switching to an unsupported
+  // provider/model — sending it would 400.
+  const groundingActive = grounding && groundingSupported;
+
   async function onGenerate(e: FormEvent) {
     e.preventDefault();
     if (!prompt) return;
@@ -97,6 +114,7 @@ export default function TestPromptPage() {
         variables: varValues,
         provider_code: providerCode,
         model,
+        grounding: groundingActive ? "google_search" : null,
       });
       updateTestSession({
         form: {
@@ -106,6 +124,7 @@ export default function TestPromptPage() {
           varValues,
           providerCode,
           model,
+          grounding: groundingActive,
         },
         result: r,
         // A fresh generation invalidates any prior translations — they
@@ -269,6 +288,38 @@ export default function TestPromptPage() {
                 ))}
               </select>
             </label>
+          )}
+
+          {/* Grounding (Google Search). Vertex + Gemini only — the checkbox is
+           *  disabled elsewhere with a reason, mirroring the API's rule. */}
+          {!noProviders && (
+            <div className="sm:col-span-2">
+              <label
+                className={
+                  "flex items-start gap-2 text-sm " +
+                  (groundingSupported
+                    ? "text-neutral-700 dark:text-neutral-300"
+                    : "cursor-not-allowed text-neutral-400 dark:text-neutral-500")
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={groundingActive}
+                  disabled={!groundingSupported}
+                  onChange={(e) => setGrounding(e.target.checked)}
+                  data-testid="test-grounding-toggle"
+                  className="mt-0.5 h-4 w-4 rounded border-neutral-300 disabled:opacity-50 dark:border-neutral-600"
+                />
+                <span>
+                  <span className="font-medium">{t("test.groundingLabel")}</span>
+                  <span className="mt-0.5 block text-xs text-neutral-500 dark:text-neutral-400">
+                    {groundingSupported
+                      ? t("test.groundingHint")
+                      : t("test.groundingUnsupported")}
+                  </span>
+                </span>
+              </label>
+            </div>
           )}
         </div>
 

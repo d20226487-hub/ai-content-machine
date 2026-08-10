@@ -169,6 +169,59 @@ export default function TestOutputPage() {
             height="h-[32rem]"
           />
         )}
+
+        {/* Grounding provenance — present only when the run was grounded.
+         *  Source URIs are Vertex redirect links that expire (~30 days). */}
+        {result.grounding_sources && (
+          <section className="rounded-lg border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
+            <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+              {t("test.sourcesHeading")}
+            </h2>
+
+            {(result.grounding_sources.queries ?? []).length > 0 && (
+              <div className="mt-3">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                  {t("test.sourcesQueries")}
+                </p>
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {(result.grounding_sources.queries ?? []).map((q, i) => (
+                    <span
+                      key={i}
+                      className="rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-xs text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
+                    >
+                      {q}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {(result.grounding_sources.sources ?? []).length > 0 ? (
+              <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm">
+                {(result.grounding_sources.sources ?? []).map((s, i) => (
+                  <li key={i} className="text-neutral-700 dark:text-neutral-300">
+                    <a
+                      href={s.uri}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 underline-offset-2 hover:underline dark:text-blue-400"
+                    >
+                      {s.title || s.uri}
+                    </a>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="mt-3 text-sm text-neutral-500 dark:text-neutral-400">
+                {t("test.sourcesNone")}
+              </p>
+            )}
+
+            <p className="mt-3 text-xs text-neutral-500 dark:text-neutral-400">
+              {t("test.sourcesExpiry")}
+            </p>
+          </section>
+        )}
       </div>
     </main>
   );

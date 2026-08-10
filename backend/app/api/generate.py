@@ -133,6 +133,34 @@ async def generate_single(
     except ProviderNotConfigured as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
+    # Grounding only works on the Vertex Gemini path (the only place the Google
+    # Search tool is wired). Mirrors the bulk-column rule in api/library.py, and
+    # validates the EFFECTIVE model — resolving the provider default when the
+    # request leaves it unset — so an unsupported combination is rejected up
+    # front instead of silently returning an ungrounded answer.
+    if payload.grounding:
+        eff_model = (payload.model or "").strip().lower()
+        if not eff_model:
+            prov_row = (
+                await db.execute(select(Provider).where(Provider.code == code))
+            ).scalar_one_or_none()
+            eff_model = (
+                (prov_row.default_model or "").strip().lower() if prov_row else ""
+            )
+        if code != "vertex":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Grounding requires Google Vertex AI with a Gemini model. "
+                    "Pick Vertex as the provider for this test run."
+                ),
+            )
+        if eff_model.startswith("claude"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Grounding is a Gemini feature — pick a Gemini model, not Claude.",
+            )
+
     try:
         result = await provider.generate(
             prompt=rendered,
@@ -140,6 +168,7 @@ async def generate_single(
             params=GenerationParams(
                 temperature=payload.temperature,
                 max_output_tokens=payload.max_output_tokens,
+                grounding=payload.grounding,
             ),
         )
     except ProviderError as e:
@@ -176,6 +205,22 @@ async def generate_single(
             "version_number": payload.version_number,
         },
     )
+    # Flat per-request surcharge for the Google Search grounding tool — billed
+    # separately from tokens, same as the bulk path. Best-effort.
+    if payload.grounding:
+        from app.services.usage import record_grounding_surcharge
+
+        await record_grounding_surcharge(
+            db,
+            user_id=getattr(user, "id", None),
+            provider_code=code,
+            model=result.model,
+            source_ref={
+                "prompt_id": payload.prompt_id,
+                "version_number": payload.version_number,
+                "source": "test",
+            },
+        )
 
     return GenerateSingleResponse(
         text=result.text,
@@ -184,4 +229,5 @@ async def generate_single(
         model_used=result.model,
         finish_reason=result.finish_reason,
         missing_variables=missing,
+        grounding_sources=result.grounding,
     )

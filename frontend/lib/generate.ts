@@ -36,6 +36,10 @@ export interface GenerateSinglePayload {
   model?: string | null;
   temperature?: number | null;
   max_output_tokens?: number | null;
+  /** Retrieval grounding; null/omitted = off. Only valid on Vertex + Gemini —
+   *  the API rejects other combinations rather than silently running
+   *  ungrounded. Adds a flat per-request surcharge. */
+  grounding?: "google_search" | null;
 }
 
 export function generateSingle(
@@ -51,6 +55,7 @@ export function generateSingle(
       model: p.model ?? null,
       temperature: p.temperature ?? null,
       max_output_tokens: p.max_output_tokens ?? null,
+      grounding: p.grounding ?? null,
     },
   });
 }

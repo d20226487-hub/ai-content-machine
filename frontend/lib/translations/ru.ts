@@ -513,6 +513,16 @@ export const ru: Record<keyof typeof en, string> = {
   "test.legendFilled": "подставлено",
   "test.legendEmpty": "не заполнено — уйдёт как есть",
   "test.previewEmpty": "У этой версии промпта пустой текст.",
+  "test.groundingLabel": "Grounding (поиск Google)",
+  "test.groundingHint":
+    "Модель исследует запрос через поиск Google и вернёт источники. Оплачивается отдельно за каждый запуск.",
+  "test.groundingUnsupported":
+    "Доступно только для Google Vertex AI с моделью Gemini — выберите их выше.",
+  "test.sourcesHeading": "Источники (grounding)",
+  "test.sourcesQueries": "Поисковые запросы",
+  "test.sourcesNone": "Модель не вернула источников для этого ответа.",
+  "test.sourcesExpiry":
+    "Ссылки ведут через редирект Vertex и перестают работать примерно через 30 дней.",
   "promptDetail.variables": "Переменные",
   "promptDetail.versionHistory": "История версий ({count})",
   "promptDetail.versionCurrent": "текущая",

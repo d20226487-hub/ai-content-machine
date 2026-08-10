@@ -27,6 +27,9 @@ export interface TestFormSnapshot {
   varValues: Record<string, string>;
   providerCode: string | null;
   model: string | null;
+  /** Whether the run used Google Search grounding. Optional so a session
+   *  written before this field existed still restores. */
+  grounding?: boolean;
 }
 
 export interface TestSession {
