@@ -1,4 +1,34 @@
 name,base_url,cms_type,auth_type,credentials,languages,multilingual_plugin,endpoint_path,body_template,response_id_path,response_url_path
-Headless Blog,https://www.example.com,custom,bearer,YOUR_BEARER_TOKEN,en,none,/api/v1/posts,"{""title"":""{{title}}"",""content"":""{{content}}"",""slug"":""{{slug}}"",""status"":""published""}",data.id,data.url
-Docs Portal,https://www.example.org,custom,api_key_header,"{""header"":""X-API-Key"",""value"":""YOUR_API_KEY""}","en,de,fr",none,/v2/articles,"{""heading"":""{{title}}"",""body_html"":""{{content}}"",""path"":""{{slug}}"",""locale"":""{{language}}""}",id,permalink
-Partner API,https://www.example.net,custom,basic_auth,myuser:mypassword,en,none,/api/v1/content,"{""title"":""{{title}}"",""body"":""{{content}}"",""slug"":""{{slug}}""}",result.id,result.url
+worldcup2026odds.com,https://worldcup2026odds.com,custom,basic_auth,login:password,"en, es, fr, it, pt, el, ar",none,/index.php?__add_content=1,"{
+  ""id"": ""{{id}}"",
+  ""lang"": ""{{lang}}"",
+  ""slug"": ""{{slug}}"",
+  ""title"": ""{{title}}"",
+  ""action"": ""{{action}}"",
+  ""content"": ""{{content}}"",
+  ""seo_title"": ""{{seo_title}}"",
+  ""seo_description"": ""{{seo_description}}""
+}
+",data.id,data.url
+2026worldcupodds.com,https://2026worldcupodds.com,custom,basic_auth,login:password,"en, es, fr, it, pt, el, ar",none,/index.php?__add_content=1,"{
+  ""id"": ""{{id}}"",
+  ""lang"": ""{{lang}}"",
+  ""slug"": ""{{slug}}"",
+  ""title"": ""{{title}}"",
+  ""action"": ""{{action}}"",
+  ""content"": ""{{content}}"",
+  ""seo_title"": ""{{seo_title}}"",
+  ""seo_description"": ""{{seo_description}}""
+}
+",data.id,data.url
+apuestasmundial2026.net,https://apuestasmundial2026.net,custom,basic_auth,login:password,"es, en, fr, it, pt, el, ar",none,/index.php?__add_content=1,"{
+  ""id"": ""{{id}}"",
+  ""lang"": ""{{lang}}"",
+  ""slug"": ""{{slug}}"",
+  ""title"": ""{{title}}"",
+  ""action"": ""{{action}}"",
+  ""content"": ""{{content}}"",
+  ""seo_title"": ""{{seo_title}}"",
+  ""seo_description"": ""{{seo_description}}""
+}
+",data.id,data.url
