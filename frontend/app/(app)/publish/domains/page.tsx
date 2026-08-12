@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import { DomainCsvImportModal } from "@/components/DomainCsvImportModal";
 import { DomainJsonImportModal } from "@/components/DomainJsonImportModal";
+import { AddDomainModal } from "@/components/AddDomainModal";
 import { DomainModal } from "@/components/DomainModal";
 import { CacheActionModal } from "@/components/domains/CacheActionModal";
 import { DomainBreadcrumb } from "@/components/domains/DomainBreadcrumb";
@@ -38,6 +39,7 @@ import {
 
 type ModalState =
   | { kind: "closed" }
+  | { kind: "add" }
   | { kind: "create" }
   | { kind: "edit"; domain: Domain }
   | { kind: "import" }
@@ -525,7 +527,7 @@ export default function DomainsPage() {
             {t("domains.importJson")}
           </button>
           <button
-            onClick={() => setModal({ kind: "create" })}
+            onClick={() => setModal({ kind: "add" })}
             className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white dark:bg-neutral-100 dark:text-neutral-900"
           >
             {t("domains.add")}
@@ -885,6 +887,16 @@ export default function DomainsPage() {
           )}
       </section>
 
+      {modal.kind === "add" && (
+        <AddDomainModal
+          onClose={() => setModal({ kind: "closed" })}
+          onPickWordpress={() => setModal({ kind: "create" })}
+          onImported={() => {
+            void loadList();
+            void loadFolders();
+          }}
+        />
+      )}
       {modal.kind === "create" && (
         <DomainModal
           onClose={() => setModal({ kind: "closed" })}

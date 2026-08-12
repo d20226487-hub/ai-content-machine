@@ -298,6 +298,51 @@ class CsvImportResult(BaseModel):
     errors: list[dict[str, Any]] = Field(default_factory=list)
 
 
+# ----- Shared Custom-CMS defaults (Settings → Publishing) -----
+
+
+class CustomCmsDefaultsRead(BaseModel):
+    """Connection config every Custom CMS domain is stamped with. The shared
+    password is never returned — only whether one is set."""
+
+    endpoint_path: str
+    body_template: dict[str, Any] = Field(default_factory=dict)
+    response_id_path: str | None = None
+    response_url_path: str | None = None
+    credentials_configured: bool = False
+
+
+class CustomCmsDefaultsUpdate(BaseModel):
+    """Partial update. Omitted fields are unchanged; ``credentials`` follows
+    the secret convention — "" clears, non-empty replaces, omitted keeps."""
+
+    endpoint_path: str | None = Field(default=None, max_length=500)
+    body_template: dict[str, Any] | None = None
+    response_id_path: str | None = Field(default=None, max_length=200)
+    response_url_path: str | None = Field(default=None, max_length=200)
+    credentials: str | None = Field(default=None, max_length=500)
+
+
+class SimpleDomainImport(BaseModel):
+    """Bulk add for Custom CMS: the operator supplies only domains + languages.
+
+    ``text`` is one ``domain.com - en, es, ru`` per line (first language is the
+    default). Everything else — endpoint, body template, auth — comes from the
+    shared defaults. ``update_existing`` decides whether a domain that already
+    exists is refreshed or reported as skipped.
+    """
+
+    text: str
+    update_existing: bool = False
+
+
+class SimpleDomainImportResult(BaseModel):
+    created: int = 0
+    updated: int = 0
+    skipped: int = 0
+    errors: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class DomainPickerItem(BaseModel):
     """Lite shape for the domain picker — used by the modal comboboxes
     AND by the paginated /publish/domains list page (extended for the

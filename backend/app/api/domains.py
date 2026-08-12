@@ -7,12 +7,14 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 from typing import Any
 
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
-from sqlalchemy import delete as sa_delete, func, select
+from sqlalchemy import delete as sa_delete, func, or_, select
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,11 +28,14 @@ from app.core.crypto import decrypt, encrypt
 from app.core.ssrf import SafeAsyncTransport, UnsafeUrlError, validate_public_url
 from app.db.models import AppSetting, BulkPublishRun, Domain, DomainFolder, User
 from app.db.session import get_db
+from app.services import custom_cms_defaults
 from app.services.media_cache import clear_for_domain, count_for_domain
 from app.schemas.domain import (
     CsvImportResult,
     CustomConfig,
     DomainCreate,
+    SimpleDomainImport,
+    SimpleDomainImportResult,
     DomainPickerItem,
     DomainPickerResponse,
     DomainRead,
@@ -1123,6 +1128,172 @@ async def import_csv(
         inserted += 1
 
     return CsvImportResult(inserted=inserted, skipped=skipped, errors=errors)
+
+
+_SIMPLE_LINE_RE = re.compile(
+    r"^\s*(?P<domain>\S+)\s*[-–—]\s*(?P<langs>.+?)\s*$"
+)
+
+
+def _simple_host(raw: str) -> str:
+    """A pasted domain → bare comparable host (no scheme, path, port, creds)."""
+    s = raw.strip().lower().rstrip(",;")
+    s = re.sub(r"^[a-z][a-z0-9+.\-]*://", "", s)
+    s = s.split("/", 1)[0]
+    s = s.split("@")[-1]
+    return s.strip()
+
+
+@router.post("/bulk-simple", response_model=SimpleDomainImportResult)
+async def bulk_simple_import(
+    payload: SimpleDomainImport,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> SimpleDomainImportResult:
+    """Add Custom CMS domains from ``domain.com - en, es, ru`` lines.
+
+    The operator supplies only the domain and its languages (first = default);
+    endpoint, body template, response paths and the shared basic-auth password
+    all come from the workspace Custom-CMS defaults (Settings → Publishing), so
+    a fleet of identical sites is one paste instead of one form each.
+
+    A domain that already exists is refreshed only when ``update_existing`` is
+    set — languages and the current shared config are re-stamped, and a
+    trashed domain is restored (otherwise "adding" it would leave it invisible).
+    Without the flag it's reported as skipped, so a re-paste can't silently
+    overwrite hand-tuned sites. Per-line failures never abort the batch.
+    """
+    cfg, creds = await custom_cms_defaults.effective(db)
+    if not creds:
+        # Every created domain would be unable to authenticate; refuse the whole
+        # batch rather than leave a fleet of broken sites behind.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Set the shared Custom CMS password first "
+                "(Settings → Publishing → Custom CMS)."
+            ),
+        )
+
+    result = SimpleDomainImportResult()
+    seen: set[str] = set()
+
+    for idx, line in enumerate(payload.text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        m = _SIMPLE_LINE_RE.match(line)
+        if not m:
+            result.errors.append(
+                {"line": idx, "detail": "Expected 'domain.com - en, es'"}
+            )
+            result.skipped += 1
+            continue
+
+        host = _simple_host(m.group("domain"))
+        langs: list[str] = []
+        for tok in m.group("langs").replace(";", ",").split(","):
+            code = tok.strip().lower()
+            if code and code not in langs:
+                langs.append(code)
+
+        if "." not in host:
+            result.errors.append({"line": idx, "detail": f"Not a domain: {host}"})
+            result.skipped += 1
+            continue
+        if not langs:
+            result.errors.append({"line": idx, "detail": "No languages given"})
+            result.skipped += 1
+            continue
+        if host in seen:  # duplicate inside the pasted text itself
+            result.errors.append({"line": idx, "detail": f"Repeated in input: {host}"})
+            result.skipped += 1
+            continue
+        seen.add(host)
+
+        base_url = f"https://{host}"
+        try:
+            create = DomainCreate(
+                name=host,
+                base_url=base_url,
+                cms_type="custom",
+                auth_type=custom_cms_defaults.AUTH_TYPE,
+                languages=langs,
+                multilingual_plugin="none",
+                credentials=creds,
+                custom_config=cfg,
+            )
+            _validate_payload(create.cms_type, create.auth_type, create.custom_config)
+        except HTTPException as e:
+            result.errors.append({"line": idx, "detail": str(e.detail)})
+            result.skipped += 1
+            continue
+        except ValidationError as e:
+            # Raw pydantic text ("1 validation error for DomainCreate\n…") is
+            # unreadable stacked 50 lines deep — surface just the reason.
+            first = (e.errors() or [{}])[0].get("msg", "") or "invalid domain"
+            detail = first.replace("Value error, ", "").split(" [type=")[0]
+            result.errors.append({"line": idx, "detail": f"{host}: {detail}"})
+            result.skipped += 1
+            continue
+        except Exception as e:
+            result.errors.append({"line": idx, "detail": f"{host}: {e}"})
+            result.skipped += 1
+            continue
+
+        # Match on either unique column — a name/base_url pair can only belong
+        # to the same site here, and trashed rows still hold the constraint.
+        existing = (
+            (
+                await db.execute(
+                    select(Domain).where(
+                        or_(Domain.base_url == base_url, Domain.name == host)
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+
+        if existing is not None:
+            if not payload.update_existing:
+                where = " (in trash)" if existing.deleted_at else ""
+                result.errors.append(
+                    {"line": idx, "detail": f"Already exists{where}: {host}"}
+                )
+                result.skipped += 1
+                continue
+            existing.languages = langs
+            existing.custom_config = cfg.model_dump()
+            existing.auth_type = custom_cms_defaults.AUTH_TYPE
+            existing.credentials_encrypted = encrypt(creds)
+            # Re-adding a trashed domain should make it usable again.
+            existing.deleted_at = None
+            await db.commit()
+            result.updated += 1
+            continue
+
+        domain = Domain(
+            name=host,
+            base_url=base_url,
+            cms_type="custom",
+            auth_type=custom_cms_defaults.AUTH_TYPE,
+            languages=langs,
+            multilingual_plugin="none",
+            custom_config=cfg.model_dump(),
+            created_by_id=actor.id,
+            credentials_encrypted=encrypt(creds),
+        )
+        db.add(domain)
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            result.errors.append({"line": idx, "detail": f"Already exists: {host}"})
+            result.skipped += 1
+            continue
+        result.created += 1
+
+    return result
 
 
 @router.post("/import-json", response_model=CsvImportResult)

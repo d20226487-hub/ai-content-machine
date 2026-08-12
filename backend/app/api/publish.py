@@ -19,6 +19,8 @@ from app.schemas.publish import (
     PublishJobRead,
     PublishSingleRequest,
 )
+from app.schemas.domain import CustomCmsDefaultsRead, CustomCmsDefaultsUpdate
+from app.services import custom_cms_defaults
 from app.services.publish_rate_limit import (
     DomainRateLimits,
     load_global_defaults,
@@ -53,6 +55,42 @@ async def set_publish_defaults(
         updated_by_id=actor.id,
     )
     return PublishDefaults(**saved.__dict__)
+
+
+# ----- shared Custom CMS connection defaults -----
+
+
+@router.get("/custom-cms-defaults", response_model=CustomCmsDefaultsRead)
+async def get_custom_cms_defaults(
+    db: AsyncSession = Depends(get_db),
+) -> CustomCmsDefaultsRead:
+    """The connection config every Custom CMS domain is stamped with. Readable
+    by manager too — the bulk-add screen shows what will be applied — but the
+    shared password itself is never returned."""
+    return await custom_cms_defaults.read_defaults(db)
+
+
+@router.put("/custom-cms-defaults", response_model=CustomCmsDefaultsRead)
+async def set_custom_cms_defaults(
+    payload: CustomCmsDefaultsUpdate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_role("admin")),
+) -> CustomCmsDefaultsRead:
+    """Admin-only: edit the shared endpoint / body template / password. Existing
+    domains keep their current config until re-applied (see below)."""
+    return await custom_cms_defaults.update_defaults(db, payload, actor.id)
+
+
+@router.post("/custom-cms-defaults/reapply")
+async def reapply_custom_cms_defaults(
+    db: AsyncSession = Depends(get_db),
+    _actor: User = Depends(require_role("admin")),
+) -> dict[str, int]:
+    """Push the current config onto every live Custom CMS domain — for when the
+    CMS contract changes for all sites at once (new field, moved endpoint).
+    Languages, names and per-domain rate limits are left untouched."""
+    updated = await custom_cms_defaults.reapply_to_domains(db)
+    return {"updated": updated}
 
 
 @router.post("/single", response_model=PublishJobDetail, status_code=status.HTTP_202_ACCEPTED)

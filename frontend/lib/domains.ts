@@ -315,6 +315,70 @@ export function importDomainsJson(
   });
 }
 
+// ---- Simplified Custom-CMS bulk add ---------------------------------------
+
+export interface SimpleDomainImportResult {
+  created: number;
+  updated: number;
+  skipped: number;
+  errors: { line?: number; detail: string }[];
+}
+
+/** Add Custom CMS domains from `domain.com - en, es, ru` lines (first language
+ *  is the default). Endpoint, body template and the shared password come from
+ *  the workspace Custom-CMS defaults. `updateExisting` refreshes domains that
+ *  already exist instead of skipping them. */
+export function bulkAddSimpleDomains(
+  text: string,
+  updateExisting = false,
+): Promise<SimpleDomainImportResult> {
+  return api<SimpleDomainImportResult>("/domains/bulk-simple", {
+    method: "POST",
+    body: { text, update_existing: updateExisting },
+  });
+}
+
+// ---- Shared Custom-CMS connection defaults (Settings → Publishing) ---------
+
+export interface CustomCmsDefaults {
+  endpoint_path: string;
+  body_template: Record<string, unknown>;
+  response_id_path: string | null;
+  response_url_path: string | null;
+  /** The shared password is never returned — only whether one is set. */
+  credentials_configured: boolean;
+}
+
+export interface CustomCmsDefaultsUpdate {
+  endpoint_path?: string;
+  body_template?: Record<string, unknown>;
+  response_id_path?: string | null;
+  response_url_path?: string | null;
+  /** "" clears, non-empty replaces, omitted keeps. */
+  credentials?: string;
+}
+
+export function getCustomCmsDefaults(): Promise<CustomCmsDefaults> {
+  return api<CustomCmsDefaults>("/publish/custom-cms-defaults");
+}
+
+export function saveCustomCmsDefaults(
+  payload: CustomCmsDefaultsUpdate,
+): Promise<CustomCmsDefaults> {
+  return api<CustomCmsDefaults>("/publish/custom-cms-defaults", {
+    method: "PUT",
+    body: payload,
+  });
+}
+
+/** Push the current config onto every live Custom CMS domain. Overwrites their
+ *  connection config — the caller must confirm first. */
+export function reapplyCustomCmsDefaults(): Promise<{ updated: number }> {
+  return api<{ updated: number }>("/publish/custom-cms-defaults/reapply", {
+    method: "POST",
+  });
+}
+
 // ---- Folder tree (migration 0027) -----------------------------------------
 
 export interface DomainFolder {

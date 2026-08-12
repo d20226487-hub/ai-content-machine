@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import { AutotoolConfigCard } from "@/components/AutotoolConfigCard";
 import { BackupCard } from "@/components/BackupCard";
+import { CustomCmsDefaultsCard } from "@/components/CustomCmsDefaultsCard";
 import { BrainCard } from "@/components/BrainCard";
 import { GenerationDefaultsCard } from "@/components/GenerationDefaultsCard";
 import { PricingCard } from "@/components/PricingCard";
@@ -157,7 +158,12 @@ export default function SettingsPage() {
         )}
 
         {tab === "generation" && <GenerationDefaultsCard />}
-        {tab === "publishing" && <PublishDefaultsCard />}
+        {tab === "publishing" && (
+          <div className="flex flex-col gap-6">
+            <PublishDefaultsCard />
+            <CustomCmsDefaultsCard />
+          </div>
+        )}
         {tab === "autotool" && <AutotoolConfigCard />}
         {tab === "pricing" && <PricingCard />}
         {tab === "backups" && <BackupCard />}
