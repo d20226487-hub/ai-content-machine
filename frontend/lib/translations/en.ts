@@ -1507,7 +1507,10 @@ export const en = {
   "customCms.reapplyConfirm": "Overwrite the config of every Custom CMS domain?",
   "customCms.reapplyYes": "Yes, apply",
   "customCms.reapplyDone": "Domains updated: {n}",
-  "domainCsv.summary": "Inserted {inserted}; skipped {skipped}.",
+  "domainCsv.summary": "Inserted {inserted}; updated {updated}; skipped {skipped}.",
+  "domainCsv.updateExisting": "Update existing domains",
+  "domainCsv.updateExistingHint":
+    "Only columns present in the file with a value are overwritten — the rest of the config is left as-is. Unchecked, existing domains are skipped.",
   "domainCsv.rowError": "Row {row}: {detail}",
 
   // publish history (single runs)

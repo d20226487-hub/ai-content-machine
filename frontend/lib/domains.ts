@@ -110,6 +110,8 @@ export interface TestConnectionResult {
 export interface CsvImportResult {
   inserted: number;
   skipped: number;
+  /** Rows that refreshed an existing domain (update_existing only). */
+  updated: number;
   errors: { row: number; detail: string }[];
 }
 
@@ -287,11 +289,15 @@ export function getMediaCacheCount(domainId: number) {
   return api<{ count: number }>(`/domains/${domainId}/media-cache/count`);
 }
 
-export async function importDomainsCsv(file: File): Promise<CsvImportResult> {
+export async function importDomainsCsv(
+  file: File,
+  updateExisting = false,
+): Promise<CsvImportResult> {
   const fd = new FormData();
   fd.append("file", file);
   const token = getToken();
-  const res = await fetch(`${API_URL}/domains/import-csv`, {
+  const qs = updateExisting ? "?update_existing=true" : "";
+  const res = await fetch(`${API_URL}/domains/import-csv${qs}`, {
     method: "POST",
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     body: fd,

@@ -295,6 +295,8 @@ class TestConnectionResult(BaseModel):
 class CsvImportResult(BaseModel):
     inserted: int
     skipped: int
+    # Rows that refreshed an existing domain (only when update_existing is on).
+    updated: int = 0
     errors: list[dict[str, Any]] = Field(default_factory=list)
 
 

@@ -30,6 +30,7 @@ export function DomainCsvImportModal({
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<CsvImportResult | null>(null);
+  const [updateExisting, setUpdateExisting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sampleOpen, setSampleOpen] = useState(false);
 
@@ -43,9 +44,9 @@ export function DomainCsvImportModal({
     setBusy(true);
     setError(null);
     try {
-      const r = await importDomainsCsv(file);
+      const r = await importDomainsCsv(file, updateExisting);
       setResult(r);
-      if (r.inserted > 0) onImported();
+      if (r.inserted > 0 || r.updated > 0) onImported();
     } catch (err) {
       setError(err instanceof Error ? err.message : t("common.importFailed"));
     } finally {
@@ -114,6 +115,23 @@ export function DomainCsvImportModal({
           className="block w-full text-sm text-neutral-700 dark:text-neutral-300"
         />
 
+        {/* Off by default: a re-import must not silently overwrite live sites. */}
+        <label className="flex items-start gap-2 text-sm text-neutral-700 dark:text-neutral-300">
+          <input
+            type="checkbox"
+            checked={updateExisting}
+            onChange={(e) => setUpdateExisting(e.target.checked)}
+            data-testid="domain-csv-update-existing"
+            className="mt-0.5 h-4 w-4 rounded border-neutral-300 dark:border-neutral-600"
+          />
+          <span>
+            <span className="font-medium">{t("domainCsv.updateExisting")}</span>
+            <span className="mt-0.5 block text-xs text-neutral-500 dark:text-neutral-400">
+              {t("domainCsv.updateExistingHint")}
+            </span>
+          </span>
+        </label>
+
         {error && (
           <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
             {error}
@@ -123,7 +141,11 @@ export function DomainCsvImportModal({
         {result && (
           <div className="rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-800 dark:bg-blue-950/40 dark:text-blue-300">
             <p className="font-medium">
-              {t("domainCsv.summary", { inserted: result.inserted, skipped: result.skipped })}
+              {t("domainCsv.summary", {
+                inserted: result.inserted,
+                updated: result.updated ?? 0,
+                skipped: result.skipped,
+              })}
             </p>
             {result.errors.length > 0 && (
               <ul className="mt-1 list-disc pl-4 text-xs">

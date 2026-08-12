@@ -1006,6 +1006,7 @@ def _basic_auth_header(credentials_encrypted: str | None) -> dict[str, str]:
 @router.post("/import-csv", response_model=CsvImportResult)
 async def import_csv(
     file: UploadFile = File(...),
+    update_existing: bool = Query(default=False),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> CsvImportResult:
@@ -1022,6 +1023,14 @@ async def import_csv(
     present, must be a JSON object (use {{placeholders}} for publish-time
     substitution) — these build the domain's custom_config so the row imports
     as a publish-ready Custom site instead of being rejected.
+
+    ``update_existing`` turns a re-import into an update instead of a skip, and
+    is deliberately PARTIAL: only columns present in the file with a non-empty
+    cell are written. So a CSV carrying just name/base_url/languages refreshes
+    the languages and leaves the endpoint and body template alone, and a blank
+    cell never silently clears a configured field. custom_config is merged key
+    by key for the same reason. A trashed domain is restored, matching the
+    bulk-add paste — re-importing a domain should leave it usable.
     """
     raw = await file.read()
     try:
@@ -1039,9 +1048,127 @@ async def import_csv(
 
     inserted = 0
     skipped = 0
+    updated = 0
     errors: list[dict[str, Any]] = []
+    _CC_COLS = (
+        "endpoint_path",
+        "body_template",
+        "response_id_path",
+        "response_url_path",
+        "test_endpoint_path",
+    )
 
     for row_index, row in enumerate(reader, start=2):  # row 1 is header
+        # An existing domain is matched on either unique column. Resolved before
+        # the create payload is built because updates are partial — a row that
+        # only carries languages must not be forced through DomainCreate's
+        # create-time invariants (e.g. custom rows needing an endpoint_path).
+        row_name = (row.get("name") or "").strip()
+        row_base = (row.get("base_url") or "").strip()
+        existing = None
+        if row_name or row_base:
+            existing = (
+                (
+                    await db.execute(
+                        select(Domain).where(
+                            or_(Domain.base_url == row_base, Domain.name == row_name)
+                        )
+                    )
+                )
+                .scalars()
+                .first()
+            )
+
+        if existing is not None and not update_existing:
+            where = " (in trash)" if existing.deleted_at else ""
+            errors.append(
+                {
+                    "row": row_index,
+                    "detail": f"{existing.name}: already exists{where}; "
+                    "tick 'update existing' to refresh it",
+                }
+            )
+            skipped += 1
+            continue
+
+        if existing is not None:
+            # Partial overwrite: only columns present in the file AND non-empty.
+            present = {
+                k
+                for k in (reader.fieldnames or [])
+                if (row.get(k) or "").strip() != ""
+            }
+            try:
+                if "base_url" in present and row_base != existing.base_url:
+                    validate_public_url(row_base)
+                    existing.base_url = row_base
+                if "name" in present:
+                    existing.name = row_name
+                if "cms_type" in present:
+                    existing.cms_type = (row.get("cms_type") or "").strip().lower()
+                if "auth_type" in present:
+                    existing.auth_type = (row.get("auth_type") or "").strip().lower()
+                if "multilingual_plugin" in present:
+                    existing.multilingual_plugin = (
+                        row.get("multilingual_plugin") or "none"
+                    ).strip().lower()
+                if "languages" in present:
+                    existing.languages = [
+                        c.strip()
+                        for c in (row.get("languages") or "").split(",")
+                        if c.strip()
+                    ]
+                if "credentials" in present:
+                    existing.credentials_encrypted = encrypt(
+                        (row.get("credentials") or "").strip()
+                    )
+                # Merge custom_config key by key so a file carrying only an
+                # endpoint doesn't wipe the body template.
+                provided_cc = [c for c in _CC_COLS if c in present]
+                if provided_cc:
+                    merged = dict(existing.custom_config or {})
+                    for col in provided_cc:
+                        val = (row.get(col) or "").strip()
+                        if col == "body_template":
+                            parsed = json.loads(val)
+                            if not isinstance(parsed, dict):
+                                raise ValueError("body_template must be a JSON object")
+                            merged[col] = parsed
+                        else:
+                            merged[col] = val
+                    existing.custom_config = merged
+                # Re-importing a domain should leave it usable.
+                existing.deleted_at = None
+            except UnsafeUrlError as e:
+                errors.append({"row": row_index, "detail": f"{row_base}: {e}"})
+                skipped += 1
+                continue
+            except json.JSONDecodeError:
+                errors.append(
+                    {"row": row_index, "detail": "body_template must be valid JSON"}
+                )
+                skipped += 1
+                continue
+            except Exception as e:
+                errors.append({"row": row_index, "detail": str(e)})
+                skipped += 1
+                continue
+            try:
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
+                errors.append(
+                    {
+                        "row": row_index,
+                        "detail": f"{row_name or row_base}: name or base_url "
+                        "conflicts with another domain",
+                    }
+                )
+                skipped += 1
+                continue
+            updated += 1
+            continue
+
         try:
             languages_raw = (row.get("languages") or "").strip()
             languages = (
@@ -1127,7 +1254,9 @@ async def import_csv(
             continue
         inserted += 1
 
-    return CsvImportResult(inserted=inserted, skipped=skipped, errors=errors)
+    return CsvImportResult(
+        inserted=inserted, skipped=skipped, updated=updated, errors=errors
+    )
 
 
 _SIMPLE_LINE_RE = re.compile(

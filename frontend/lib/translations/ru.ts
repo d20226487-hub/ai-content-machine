@@ -1567,7 +1567,10 @@ export const ru: Record<keyof typeof en, string> = {
   "customCms.reapplyYes": "Да, применить",
   "customCms.reapplyDone": "Обновлено доменов: {n}",
   "domainCsv.summary":
-    "Добавлено: {inserted}; пропущено: {skipped}.",
+    "Добавлено: {inserted}; обновлено: {updated}; пропущено: {skipped}.",
+  "domainCsv.updateExisting": "Обновлять существующие домены",
+  "domainCsv.updateExistingHint":
+    "Обновятся только те поля, которые есть в файле и заполнены — остальная конфигурация останется как была. Без галочки существующие домены пропускаются.",
   "domainCsv.rowError": "Строка {row}: {detail}",
 
   // publish history (single runs)
