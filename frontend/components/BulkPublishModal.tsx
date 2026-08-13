@@ -279,31 +279,6 @@ export function BulkPublishModal({
   // invalidates the cache so we re-fetch a matching domain — without
   // this reset, switching WP → Custom would keep showing the WP fields
   // (the original bug: Custom CMS Multi mode showed predefined WP slots).
-  const multiCanonicalTokenRef = useRef(0);
-  useEffect(() => {
-    if (mode !== "multi") return;
-    // Invalidate stale cache when the user flips CMS-type while in Multi
-    // mode: a previously-fetched WP domain isn't a valid schema source
-    // for a Custom CMS run and vice versa.
-    if (multiCanonicalDomain && multiCanonicalDomain.cms_type !== cmsTypeFilter) {
-      setMultiCanonicalDomain(null);
-      return; // wait for the next effect run after state settles
-    }
-    if (multiCanonicalDomain) return; // cache: fetch once per modal open per type
-    const token = ++multiCanonicalTokenRef.current;
-    listDomainsPicker({ cms_type: cmsTypeFilter, page_size: 1 })
-      .then((r) => {
-        if (token !== multiCanonicalTokenRef.current) return;
-        if (r.items.length === 0) return; // no domain of this type → fallback fields
-        return getDomain(r.items[0].id).then((d) => {
-          if (token !== multiCanonicalTokenRef.current) return;
-          setMultiCanonicalDomain(d);
-        });
-      })
-      .catch(() => {
-        // Non-fatal — the slot derivation falls back below.
-      });
-  }, [mode, cmsTypeFilter, multiCanonicalDomain]);
 
   const multiCanonicalProfile = useMemo<PublishProfile | null>(() => {
     if (mode !== "multi") return null;
@@ -673,6 +648,70 @@ export function BulkPublishModal({
     }
     return orderedRowIds.slice();
   }, [rowFilter, rangeStart, rangeEnd, selectedRowIds, orderedRowIds]);
+
+  // The domain the mapping schema is read from: the FIRST domain named in the
+  // table's domain column. Reading it from the table (rather than "whatever
+  // domain the picker returns first") means the slots are the fields this
+  // run's fleet actually uses — an unrelated domain with a fat body_template
+  // would otherwise fill the mapping with fields that are never published.
+  const firstTableDomain = useMemo(() => {
+    if (mode !== "multi" || domainColumnId === "") return "";
+    const colId = Number(domainColumnId);
+    for (const rid of resolveCandidateIds()) {
+      const v = getVal(rid, colId).trim();
+      if (v) return v;
+    }
+    return "";
+  }, [mode, domainColumnId, resolveCandidateIds, getVal]);
+
+  const multiCanonicalTokenRef = useRef(0);
+  // What the cached canonical domain was fetched for. Re-fetch when either the
+  // CMS type or the table's first domain changes; without this the schema
+  // would stay pinned to the first domain seen when the modal opened.
+  const multiCanonicalKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (mode !== "multi") return;
+    // Invalidate stale cache when the user flips CMS-type while in Multi
+    // mode: a previously-fetched WP domain isn't a valid schema source
+    // for a Custom CMS run and vice versa.
+    if (multiCanonicalDomain && multiCanonicalDomain.cms_type !== cmsTypeFilter) {
+      setMultiCanonicalDomain(null);
+      multiCanonicalKeyRef.current = null;
+      return; // wait for the next effect run after state settles
+    }
+    const wantKey = `${cmsTypeFilter}|${firstTableDomain}`;
+    if (multiCanonicalDomain && multiCanonicalKeyRef.current === wantKey) return;
+    const token = ++multiCanonicalTokenRef.current;
+    multiCanonicalKeyRef.current = wantKey;
+
+    const pickFirstOfType = () =>
+      listDomainsPicker({ cms_type: cmsTypeFilter, page_size: 1 });
+
+    // Search by the table's value first; fall back to any domain of this type
+    // when no column is chosen yet, or the value matches nothing (typo, or the
+    // site hasn't been added) — an empty mapping would be worse than one
+    // derived from a sibling site.
+    const lookup = firstTableDomain
+      ? listDomainsPicker({
+          cms_type: cmsTypeFilter,
+          q: firstTableDomain,
+          page_size: 1,
+        }).then((r) => (r.items.length > 0 ? r : pickFirstOfType()))
+      : pickFirstOfType();
+
+    lookup
+      .then((r) => {
+        if (token !== multiCanonicalTokenRef.current) return;
+        if (r.items.length === 0) return; // no domain of this type → fallback fields
+        return getDomain(r.items[0].id).then((d) => {
+          if (token !== multiCanonicalTokenRef.current) return;
+          setMultiCanonicalDomain(d);
+        });
+      })
+      .catch(() => {
+        // Non-fatal — the slot derivation falls back below.
+      });
+  }, [mode, cmsTypeFilter, multiCanonicalDomain, firstTableDomain]);
 
   // "Will publish N rows" estimate.
   const candidatePreview = useMemo(() => {
