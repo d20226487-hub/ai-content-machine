@@ -205,10 +205,12 @@ class CustomCmsClient(CmsClient):
         endpoint_path = cfg.get("endpoint_path") or ""
         body_template = cfg.get("body_template") or {}
 
-        # Bake the placeholder substitution map. `language` is exposed as
-        # both {{language}} and {{lang}} so templates can use whichever name
-        # matches the target API (some upstreams — like the mrba CRM — use
-        # the short `lang` key in their body).
+        # Bake the placeholder substitution map. The run's language is exposed
+        # under both {{language}} and {{lang}}, but `setdefault` means a mapped
+        # field of the same name WINS — and an empty mapped value then makes
+        # _substitute drop the key, so the language silently never arrives.
+        # {{lang}} is the convention here (every domain's template uses it and
+        # the docs teach only that one); treat {{language}} as a legacy alias.
         values = dict(fields)
         if language is not None:
             values.setdefault("language", language)
