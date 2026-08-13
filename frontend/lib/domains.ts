@@ -292,11 +292,15 @@ export function getMediaCacheCount(domainId: number) {
 export async function importDomainsCsv(
   file: File,
   updateExisting = false,
+  folderId: number | null = null,
 ): Promise<CsvImportResult> {
   const fd = new FormData();
   fd.append("file", file);
   const token = getToken();
-  const qs = updateExisting ? "?update_existing=true" : "";
+  const params = new URLSearchParams();
+  if (updateExisting) params.set("update_existing", "true");
+  if (folderId != null) params.set("folder_id", String(folderId));
+  const qs = params.toString() ? `?${params.toString()}` : "";
   const res = await fetch(`${API_URL}/domains/import-csv${qs}`, {
     method: "POST",
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
@@ -337,10 +341,11 @@ export interface SimpleDomainImportResult {
 export function bulkAddSimpleDomains(
   text: string,
   updateExisting = false,
+  folderId: number | null = null,
 ): Promise<SimpleDomainImportResult> {
   return api<SimpleDomainImportResult>("/domains/bulk-simple", {
     method: "POST",
-    body: { text, update_existing: updateExisting },
+    body: { text, update_existing: updateExisting, folder_id: folderId },
   });
 }
 

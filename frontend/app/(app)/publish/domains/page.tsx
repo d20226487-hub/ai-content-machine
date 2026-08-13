@@ -890,6 +890,7 @@ export default function DomainsPage() {
       {modal.kind === "add" && (
         <AddDomainModal
           onClose={() => setModal({ kind: "closed" })}
+          folderId={typeof scope === "number" ? scope : null}
           onPickWordpress={() => setModal({ kind: "create" })}
           onImported={() => {
             void loadList();
@@ -913,6 +914,7 @@ export default function DomainsPage() {
       )}
       {modal.kind === "import" && (
         <DomainCsvImportModal
+          folderId={typeof scope === "number" ? scope : null}
           onClose={() => setModal({ kind: "closed" })}
           onImported={() => {
             void loadList();

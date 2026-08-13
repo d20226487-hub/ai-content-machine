@@ -1007,6 +1007,7 @@ def _basic_auth_header(credentials_encrypted: str | None) -> dict[str, str]:
 async def import_csv(
     file: UploadFile = File(...),
     update_existing: bool = Query(default=False),
+    folder_id: int | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> CsvImportResult:
@@ -1045,6 +1046,9 @@ async def import_csv(
             status_code=400,
             detail=f"Missing required CSV columns. Required: {sorted(required)}",
         )
+
+    if folder_id is not None:
+        await _require_folder_exists(db, folder_id)
 
     inserted = 0
     skipped = 0
@@ -1241,6 +1245,7 @@ async def import_csv(
                 default_wp_profiles() if payload.cms_type == "wordpress" else None
             ),
             created_by_id=actor.id,
+            folder_id=folder_id,
         )
         if payload.credentials:
             domain.credentials_encrypted = encrypt(payload.credentials)
@@ -1303,6 +1308,11 @@ async def bulk_simple_import(
                 "(Settings → Publishing → Custom CMS)."
             ),
         )
+
+    # Drop new domains into the folder the operator is viewing. Validated once
+    # up front so a bad id fails the request instead of every row.
+    if payload.folder_id is not None:
+        await _require_folder_exists(db, payload.folder_id)
 
     result = SimpleDomainImportResult()
     seen: set[str] = set()
@@ -1411,6 +1421,7 @@ async def bulk_simple_import(
             custom_config=cfg.model_dump(),
             created_by_id=actor.id,
             credentials_encrypted=encrypt(creds),
+            folder_id=payload.folder_id,
         )
         db.add(domain)
         try:

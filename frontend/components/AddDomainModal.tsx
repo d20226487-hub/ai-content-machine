@@ -30,12 +30,15 @@ export function AddDomainModal({
   onClose,
   onPickWordpress,
   onImported,
+  folderId = null,
 }: {
   onClose: () => void;
   /** Chose WordPress — the page opens the full per-domain form. */
   onPickWordpress: () => void;
   /** Domains were created/updated; refresh the list. */
   onImported: (result: SimpleDomainImportResult) => void;
+  /** Folder currently being viewed — new domains land there, not in the root. */
+  folderId?: number | null;
 }) {
   const { t } = useT();
   const [step, setStep] = useState<"choose" | "paste">("choose");
@@ -70,7 +73,7 @@ export function AddDomainModal({
     setBusy(true);
     setError(null);
     try {
-      const r = await bulkAddSimpleDomains(text, updateExisting);
+      const r = await bulkAddSimpleDomains(text, updateExisting, folderId);
       setResult(r);
       if (r.created > 0 || r.updated > 0) onImported(r);
     } catch (e) {

@@ -336,6 +336,9 @@ class SimpleDomainImport(BaseModel):
 
     text: str
     update_existing: bool = False
+    # Folder to drop the new domains into (the one the operator is looking at).
+    # None = the implicit root. Existing domains keep their current folder.
+    folder_id: int | None = None
 
 
 class SimpleDomainImportResult(BaseModel):

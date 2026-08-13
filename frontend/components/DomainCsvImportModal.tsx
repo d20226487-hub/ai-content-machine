@@ -22,9 +22,13 @@ const SAMPLES: {
 export function DomainCsvImportModal({
   onClose,
   onImported,
+  folderId = null,
 }: {
   onClose: () => void;
   onImported: () => void;
+  /** Folder currently being viewed — imported domains land there, not the root.
+   *  Only applies to newly created rows; an updated domain keeps its folder. */
+  folderId?: number | null;
 }) {
   const { t } = useT();
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -44,7 +48,7 @@ export function DomainCsvImportModal({
     setBusy(true);
     setError(null);
     try {
-      const r = await importDomainsCsv(file, updateExisting);
+      const r = await importDomainsCsv(file, updateExisting, folderId);
       setResult(r);
       if (r.inserted > 0 || r.updated > 0) onImported();
     } catch (err) {
