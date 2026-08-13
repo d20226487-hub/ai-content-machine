@@ -317,7 +317,7 @@ export function BulkPublishModal({
           multiCanonicalDomain.custom_config?.body_template,
         );
         return placeholders
-          .filter((p) => p !== "language")
+          .filter((p) => !AUTO_FILLED_PLACEHOLDERS.has(p))
           .map((p) => ({ key: p, label: p, required: false }));
       }
       const fields = multiCanonicalProfile?.fields ?? DEFAULT_WP_FIELDS;
@@ -339,7 +339,7 @@ export function BulkPublishModal({
     // Custom: derive from body_template placeholders
     const placeholders = collectPlaceholders(selected.custom_config?.body_template);
     return placeholders
-      .filter((p) => p !== "language")
+      .filter((p) => !AUTO_FILLED_PLACEHOLDERS.has(p))
       .map((p) => ({ key: p, label: p, required: false }));
   }, [mode, cmsTypeFilter, customPageType, multiCanonicalDomain, multiCanonicalProfile, selected, activeProfile]);
 
@@ -1303,6 +1303,14 @@ function collectCandidateLanguages(
 }
 
 const PLACEHOLDER_RE = /\{\{\s*([A-Za-z_][\w\.\- ]*?)\s*\}\}/g;
+// Placeholders the runner fills itself, so mapping a column to them would be
+// noise at best and harmful at worst:
+//   language — the run's language is injected under {{lang}}/{{language}}
+//   action   — set from the Create/Update choice (services/bulk_publish.py)
+// Both are injected with setdefault, so a mapped column WINS — and an empty
+// cell then drops the key entirely. Hiding them keeps that trap out of reach.
+const AUTO_FILLED_PLACEHOLDERS = new Set(["language", "action"]);
+
 function collectPlaceholders(node: unknown, out: Set<string> = new Set()): string[] {
   if (typeof node === "string") {
     let m: RegExpExecArray | null;
