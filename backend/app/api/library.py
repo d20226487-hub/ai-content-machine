@@ -138,6 +138,7 @@ from app.schemas.bulk import (
     TableUpdateRequest,
     TableUpdateResult,
     TrashBulkIds,
+    UniqueLinkRead,
 )
 from app.schemas.csv_export import CsvExportJobRead
 from app.schemas.share import ShareLinkRead
@@ -4817,11 +4818,18 @@ async def get_link_check_run(
     q_negate: bool = Query(default=False),
     resolution: str | None = Query(default=None),
     link_type: str | None = Query(default=None),
+    unique: bool = Query(default=False),
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LinkCheckRunDetail:
     """Run state (counters/progress) + the flagged links (paginated). The run
     page polls this every ~2s while active, then stops on a terminal status.
+
+    ``unique=true`` (crawl runs only) returns the deduped one-row-per-URL view
+    in ``unique_items`` instead of the per-cell occurrence list — same crawl
+    targets that back the status-class counters, so it carries 2xx/3xx codes
+    that the ``broken``-only violation list doesn't. ``total_unique`` always
+    populates (post status/search filter) so the toggle can show a count.
 
     Optional filters (server-side so they hold across pages): ``problem``
     (omitted|hallucinated|broken|ok), ``status_code``, and ``q`` (link
@@ -4855,38 +4863,64 @@ async def get_link_check_run(
         )
     ).scalar_one()
 
+    # In the unique-URL view the occurrence rows aren't rendered — skip the
+    # page fetch (the count above still drives the occurrence-tab badge).
     rows = (
-        (
-            await db.execute(
-                base.order_by(
-                    LinkCheckViolation.row_position,
-                    LinkCheckViolation.problem,
-                    LinkCheckViolation.id,
+        []
+        if unique
+        else (
+            (
+                await db.execute(
+                    base.order_by(
+                        LinkCheckViolation.row_position,
+                        LinkCheckViolation.problem,
+                        LinkCheckViolation.id,
+                    )
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
                 )
-                .offset((page - 1) * page_size)
-                .limit(page_size)
             )
+            .scalars()
+            .all()
         )
-        .scalars()
-        .all()
     )
 
-    # Distinct status codes across the whole run (unfiltered) for the dropdown.
-    codes = (
-        (
-            await db.execute(
-                select(LinkCheckViolation.status_code)
-                .where(
-                    LinkCheckViolation.run_id == run_id,
-                    LinkCheckViolation.status_code.isnot(None),
+    # Distinct status codes for the filter dropdown. For crawl runs read them
+    # from the crawl targets — that's the superset (the violation list only
+    # carries `broken`/404 when include_ok is off, but the unique view shows
+    # every 2xx/3xx too). Juxtapose-only runs have no targets → use violations.
+    if run.check_crawl:
+        codes = (
+            (
+                await db.execute(
+                    select(LinkCheckCrawlTarget.status_code)
+                    .where(
+                        LinkCheckCrawlTarget.run_id == run_id,
+                        LinkCheckCrawlTarget.status_code.isnot(None),
+                    )
+                    .distinct()
+                    .order_by(LinkCheckCrawlTarget.status_code)
                 )
-                .distinct()
-                .order_by(LinkCheckViolation.status_code)
             )
+            .scalars()
+            .all()
         )
-        .scalars()
-        .all()
-    )
+    else:
+        codes = (
+            (
+                await db.execute(
+                    select(LinkCheckViolation.status_code)
+                    .where(
+                        LinkCheckViolation.run_id == run_id,
+                        LinkCheckViolation.status_code.isnot(None),
+                    )
+                    .distinct()
+                    .order_by(LinkCheckViolation.status_code)
+                )
+            )
+            .scalars()
+            .all()
+        )
 
     # Per-status-class breakdown for the crawl overview (unique-URL based,
     # from the crawl-targets table — consistent with ok_count/broken_count,
@@ -4924,6 +4958,57 @@ async def get_link_check_run(
         ).one()
         s_404, s_5xx, s_3xx, s_2xx, failed_ct = (int(x) for x in agg)
 
+    # Unique-URL view (crawl runs only). One row per crawl target, filtered by
+    # status_code + the URL search only — problem/link_type/resolution are
+    # violation-level concepts and don't apply to a deduped URL. total_unique
+    # is always computed (for the toggle count/pager); the page fetches only
+    # when the caller asked for `unique=true`.
+    total_unique = 0
+    unique_items: list[UniqueLinkRead] = []
+    if run.check_crawl:
+        ubase = select(LinkCheckCrawlTarget).where(
+            LinkCheckCrawlTarget.run_id == run_id
+        )
+        if status_code is not None:
+            ubase = ubase.where(LinkCheckCrawlTarget.status_code == status_code)
+        if q and q.strip():
+            upat = f"%{q.strip()}%"
+            ubase = ubase.where(
+                LinkCheckCrawlTarget.url.notilike(upat)
+                if q_negate
+                else LinkCheckCrawlTarget.url.ilike(upat)
+            )
+        total_unique = (
+            await db.execute(select(func.count()).select_from(ubase.subquery()))
+        ).scalar_one()
+        if unique:
+            targets = (
+                (
+                    await db.execute(
+                        # Worst first: failed (NULL) → 5xx → 4xx → 3xx → 2xx,
+                        # then URL for a stable order within a class.
+                        ubase.order_by(
+                            LinkCheckCrawlTarget.status_code.desc().nullsfirst(),
+                            LinkCheckCrawlTarget.url,
+                        )
+                        .offset((page - 1) * page_size)
+                        .limit(page_size)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            unique_items = [
+                UniqueLinkRead(
+                    url=t.url,
+                    status_code=t.status_code,
+                    ok=t.ok,
+                    detail_code=t.detail_code,
+                    occurrence_count=len(t.occurrences or []),
+                )
+                for t in targets
+            ]
+
     return LinkCheckRunDetail(
         id=run.id,
         table_id=run.table_id,
@@ -4958,6 +5043,8 @@ async def get_link_check_run(
         status_5xx=s_5xx,
         failed_count=failed_ct,
         items=[LinkViolationRead.model_validate(v) for v in rows],
+        total_unique=int(total_unique),
+        unique_items=unique_items,
     )
 
 

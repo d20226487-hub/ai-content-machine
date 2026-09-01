@@ -100,10 +100,22 @@ export default function LinkCheckRunPage({
     return () => clearTimeout(id);
   }, [qInput]);
 
+  // Unique-URL view (crawl mode): show one deduped row per URL + status code
+  // instead of one row per cell occurrence.
+  const [showUnique, setShowUnique] = useState(false);
+
   // Any filter change resets to page 1.
   useEffect(() => {
     setPage(1);
-  }, [filterProblem, filterLinkType, filterStatus, filterResolution, q, qNegate]);
+  }, [
+    filterProblem,
+    filterLinkType,
+    filterStatus,
+    filterResolution,
+    q,
+    qNegate,
+    showUnique,
+  ]);
 
   const tick = useCallback(
     async (p: number, isStale?: () => boolean) => {
@@ -115,6 +127,7 @@ export default function LinkCheckRunPage({
           resolution: filterResolution || undefined,
           q: q || undefined,
           q_negate: qNegate,
+          unique: showUnique || undefined,
         });
         // A page/filter change may have superseded this request while it was
         // in flight — don't let the late response clobber the newer state.
@@ -138,7 +151,16 @@ export default function LinkCheckRunPage({
         stoppedRef.current = true;
       }
     },
-    [rid, filterProblem, filterLinkType, filterStatus, filterResolution, q, qNegate],
+    [
+      rid,
+      filterProblem,
+      filterLinkType,
+      filterStatus,
+      filterResolution,
+      q,
+      qNegate,
+      showUnique,
+    ],
   );
 
   // Poll while active; refetch immediately on page or filter change.
@@ -692,10 +714,33 @@ export default function LinkCheckRunPage({
           {/* filter bar — shown once the run produced any rows */}
           {!isTranslation && !isActive && producedRows(run) && (
             <div className="mt-5 flex flex-wrap items-center gap-2">
+              {/* Unique-URL toggle (crawl mode): dedupe the occurrence list to
+                  one row per URL + status code. Read-only reporting view, so
+                  it clears any pending strip/fix selection. */}
+              {run.check_crawl && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowUnique((v) => !v);
+                    setSelectedRows(new Set());
+                    setSelectedStrip(new Set());
+                  }}
+                  title={t("linkCheckRun.uniqueHint")}
+                  className={
+                    "rounded-md border px-2.5 py-1.5 text-xs font-medium " +
+                    (showUnique
+                      ? "border-neutral-900 bg-neutral-900 text-white dark:border-neutral-100 dark:bg-neutral-100 dark:text-neutral-900"
+                      : "border-neutral-300 text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800")
+                  }
+                >
+                  {t("linkCheckRun.uniqueToggle")}
+                  {run.total_unique > 0 && ` (${run.total_unique})`}
+                </button>
+              )}
               {/* The problem filter only makes sense when juxtapose ran — a
                   crawl-only (status-codes) run has just broken/ok, which the
                   status-code filter already covers. */}
-              {run.check_juxtapose && (
+              {run.check_juxtapose && !showUnique && (
                 <select
                   value={filterProblem}
                   onChange={(e) => setFilterProblem(e.target.value as LinkProblem | "")}
@@ -716,7 +761,7 @@ export default function LinkCheckRunPage({
                 </select>
               )}
               {/* Link-type filter — only when the run classified links. */}
-              {run.classify_config && (
+              {run.classify_config && !showUnique && (
                 <select
                   value={filterLinkType}
                   onChange={(e) =>
@@ -730,7 +775,7 @@ export default function LinkCheckRunPage({
                   <option value="external">{t("linkCheckRun.rawTypeExternal")}</option>
                 </select>
               )}
-              {hasResolution && (
+              {hasResolution && !showUnique && (
                 <select
                   value={filterResolution}
                   onChange={(e) =>
@@ -780,8 +825,75 @@ export default function LinkCheckRunPage({
             </div>
           )}
 
+          {/* Unique-URL view (crawl mode): one deduped row per URL + status. */}
+          {!isTranslation && showUnique && (
+            run.total_unique === 0 ? (
+              <p className="mt-4 rounded-md bg-neutral-50 px-4 py-3 text-sm text-neutral-600 dark:bg-neutral-900 dark:text-neutral-400">
+                {t("linkCheckRun.noUnique")}
+              </p>
+            ) : (
+              <>
+                <div className="mt-3 overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-800">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-neutral-50 text-xs uppercase tracking-wide text-neutral-500 dark:bg-neutral-900 dark:text-neutral-400">
+                      <tr>
+                        <th className="w-28 px-3 py-2 font-medium">
+                          {t("linkCheckRun.colStatus")}
+                        </th>
+                        <th className="px-3 py-2 font-medium">{t("linkCheckRun.colLink")}</th>
+                        <th className="w-28 px-3 py-2 text-right font-medium">
+                          {t("linkCheckRun.colOccurrences")}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
+                      {run.unique_items.map((u, i) => (
+                        <tr key={`${u.url}:${i}`}>
+                          <td className="px-3 py-2">
+                            <span
+                              className={
+                                "inline-block rounded px-1.5 py-0.5 text-xs font-medium tabular-nums " +
+                                (u.ok
+                                  ? "bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-200"
+                                  : "bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-200")
+                              }
+                            >
+                              {u.status_code ??
+                                u.detail_code ??
+                                t("linkCheckRun.failedLabel")}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <a
+                              href={u.url}
+                              target="_blank"
+                              rel="noopener noreferrer nofollow"
+                              className="break-all text-blue-600 hover:underline dark:text-blue-400"
+                            >
+                              {u.url}
+                            </a>
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums text-neutral-500 dark:text-neutral-400">
+                            {u.occurrence_count}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <Pagination
+                  page={page}
+                  pageSize={PAGE_SIZE}
+                  total={run.total_unique}
+                  onPage={setPage}
+                />
+              </>
+            )
+          )}
+
           {/* violations (crawl / juxtapose runs only) */}
           {!isTranslation &&
+            !showUnique &&
             (run.total_violations === 0 ? (
             isTerminal &&
             (anyFilterActive(filterProblem, filterStatus, filterResolution, q) ? (

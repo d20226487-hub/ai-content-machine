@@ -1058,11 +1058,31 @@ class LinkViolationRead(BaseModel):
     resolution: LinkResolution | None = None
 
 
+class UniqueLinkRead(BaseModel):
+    """One unique crawled URL and its status — the crawl-target row, deduped
+    across every cell the URL appears in. Powers the "Unique links" toggle in
+    HTTP-status (crawl) mode: the occurrence view lists the same URL once per
+    cell, this lists it once with its status code and how many cells it's in.
+    """
+
+    url: str
+    status_code: int | None = None
+    ok: bool | None = None
+    detail_code: str | None = None
+    # How many cell occurrences this URL was found in across the run.
+    occurrence_count: int = 0
+
+
 class LinkCheckRunDetail(LinkCheckRunRead):
     created_by_name: str | None = None
     page: int
     page_size: int
     total_violations: int  # count AFTER filters, for pagination
+    # Unique-URL view (crawl runs only): the total (post status/search filter)
+    # always populates so the toggle can show a count; `unique_items` fills
+    # only when the request asks for `unique=true`.
+    total_unique: int = 0
+    unique_items: list["UniqueLinkRead"] = []
     # Distinct HTTP codes present across the run's violations (unfiltered) —
     # populates the status-code filter dropdown.
     status_codes_present: list[int]

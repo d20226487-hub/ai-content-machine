@@ -2406,6 +2406,13 @@ export const en = {
   "linkCheckRun.colColumn": "Column",
   "linkCheckRun.colProblem": "Problem",
   "linkCheckRun.colLink": "Link",
+  "linkCheckRun.colStatus": "Status",
+  "linkCheckRun.colOccurrences": "In cells",
+  "linkCheckRun.failedLabel": "failed",
+  "linkCheckRun.uniqueToggle": "Unique links",
+  "linkCheckRun.uniqueHint":
+    "Show each URL once with its status code, instead of once per cell it appears in.",
+  "linkCheckRun.noUnique": "No links were crawled in this run.",
   "linkCheckRun.colDetail": "Detail",
   "linkCheckRun.fix": "Fix",
   "linkCheckRun.filterAllProblems": "All problems",

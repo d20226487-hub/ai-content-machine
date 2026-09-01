@@ -110,11 +110,26 @@ export interface LinkViolation {
   resolution: LinkResolution | null;
 }
 
+/** One deduped crawled URL and its status — the "unique links" view (crawl
+ *  mode). Same URL that appears in N cells is one row here. */
+export interface UniqueLink {
+  url: string;
+  status_code: number | null;
+  ok: boolean | null;
+  detail_code: string | null;
+  occurrence_count: number;
+}
+
 export interface LinkCheckRunDetail extends LinkCheckRun {
   created_by_name: string | null;
   page: number;
   page_size: number;
   total_violations: number;
+  /** Unique-URL total (post status/search filter) — drives the toggle count
+   *  and the pager when the unique view is on. */
+  total_unique: number;
+  /** Populated only when the request asked for `unique=true`. */
+  unique_items: UniqueLink[];
   status_codes_present: number[];
   /** Crawl status-class breakdown (unique-URL based) for the overview. */
   status_2xx: number;
@@ -137,6 +152,8 @@ export interface LinkViolationFilters {
   resolution?: LinkResolution | "untouched" | "";
   /** product | internal | external */
   link_type?: LinkTypeFilter | "";
+  /** Return the deduped one-row-per-URL view in `unique_items` (crawl only). */
+  unique?: boolean;
 }
 
 export function startLinkCheck(
@@ -173,6 +190,7 @@ export function getLinkCheckRun(
   }
   if (filters.resolution) sp.set("resolution", filters.resolution);
   if (filters.link_type) sp.set("link_type", filters.link_type);
+  if (filters.unique) sp.set("unique", "true");
   return api<LinkCheckRunDetail>(
     `/library/link-check-runs/${runId}?${sp.toString()}`,
   );

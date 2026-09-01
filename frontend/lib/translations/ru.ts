@@ -2473,6 +2473,13 @@ export const ru: Record<keyof typeof en, string> = {
   "linkCheckRun.colColumn": "Колонка",
   "linkCheckRun.colProblem": "Проблема",
   "linkCheckRun.colLink": "Ссылка",
+  "linkCheckRun.colStatus": "Статус",
+  "linkCheckRun.colOccurrences": "В ячейках",
+  "linkCheckRun.failedLabel": "сбой",
+  "linkCheckRun.uniqueToggle": "Уникальные ссылки",
+  "linkCheckRun.uniqueHint":
+    "Показать каждый URL один раз со статус-кодом, а не по разу на каждую ячейку, где он встречается.",
+  "linkCheckRun.noUnique": "В этом запуске не проверено ни одной ссылки.",
   "linkCheckRun.colDetail": "Детали",
   "linkCheckRun.fix": "Исправить",
   "linkCheckRun.filterAllProblems": "Все проблемы",
