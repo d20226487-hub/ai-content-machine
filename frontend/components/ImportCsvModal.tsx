@@ -21,11 +21,24 @@ interface Props {
   defaultFolderId?: number | null;
 }
 
-const SAMPLES: { file: string; labelKey: "csvImport.sampleWpSingle" | "csvImport.sampleWpMulti" | "csvImport.sampleCustomSingle" | "csvImport.sampleCustomMulti" }[] = [
+const SAMPLES: {
+  file: string;
+  labelKey:
+    | "csvImport.sampleWpSingle"
+    | "csvImport.sampleWpMulti"
+    | "csvImport.sampleCustomSingle"
+    | "csvImport.sampleCustomMulti"
+    | "csvImport.sampleFilmsUpdate"
+    | "csvImport.sampleFilmsCategories"
+    | "csvImport.sampleFilmsComments";
+}[] = [
   { file: "wordpress-single-site.csv", labelKey: "csvImport.sampleWpSingle" },
   { file: "wordpress-multi-site.csv", labelKey: "csvImport.sampleWpMulti" },
   { file: "custom-cms-single-site.csv", labelKey: "csvImport.sampleCustomSingle" },
   { file: "custom-cms-multi-site.csv", labelKey: "csvImport.sampleCustomMulti" },
+  { file: "films-update.csv", labelKey: "csvImport.sampleFilmsUpdate" },
+  { file: "films-categories.csv", labelKey: "csvImport.sampleFilmsCategories" },
+  { file: "films-comments.csv", labelKey: "csvImport.sampleFilmsComments" },
 ];
 
 /** Filename without its extension — used as the table name for each file. */

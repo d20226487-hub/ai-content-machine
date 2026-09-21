@@ -1081,11 +1081,14 @@ export const ru: Record<keyof typeof en, string> = {
   "csvImport.previewLabel": "Предпросмотр",
   "csvImport.downloadSample": "Скачать пример",
   "csvImport.sampleHint":
-    "Не знаете, какие столбцы использовать? Скачайте пример CSV под ваш сценарий публикации. Для Custom CMS столбцы должны соответствовать плейсхолдерам body_template вашего домена.",
+    "Не знаете, какие столбцы использовать? Скачайте пример CSV под ваш сценарий публикации. Для Custom CMS столбцы должны соответствовать плейсхолдерам body_template вашего домена. Для сайтов фильмов столбцы названы так же, как поля в окне публикации.",
   "csvImport.sampleWpSingle": "WordPress — один сайт",
   "csvImport.sampleWpMulti": "WordPress — несколько сайтов",
   "csvImport.sampleCustomSingle": "Custom CMS — один сайт",
   "csvImport.sampleCustomMulti": "Custom CMS — несколько сайтов",
+  "csvImport.sampleFilmsUpdate": "Фильмы — обновление фильмов",
+  "csvImport.sampleFilmsCategories": "Фильмы — категории",
+  "csvImport.sampleFilmsComments": "Фильмы — комментарии",
 
   // ---------- create / single ----------
   "create.title": "Создать",

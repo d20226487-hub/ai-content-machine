@@ -1047,11 +1047,14 @@ export const en = {
   "csvImport.previewLabel": "Preview",
   "csvImport.downloadSample": "Download sample",
   "csvImport.sampleHint":
-    "Not sure what columns to use? Download a sample CSV that matches your publishing setup. For Custom CMS, your columns must match the placeholders in your domain's body_template.",
+    "Not sure what columns to use? Download a sample CSV that matches your publishing setup. For Custom CMS, your columns must match the placeholders in your domain's body_template. Film-site samples use the same column names as the publish mapping.",
   "csvImport.sampleWpSingle": "WordPress — single site",
   "csvImport.sampleWpMulti": "WordPress — multi site",
   "csvImport.sampleCustomSingle": "Custom CMS — single site",
   "csvImport.sampleCustomMulti": "Custom CMS — multi site",
+  "csvImport.sampleFilmsUpdate": "Films — update films",
+  "csvImport.sampleFilmsCategories": "Films — categories",
+  "csvImport.sampleFilmsComments": "Films — comments",
 
   // ---------- create / single ----------
   "create.title": "Create",

@@ -108,6 +108,16 @@ export const DOC_ARTICLES: DocArticle[] = [
     roles: ["admin", "manager"],
   },
   {
+    slug: "publish-films",
+    titleEn: "Publish: film sites",
+    titleRu: "Публикация на сайты фильмов",
+    summaryEn:
+      "Step by step: credentials, adding film sites, table columns, updating films and categories, posting comments.",
+    summaryRu:
+      "Пошагово: логин и пароль, добавление сайтов, колонки таблицы, обновление фильмов и категорий, комментарии.",
+    roles: ["admin", "manager"],
+  },
+  {
     slug: "errors",
     titleEn: "Error log",
     titleRu: "Журнал ошибок",
