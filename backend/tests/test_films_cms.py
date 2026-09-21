@@ -25,7 +25,6 @@ from app.cms.films import (
     FilmsClient,
     FilmsClientError,
     build_request,
-    normalize_film_url,
 )
 from app.schemas.publish import BulkPublishRequest
 
@@ -110,23 +109,22 @@ def test_category_is_update_only():
 # ---- comments ---------------------------------------------------------------
 
 
-@pytest.mark.parametrize("raw,expected", [
-    ("https://site.com/1671-the-godfather-buck.html", "/the-godfather-buck.html"),
-    ("/1671-the-godfather-buck.html", "/the-godfather-buck.html"),
-    ("/the-godfather-buck.html", "/the-godfather-buck.html"),
-    ("the-godfather-buck.html", "/the-godfather-buck.html"),
-    ("https://site.com/films/2001-a-space-odyssey.html", "/a-space-odyssey.html"),
-    ("", ""),
+@pytest.mark.parametrize("url", [
+    "/the-godfather-buck.html",
+    "/2001-a-space-odyssey.html",  # alt_name that itself starts with digits
+    "https://site.com/1671-the-godfather-buck.html",
 ])
-def test_film_url_normalized_to_alt_name(raw, expected):
-    assert normalize_film_url(raw) == expected
+def test_film_url_is_sent_exactly_as_written(url):
+    _, text, warnings = build_request(COMMENT, "create", {"film_url": url, "comment_1": "x"})
+    assert _csv(text)["Film URL"] == url
+    assert warnings == []
 
 
-def test_comment_pairs_renumbered_and_url_normalized():
+def test_comment_pairs_renumbered():
     form, text, warnings = build_request(
         COMMENT, "create",
         {
-            "film_url": "https://site.com/1671-the-godfather-buck.html",
+            "film_url": "/the-godfather-buck.html",
             "author_1": "Иван", "comment_1": "",          # gap: no text
             "author_2": "Анна", "comment_2": "Шедевр",
             "author_3": "", "comment_3": "Классика",
@@ -139,7 +137,7 @@ def test_comment_pairs_renumbered_and_url_normalized():
         "Author 1": "Анна", "Comment 1": "Шедевр",
         "Author 2": "", "Comment 2": "Классика",
     }
-    assert warnings and "normalized" in warnings[0]
+    assert warnings == []
 
 
 def test_comment_needs_a_film_and_a_comment():

@@ -1571,7 +1571,7 @@ export const ru: Record<keyof typeof en, string> = {
   "bulkPub.filmsNewsUpdateHint": "Обновляет только существующие фильмы — поиск по Kinopoisk ID, затем по точному Title. Пустые ячейки поля на сайте не затирают.",
   "bulkPub.filmsNewsUpsertHint": "Обновляет найденные фильмы и создаёт новые. Поиск по Kinopoisk ID, затем по точному Title.",
   "bulkPub.filmsCategoryHint": "Категории можно только обновлять: сайт ищет по ID, затем по slug, затем по названию. Новые не создаются.",
-  "bulkPub.filmsCommentHint": "Добавляет комментарии к существующему фильму — по его URL или точному названию. Ссылку можно вставить целиком: номер в начале адреса уберётся сам.",
+  "bulkPub.filmsCommentHint": "Добавляет комментарии к существующему фильму — по его URL или точному названию. Film URL — как alt_name на сайте: /the-godfather-buck.html.",
   "bulkPub.filmsNeedTitle": "Сопоставьте колонку с полем Title — без него сайт не найдёт и не создаст фильм.",
   "bulkPub.filmsCategoryNeedId": "Сопоставьте хотя бы одно из полей Category ID, Category Slug или Category Name — по ним сайт находит категорию.",
   "bulkPub.filmsCategoryNeedField": "Сопоставьте хотя бы одно поле для обновления: описание, meta title, meta description или нижнее описание.",

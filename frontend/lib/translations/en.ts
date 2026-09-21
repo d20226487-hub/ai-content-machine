@@ -1512,7 +1512,7 @@ export const en = {
   "bulkPub.filmsNewsUpdateHint": "Updates existing films only — matched by Kinopoisk ID, then exact Title. Empty cells don't blank fields on the site.",
   "bulkPub.filmsNewsUpsertHint": "Updates films it finds and creates the rest. Matched by Kinopoisk ID, then exact Title.",
   "bulkPub.filmsCategoryHint": "Categories can only be updated: the site matches by ID, then slug, then name. New ones are never created.",
-  "bulkPub.filmsCommentHint": "Adds comments to an existing film, found by its URL or exact title. Full links are fine — the numeric prefix is stripped automatically.",
+  "bulkPub.filmsCommentHint": "Adds comments to an existing film, found by its URL or exact title. Film URL is the site's alt_name: /the-godfather-buck.html.",
   "bulkPub.filmsNeedTitle": "Map a column to Title — the site can't find or create a film without it.",
   "bulkPub.filmsCategoryNeedId": "Map at least one of Category ID, Category Slug or Category Name — that's how the site finds the category.",
   "bulkPub.filmsCategoryNeedField": "Map at least one field to update: description, meta title, meta description or bottom description.",

@@ -31,11 +31,9 @@ from __future__ import annotations
 import base64
 import csv
 import io
-import re
 import time
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlsplit
 
 import httpx
 
@@ -119,25 +117,6 @@ FIELDS_BY_PAGE_TYPE: dict[str, tuple[FilmField, ...]] = {
     COMMENT: COMMENT_FIELDS,
 }
 
-_LEADING_ID = re.compile(r"^\d+-")
-
-
-def normalize_film_url(value: str) -> str:
-    """Reduce a film link to the ``/alt-name.html`` form the API matches on.
-
-    The spec is explicit that ``/1671-the-godfather-buck.html`` does NOT match
-    — only ``/the-godfather-buck.html`` (the ``alt_name``) does. Tables usually
-    hold full links copied from the site, so: keep the last path segment, drop
-    a leading ``<digits>-`` id, and prefix ``/``.
-    """
-    raw = (value or "").strip()
-    if not raw:
-        return ""
-    path = urlsplit(raw).path if "://" in raw else raw
-    last = path.rstrip("/").rsplit("/", 1)[-1]
-    last = _LEADING_ID.sub("", last)
-    return f"/{last}" if last else ""
-
 
 def is_films_page_type(value: str | None) -> bool:
     return (value or "") in PAGE_TYPES
@@ -197,12 +176,11 @@ def build_request(
         form["fields[]"] = writable
 
     else:  # COMMENT
+        # Sent exactly as written. The API matches the film's alt_name
+        # ("/the-godfather-buck.html"); we deliberately don't rewrite links —
+        # stripping a "1671-" id prefix can't be told apart from an alt_name
+        # that itself starts with digits ("/2001-a-space-odyssey.html").
         film_url = values.get("film_url", "")
-        if film_url:
-            normalized = normalize_film_url(film_url)
-            if normalized != film_url:
-                warnings.append(f"Film URL normalized: {film_url} -> {normalized}")
-            film_url = normalized
         if not film_url and not values.get("film_name"):
             raise FilmsClientError("A comment needs the film's URL or exact name.")
         columns.append(("Film URL", film_url))
