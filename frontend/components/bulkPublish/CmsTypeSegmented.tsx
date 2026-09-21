@@ -17,18 +17,32 @@ import type { CmsType } from "@/lib/domains";
 export function CmsTypeSegmented({
   value,
   onChange,
+  options = ["wordpress", "custom", "films"],
 }: {
   value: CmsType;
   onChange: (v: CmsType) => void;
+  /** Which CMS types to offer. Single-item publish passes WordPress + Custom
+   *  only — Films sites take table rows, not a single article. */
+  options?: readonly CmsType[];
 }) {
   const { t } = useT();
+  const label: Record<CmsType, string> = {
+    wordpress: t("bulkPub.cmsTypeWordPress"),
+    custom: t("bulkPub.cmsTypeCustom"),
+    films: t("bulkPub.cmsTypeFilms"),
+  };
+  const hint: Record<CmsType, string> = {
+    wordpress: t("bulkPub.cmsTypeWordPressHint"),
+    custom: t("bulkPub.cmsTypeCustomHint"),
+    films: t("bulkPub.cmsTypeFilmsHint"),
+  };
   return (
     <div>
       <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
         {t("bulkPub.cmsType")}
       </span>
       <div className="inline-flex rounded-md border border-neutral-300 p-0.5 dark:border-neutral-700">
-        {(["wordpress", "custom"] as const).map((c) => (
+        {options.map((c) => (
           <button
             key={c}
             type="button"
@@ -40,16 +54,12 @@ export function CmsTypeSegmented({
                 : "text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100")
             }
           >
-            {c === "wordpress"
-              ? t("bulkPub.cmsTypeWordPress")
-              : t("bulkPub.cmsTypeCustom")}
+            {label[c]}
           </button>
         ))}
       </div>
       <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-        {value === "wordpress"
-          ? t("bulkPub.cmsTypeWordPressHint")
-          : t("bulkPub.cmsTypeCustomHint")}
+        {hint[value]}
       </p>
     </div>
   );

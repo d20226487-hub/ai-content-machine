@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from app.cms.base import CmsClient
 from app.cms.custom import CustomCmsClient
+from app.cms.films import NEWS as FILMS_NEWS, FilmsClient
 from app.cms.wordpress import WordPressClient
 from app.core.crypto import decrypt
 from app.db.models import Domain
@@ -21,6 +22,8 @@ def get_cms_client(
     *,
     media_cache=None,
     custom_config_override: dict | None = None,
+    page_type: str | None = None,
+    operation: str = "create",
 ) -> CmsClient:
     """Build a CmsClient from a Domain row.
 
@@ -29,6 +32,9 @@ def get_cms_client(
     pin a built-in page type's endpoint + body template (see
     app/cms/custom_page_types.py) without mutating the Domain. Ignored for
     WordPress domains.
+
+    ``page_type`` / ``operation`` (Films only) say which import to run — the
+    Films API has one endpoint whose record_type + mode come from the run.
     """
     creds = (
         decrypt(domain.credentials_encrypted)
@@ -55,6 +61,14 @@ def get_cms_client(
                 if custom_config_override is not None
                 else domain.custom_config
             ),
+        )
+
+    if domain.cms_type == "films":
+        return FilmsClient(
+            base_url=domain.base_url,
+            credentials=creds,
+            page_type=page_type or FILMS_NEWS,
+            operation=operation,
         )
 
     raise UnsupportedCms(f"cms_type {domain.cms_type!r} is not supported")

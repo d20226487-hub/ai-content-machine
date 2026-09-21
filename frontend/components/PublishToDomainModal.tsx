@@ -101,7 +101,9 @@ export function PublishToDomainModal({
     listDomainsPicker({ page_size: 1 })
       .then((r) => {
         setFleetEmpty(r.items.length === 0);
-        if (r.items.length > 0) {
+        // Films sites aren't single-publish targets (they take table rows),
+        // so a Films-first fleet keeps the WordPress default.
+        if (r.items.length > 0 && r.items[0].cms_type !== "films") {
           setCmsType(r.items[0].cms_type);
         }
       })

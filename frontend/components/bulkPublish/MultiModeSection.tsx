@@ -25,6 +25,7 @@ export function MultiModeSection({
   languageColumnId,
   onLanguageColumnIdChange,
   columns,
+  domainOnly = false,
 }: {
   domainColumnId: number | "";
   onDomainColumnIdChange: (v: number | "") => void;
@@ -33,6 +34,9 @@ export function MultiModeSection({
   languageColumnId: number | "";
   onLanguageColumnIdChange: (v: number | "") => void;
   columns: BulkColumn[];
+  /** Films: rows only need a domain — the import API has no profiles and
+   *  no language, so those two pickers would be dead controls. */
+  domainOnly?: boolean;
 }) {
   const { t } = useT();
   return (
@@ -53,6 +57,8 @@ export function MultiModeSection({
           ))}
         </select>
       </Field>
+      {!domainOnly && (
+      <>
       <Field label={t("bulkPub.fieldProfileColumn")}>
         <select
           value={profileColumnId}
@@ -91,6 +97,8 @@ export function MultiModeSection({
           {t("bulkPub.languageColumnHint")}
         </p>
       </Field>
+      </>
+      )}
     </div>
   );
 }

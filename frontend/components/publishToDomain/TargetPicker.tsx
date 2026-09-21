@@ -49,7 +49,11 @@ export function TargetPicker({
 
   return (
     <div className="space-y-3">
-      <CmsTypeSegmented value={cmsType} onChange={onCmsTypeChange} />
+      <CmsTypeSegmented
+        value={cmsType}
+        onChange={onCmsTypeChange}
+        options={["wordpress", "custom"]}
+      />
       <div className="grid grid-cols-2 gap-3">
         <Field label={t("pubMod.fieldDomain")}>
           <DomainCombobox

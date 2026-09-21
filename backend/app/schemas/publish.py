@@ -3,6 +3,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.cms.films import SUPPORTED_OPERATIONS as FILMS_SUPPORTED_OPERATIONS
+
 JobStatus = Literal["queued", "posting", "posted", "failed", "skipped"]
 SourceKind = Literal["single", "bulk_row"]
 BulkRunStatus = Literal[
@@ -30,7 +32,12 @@ OnSlugConflict = Literal["create", "skip", "update"]
 # Built-in Custom CMS page type. 'ordinary' uses the domain's own endpoint +
 # body_template; 'match' pins the hardcoded /add-sport-page endpoint + sport
 # field set (see app/cms/custom_page_types.py). WordPress runs ignore it.
-CustomPageType = Literal["ordinary", "match"]
+CustomPageType = Literal[
+    "ordinary", "match",
+    # Films CMS record types (app/cms/films.py) — same column, since a run
+    # targets exactly one kind of page whichever CMS it is.
+    "films_news", "films_category", "films_comment",
+]
 
 
 class BulkPublishRequest(BaseModel):
@@ -123,6 +130,14 @@ class BulkPublishRequest(BaseModel):
             raise ValueError(
                 "The 'match' page type supports only Create and Update "
                 "(there is no upsert endpoint)."
+            )
+        # Films: each record type allows only what its import API does —
+        # categories are update-only, comments create-only.
+        allowed = FILMS_SUPPORTED_OPERATIONS.get(self.custom_page_type)
+        if allowed is not None and self.operation not in allowed:
+            raise ValueError(
+                f"Page type {self.custom_page_type!r} supports only: "
+                f"{', '.join(allowed)}."
             )
         return self
 

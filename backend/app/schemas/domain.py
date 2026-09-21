@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.ssrf import UnsafeUrlError, validate_public_url
 
-CmsType = Literal["wordpress", "custom"]
+CmsType = Literal["wordpress", "custom", "films"]
 AuthType = Literal["wp_app_password", "bearer", "api_key_header", "basic_auth"]
 MultilingualPlugin = Literal["none", "polylang", "wpml"]
 
@@ -325,6 +325,26 @@ class CustomCmsDefaultsUpdate(BaseModel):
     credentials: str | None = Field(default=None, max_length=500)
 
 
+class FilmsDefaultsRead(BaseModel):
+    """Shared Films connection settings. The password is never returned."""
+
+    credentials_configured: bool
+    # Login half of the shared credentials, shown so the operator can see
+    # which account is in use without exposing the password.
+    login: str = ""
+    endpoint_path: str
+    domain_count: int = 0
+
+
+class FilmsDefaultsUpdate(BaseModel):
+    """``login`` + ``password`` replace the shared credentials together.
+    ``password`` omitted/None keeps the stored one (so the login can be fixed
+    without retyping it); ``password == ""`` clears the credentials."""
+
+    login: str | None = Field(None, max_length=200)
+    password: str | None = Field(None, max_length=500)
+
+
 class SimpleDomainImport(BaseModel):
     """Bulk add for Custom CMS: the operator supplies only domains + languages.
 
@@ -339,6 +359,10 @@ class SimpleDomainImport(BaseModel):
     # Folder to drop the new domains into (the one the operator is looking at).
     # None = the implicit root. Existing domains keep their current folder.
     folder_id: int | None = None
+    # 'custom' = ``domain - langs`` lines stamped from the Custom CMS defaults;
+    # 'films' = bare domains stamped from the Films defaults (no languages —
+    # the Films import API has no language concept).
+    cms_type: Literal["custom", "films"] = "custom"
 
 
 class SimpleDomainImportResult(BaseModel):

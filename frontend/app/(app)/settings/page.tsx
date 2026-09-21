@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { AutotoolConfigCard } from "@/components/AutotoolConfigCard";
 import { BackupCard } from "@/components/BackupCard";
 import { CustomCmsDefaultsCard } from "@/components/CustomCmsDefaultsCard";
+import { FilmsDefaultsCard } from "@/components/FilmsDefaultsCard";
 import { BrainCard } from "@/components/BrainCard";
 import { GenerationDefaultsCard } from "@/components/GenerationDefaultsCard";
 import { PricingCard } from "@/components/PricingCard";
@@ -162,6 +163,7 @@ export default function SettingsPage() {
           <div className="flex flex-col gap-6">
             <PublishDefaultsCard />
             <CustomCmsDefaultsCard />
+            <FilmsDefaultsCard />
           </div>
         )}
         {tab === "autotool" && <AutotoolConfigCard />}

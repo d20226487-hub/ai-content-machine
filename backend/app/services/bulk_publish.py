@@ -26,6 +26,7 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.cms.custom_page_types import merged_custom_config
+from app.cms.films import is_films_page_type
 from app.cms.registry import UnsupportedCms, get_cms_client
 from app.db.models import (
     BulkPublishRun,
@@ -468,14 +469,35 @@ async def publish_one_row(
     # already rejected upsert/non-WP combinations at run creation; this
     # catches the case where a domain's cms_type changes between creation
     # and the worker picking up the row.
-    if run.operation == "upsert" and domain.cms_type != "custom":
+    if run.operation == "upsert" and domain.cms_type not in ("custom", "films"):
         await _record_failure(
             db,
             run=run,
             row_id=row_id,
             error=(
-                f"Upsert is supported only for Custom CMS domains "
+                f"Upsert is supported only for Custom CMS and Films domains "
                 f"(domain {domain.name!r} is {domain.cms_type})."
+            ),
+            domain_id_override=domain.id,
+        )
+        return "failed"
+
+    # The run's page type belongs to exactly one CMS: films_* to Films, the
+    # rest to Custom/WordPress. In multi mode a row can resolve to any domain,
+    # so a mismatch is a per-row failure with a readable reason rather than a
+    # request shaped for the wrong API.
+    films_run = is_films_page_type(run.custom_page_type)
+    if films_run != (domain.cms_type == "films"):
+        await _record_failure(
+            db,
+            run=run,
+            row_id=row_id,
+            error=(
+                f"Domain {domain.name!r} is {domain.cms_type}, not a Films site — "
+                "this run publishes Films pages."
+                if films_run
+                else f"Domain {domain.name!r} is a Films site; pick a Films page "
+                "type to publish to it."
             ),
             domain_id_override=domain.id,
         )
@@ -563,6 +585,8 @@ async def publish_one_row(
             domain,
             media_cache=media_cache,
             custom_config_override=custom_cfg_override,
+            page_type=run.custom_page_type,
+            operation=run.operation,
         )
     except UnsupportedCms as e:
         await _record_failure(

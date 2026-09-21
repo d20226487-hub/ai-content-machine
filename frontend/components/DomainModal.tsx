@@ -351,7 +351,9 @@ export function DomainModal({ domain, onClose, onSaved, defaultFolderId }: Props
       cms_type: cmsType,
       auth_type: authType,
       credentials: creds,
-      languages: langs.length > 0 ? langs : ["en"],
+      // Films sites have no languages (the import API has none); the "en"
+      // fallback is for the other CMSes, where an empty list is a mistake.
+      languages: cmsType === "films" ? [] : langs.length > 0 ? langs : ["en"],
       multilingual_plugin: cmsType === "wordpress" ? multilingualPlugin : "none",
       custom_config,
       publish_config,
@@ -427,17 +429,30 @@ export function DomainModal({ domain, onClose, onSaved, defaultFolderId }: Props
             >
               <option value="wordpress">{t("domainMod.cmsWordpress")}</option>
               <option value="custom">{t("domainMod.cmsCustom")}</option>
+              {/* Films domains are added via "Add domain → Films"; the option
+                  only exists so editing one shows its real type. */}
+              {cmsType === "films" && (
+                <option value="films">{t("domainMod.cmsFilms")}</option>
+              )}
             </select>
           </Field>
-          <Field label={t("domainMod.fieldLanguages")}>
-            <input
-              value={languagesText}
-              onChange={(e) => setLanguagesText(e.target.value)}
-              className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-              placeholder="en, de, fr"
-            />
-          </Field>
+          {cmsType !== "films" && (
+            <Field label={t("domainMod.fieldLanguages")}>
+              <input
+                value={languagesText}
+                onChange={(e) => setLanguagesText(e.target.value)}
+                className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+                placeholder="en, de, fr"
+              />
+            </Field>
+          )}
         </div>
+
+        {cmsType === "films" && (
+          <p className="rounded-md bg-neutral-50 px-3 py-2 text-xs text-neutral-600 dark:bg-neutral-800/50 dark:text-neutral-400">
+            {t("domainMod.filmsSharedCreds")}
+          </p>
+        )}
 
         {cmsType === "wordpress" && (
           <>

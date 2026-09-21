@@ -19,7 +19,70 @@ export type OnSlugConflict = "create" | "skip" | "update";
 /** Built-in Custom CMS page type. 'ordinary' uses the domain's own endpoint +
  *  body_template; 'match' pins the hardcoded /add-sport-page endpoint + the
  *  sport field set. WordPress runs ignore this. */
-export type CustomPageType = "ordinary" | "match";
+export type CustomPageType = "ordinary" | "match" | FilmsPageType;
+
+/** Films CMS record types — what a Films run publishes. Stored in the same
+ *  ``custom_page_type`` field as Custom CMS page types (a run targets one kind
+ *  of page whichever CMS it is). Mirrors app/cms/films.py. */
+export type FilmsPageType = "films_news" | "films_category" | "films_comment";
+export const FILMS_PAGE_TYPES: readonly FilmsPageType[] = [
+  "films_news",
+  "films_category",
+  "films_comment",
+];
+export function isFilmsPageType(v: string | null | undefined): v is FilmsPageType {
+  return v === "films_news" || v === "films_category" || v === "films_comment";
+}
+
+/** What each Films record type offers in the UI. Categories are update-only
+ *  and comments create-only by the import API. Films are update-only by
+ *  choice: the API (and backend SUPPORTED_OPERATIONS) also accepts create /
+ *  upsert, but new films aren't added from here. */
+export const FILMS_OPERATIONS: Record<FilmsPageType, readonly PublishOperation[]> = {
+  films_news: ["update"],
+  films_category: ["update"],
+  films_comment: ["create"],
+};
+
+/** Author/Comment pairs the comment mapping offers (COMMENT_PAIRS backend). */
+export const FILMS_COMMENT_PAIRS = 5;
+
+/** Mapping slots per Films record type. ``key`` is what the backend expects
+ *  (the API's own ``fields[]`` name where one exists); ``label`` is the CSV
+ *  column name from the site developer's spec, so the mapping reads the same
+ *  as their docs. */
+export const FILMS_FIELDS: Record<
+  FilmsPageType,
+  readonly { key: string; label: string; required?: boolean }[]
+> = {
+  films_news: [
+    { key: "kp_id_movie", label: "Kinopoisk ID" },
+    { key: "title", label: "Title", required: true },
+    { key: "metatitle", label: "Meta Title" },
+    { key: "descr", label: "Meta Description" },
+    { key: "short_story", label: "Краткое описание" },
+    { key: "full_story", label: "Полное описание" },
+    { key: "h1_title", label: "H1" },
+    { key: "poster", label: "Poster URL" },
+  ],
+  films_category: [
+    { key: "id", label: "Category ID" },
+    { key: "slug", label: "Category Slug" },
+    { key: "name", label: "Category Name" },
+    { key: "description", label: "Category Description" },
+    { key: "metatitle", label: "Category Meta Title" },
+    { key: "metadescription", label: "Category Meta Description" },
+    { key: "bottom_description", label: "Category Bottom Description" },
+  ],
+  films_comment: [
+    { key: "film_url", label: "Film URL" },
+    { key: "film_name", label: "Film Name" },
+    ...Array.from({ length: FILMS_COMMENT_PAIRS }, (_, i) => [
+      { key: `author_${i + 1}`, label: `Author ${i + 1}` },
+      { key: `comment_${i + 1}`, label: `Comment ${i + 1}` },
+    ]).flat(),
+  ],
+};
 
 /** The endpoints a 'match' run posts to — Create and Update hit different
  *  URLs. Mirrors the backend constant in app/cms/custom_page_types.py; kept

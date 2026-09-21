@@ -1,6 +1,6 @@
 import { api, getToken } from "@/lib/api";
 
-export type CmsType = "wordpress" | "custom";
+export type CmsType = "wordpress" | "custom" | "films";
 export type AuthType =
   | "wp_app_password"
   | "bearer"
@@ -342,10 +342,43 @@ export function bulkAddSimpleDomains(
   text: string,
   updateExisting = false,
   folderId: number | null = null,
+  cmsType: "custom" | "films" = "custom",
 ): Promise<SimpleDomainImportResult> {
   return api<SimpleDomainImportResult>("/domains/bulk-simple", {
     method: "POST",
-    body: { text, update_existing: updateExisting, folder_id: folderId },
+    body: {
+      text,
+      update_existing: updateExisting,
+      folder_id: folderId,
+      cms_type: cmsType,
+    },
+  });
+}
+
+// ---- Shared Films connection settings (Settings → Publishing) --------------
+
+export interface FilmsDefaults {
+  /** The password is never returned — only whether one is set. */
+  credentials_configured: boolean;
+  login: string;
+  endpoint_path: string;
+  /** Live Films domains that a new password will be applied to. */
+  domain_count: number;
+}
+
+export function getFilmsDefaults(): Promise<FilmsDefaults> {
+  return api<FilmsDefaults>("/publish/films-defaults");
+}
+
+/** Saving a new password re-stamps it onto every live Films domain. */
+export function saveFilmsDefaults(payload: {
+  login?: string;
+  /** "" clears; omitted keeps the stored one. */
+  password?: string;
+}): Promise<FilmsDefaults> {
+  return api<FilmsDefaults>("/publish/films-defaults", {
+    method: "PUT",
+    body: payload,
   });
 }
 

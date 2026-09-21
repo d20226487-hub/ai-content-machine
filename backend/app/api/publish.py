@@ -19,8 +19,13 @@ from app.schemas.publish import (
     PublishJobRead,
     PublishSingleRequest,
 )
-from app.schemas.domain import CustomCmsDefaultsRead, CustomCmsDefaultsUpdate
-from app.services import custom_cms_defaults
+from app.schemas.domain import (
+    CustomCmsDefaultsRead,
+    CustomCmsDefaultsUpdate,
+    FilmsDefaultsRead,
+    FilmsDefaultsUpdate,
+)
+from app.services import custom_cms_defaults, films_defaults
 from app.services.publish_rate_limit import (
     DomainRateLimits,
     load_global_defaults,
@@ -93,6 +98,28 @@ async def reapply_custom_cms_defaults(
     return {"updated": updated}
 
 
+@router.get("/films-defaults", response_model=FilmsDefaultsRead)
+async def get_films_defaults(
+    db: AsyncSession = Depends(get_db),
+) -> FilmsDefaultsRead:
+    """The shared basic-auth account every Films domain uses. Readable by
+    manager too (the bulk-add screen warns when it's missing); the password
+    itself is never returned."""
+    return await films_defaults.read_defaults(db)
+
+
+@router.put("/films-defaults", response_model=FilmsDefaultsRead)
+async def set_films_defaults(
+    payload: FilmsDefaultsUpdate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_role("admin")),
+) -> FilmsDefaultsRead:
+    """Admin-only: set the shared Films login/password. New credentials are
+    stamped onto every live Films domain in the same transaction — they carry
+    no other per-site config, so there's nothing to preserve."""
+    return await films_defaults.update_defaults(db, payload, actor.id)
+
+
 @router.post("/single", response_model=PublishJobDetail, status_code=status.HTTP_202_ACCEPTED)
 async def publish_single(
     payload: PublishSingleRequest,
@@ -111,6 +138,13 @@ async def publish_single(
     if domain is None or domain.deleted_at is not None:
         # Trashed domains are not pickable as publish targets.
         raise HTTPException(status_code=404, detail="Domain not found")
+    if domain.cms_type == "films":
+        # The Films import API takes table-shaped rows (film / category /
+        # comment); there's no single-article shape to map a library item to.
+        raise HTTPException(
+            status_code=400,
+            detail="Films sites are published to from a table (bulk publish).",
+        )
 
     # Validate required fields up front (per the chosen profile when WP).
     # For Custom CMS the placeholders in body_template imply the required
@@ -398,6 +432,40 @@ def _masked_auth_header(domain: Domain) -> tuple[str, str] | None:
     return None
 
 
+def _build_films_curl_preview(body: dict, domain: Domain) -> str:
+    """Films posts a one-row CSV as multipart, not JSON. Rebuild it as a
+    two-step snippet — write ``row.csv``, then upload it — so the preview is
+    runnable as-is (after swapping in the real password)."""
+    import csv as _csv
+    import io as _io
+
+    from app.cms.films import ENDPOINT_PATH
+
+    url = f"{(domain.base_url or '').rstrip('/')}{ENDPOINT_PATH}"
+    row = body.get("csv_file") if isinstance(body.get("csv_file"), dict) else {}
+    buf = _io.StringIO()
+    writer = _csv.writer(buf, lineterminator="\n")
+    writer.writerow(list(row.keys()))
+    writer.writerow(list(row.values()))
+
+    lines = [f"curl -X POST {_shell_single_quote(url)}"]
+    auth = _masked_auth_header(domain)
+    if auth is not None:
+        lines.append(f"  -H {_shell_single_quote(f'{auth[0]}: {auth[1]}')}")
+    lines.append("  -F 'csv_file=@row.csv'")
+    for key in ("record_type", "mode"):
+        if body.get(key):
+            lines.append(f"  -F {_shell_single_quote(f'{key}={body[key]}')}")
+    for field_name in body.get("fields[]") or []:
+        lines.append(f"  -F {_shell_single_quote(f'fields[]={field_name}')}")
+    return (
+        "cat > row.csv <<'CSV'\n"
+        + buf.getvalue()
+        + "CSV\n\n"
+        + " \\\n".join(lines)
+    )
+
+
 def _build_curl_preview(
     job: PublishJob, domain: Domain | None, endpoint_override: str | None = None
 ) -> str | None:
@@ -417,6 +485,9 @@ def _build_curl_preview(
     # nothing has hit the wire yet, so no curl.
     if not isinstance(body, dict) or "__fields" in body or domain is None:
         return None
+
+    if domain.cms_type == "films":
+        return _build_films_curl_preview(body, domain)
 
     base = (domain.base_url or "").rstrip("/")
     headers: list[tuple[str, str]] = [("Content-Type", "application/json")]

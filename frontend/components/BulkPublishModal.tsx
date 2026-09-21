@@ -10,6 +10,7 @@ import { CmsTypeSegmented } from "@/components/bulkPublish/CmsTypeSegmented";
 import { CustomCmsActionPanel } from "@/components/bulkPublish/CustomCmsActionPanel";
 import { CustomPageTypeSelector } from "@/components/bulkPublish/CustomPageTypeSelector";
 import { FieldMapping } from "@/components/bulkPublish/FieldMapping";
+import { FilmsPanel } from "@/components/bulkPublish/FilmsPanel";
 import { LanguageSync } from "@/components/bulkPublish/LanguageSync";
 import { MultiModeSection } from "@/components/bulkPublish/MultiModeSection";
 import { RowFilter } from "@/components/bulkPublish/RowFilter";
@@ -32,6 +33,9 @@ import {
   createBulkRun,
   getMappingMulti,
   getMappingSingle,
+  FILMS_FIELDS,
+  FILMS_OPERATIONS,
+  isFilmsPageType,
   MATCH_PAGE_FIELDS,
   type BulkPublishPayload,
   // Type aliases keep these distinct from the same-named components
@@ -162,17 +166,43 @@ export function BulkPublishModal({
   // Without this, a user whose entire fleet is Custom would land on the
   // WP-by-default segmented control and see an empty combobox until they
   // manually flipped to Custom. One small fetch avoids that papercut.
+  //
+  // The table itself wins over that fleet default: tables usually name their
+  // sites (a "Site" column), so the first input cell that is a known domain
+  // decides the CMS type, preselects that domain for single mode and the
+  // column for multi mode. Without this, a Films table opened on whatever
+  // CMS happened to sort first in the fleet.
+  // The column the detection found the domain in — re-offered as the multi
+  // mode domain column whenever that mode opens with none chosen.
+  const detectedDomainColumnRef = useRef<number | null>(null);
   useEffect(() => {
-    listDomainsPicker({ page_size: 1 })
-      .then((r) => {
-        if (r.items.length > 0) {
+    let cancelled = false;
+    detectTableTarget(table)
+      .catch(() => null)
+      .then(async (found) => {
+        if (cancelled) return;
+        if (found) {
+          setCmsTypeFilter(found.domain.cms_type);
+          setDomainId(found.domain.id);
+          setSelectedLabel(found.domain.name);
+          detectedDomainColumnRef.current = found.columnId;
+          setDomainColumnId((cur) => (cur === "" ? found.columnId : cur));
+          return;
+        }
+        const r = await listDomainsPicker({ page_size: 1 });
+        if (!cancelled && r.items.length > 0) {
           setCmsTypeFilter(r.items[0].cms_type);
         }
       })
       .catch((err) =>
         setLoadError(err instanceof ApiError ? err.message : t("pubMod.failedLoadDomains")),
       );
-  }, [t]);
+    return () => {
+      cancelled = true;
+    };
+    // Once per opened table; the table's columns don't change under the modal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [table.id, t]);
 
   // When the segmented control flips, the current selection (if any)
   // probably doesn't match the new type. Clear it; the combobox will
@@ -184,9 +214,31 @@ export function BulkPublishModal({
     setDomainId(null);
     setSelectedFullDomain(null);
     setSelectedLabel(null);
-    // Page type is Custom-only; a WP run is always 'ordinary'.
-    if (next !== "custom") setCustomPageType("ordinary");
+    // Page type follows the CMS: WP runs are always 'ordinary', Films runs
+    // always a films_* type (default: films), Custom picks ordinary/match.
+    if (next === "films") {
+      setCustomPageType("films_news");
+      if (!FILMS_OPERATIONS.films_news.includes(operation)) {
+        setOperation(FILMS_OPERATIONS.films_news[0]);
+      }
+    } else {
+      setCustomPageType("ordinary");
+    }
   }
+
+  // Belt for the paths that set the CMS type without going through the
+  // handler above (discovery on mount, saved-mapping restore): never leave a
+  // Films page type on a non-Films run or vice versa.
+  useEffect(() => {
+    const films = isFilmsPageType(customPageType);
+    if (cmsTypeFilter === "films" && !films) setCustomPageType("films_news");
+    else if (cmsTypeFilter !== "films" && films) setCustomPageType("ordinary");
+    // Same for the operation: auto-detection and saved mappings can land on
+    // one the page type doesn't offer (e.g. Create for films).
+    else if (films && !FILMS_OPERATIONS[customPageType].includes(operation)) {
+      setOperation(FILMS_OPERATIONS[customPageType][0]);
+    }
+  }, [cmsTypeFilter, customPageType, operation]);
 
   // Page-type change. 'match' offers only create/update (no upsert endpoint),
   // so if the user had Upsert selected, fall back to Create when switching to
@@ -297,6 +349,15 @@ export function BulkPublishModal({
     // schema is a constant — identical in single and multi mode regardless
     // of which domain a row resolves to. (This is why 'match' isn't subject
     // to the "multi mode reads one canonical domain's template" behavior.)
+    // Films record types have a fixed column set (the site's CSV format), so
+    // like 'match' the schema is a constant in both modes.
+    if (cmsTypeFilter === "films" && isFilmsPageType(customPageType)) {
+      return FILMS_FIELDS[customPageType].map((f) => ({
+        key: f.key,
+        label: f.label,
+        required: !!f.required,
+      }));
+    }
     if (cmsTypeFilter === "custom" && customPageType === "match") {
       return MATCH_PAGE_FIELDS.map((k) => ({
         key: k,
@@ -410,6 +471,38 @@ export function BulkPublishModal({
     userTouchedRef.current.operation = true;
     setOperation(op);
   }
+
+  // Restore the remembered page type + operation — but only values that fit
+  // the run's CMS. The server answers with a DEFAULT mapping (ordinary /
+  // create) when nothing is saved, and applying that blindly flipped a Films
+  // run back to a Custom page type with Create. `films` says whether the run
+  // targets Films; the CMS type is read through a ref because the restore
+  // callbacks close over a stale render.
+  const cmsTypeRef = useRef(cmsTypeFilter);
+  cmsTypeRef.current = cmsTypeFilter;
+  const restoreTokenRef = useRef(0);
+  function restorePageTypeAndOperation(
+    m: { custom_page_type?: CustomPageType | null; operation?: PublishOperation | null },
+    films: boolean,
+  ): CustomPageType | null {
+    let pageType: CustomPageType | null = null;
+    if (
+      m.custom_page_type &&
+      !userTouchedRef.current.customPageType &&
+      isFilmsPageType(m.custom_page_type) === films
+    ) {
+      pageType = m.custom_page_type;
+      setCustomPageType(pageType);
+    }
+    if (m.operation && !userTouchedRef.current.operation) {
+      // Films: only an operation the restored page type offers; with no page
+      // type restored, leave it to the CMS-consistency effect's default.
+      const ok = !films || (pageType != null && isFilmsPageType(pageType) &&
+        FILMS_OPERATIONS[pageType].includes(m.operation));
+      if (ok) setOperation(m.operation);
+    }
+    return pageType;
+  }
   function setLookupKindTouched(k: PublishLookupKind): void {
     userTouchedRef.current.lookupKind = true;
     setLookupKind(k);
@@ -426,12 +519,19 @@ export function BulkPublishModal({
 
     // Merge helper: prefer user-current entry for every field key that
     // still exists in the new schema; fill the rest from the server.
+    // A restore can change the page type — and with it the slot set — in the
+    // same tick, so the caller passes that page type's slots when it knows
+    // them; otherwise the saved columns would be filtered against the slots
+    // of the page type shown BEFORE the restore (and dropped).
     const mergeFieldMap = (
       serverMap: Record<string, number> | undefined,
+      slotKeysOverride?: readonly string[],
     ) => {
       setFieldToColumn((current) => {
         const next: Record<string, number> = {};
-        const slotKeys = new Set(slotsRef.current.map((s) => s.key));
+        const slotKeys = new Set(
+          slotKeysOverride ?? slotsRef.current.map((s) => s.key),
+        );
         // Belt: keep user-typed mappings for any slot still in the schema.
         for (const k of slotKeys) {
           if (current[k] != null) next[k] = current[k];
@@ -440,6 +540,12 @@ export function BulkPublishModal({
         return next;
       });
     };
+
+    // Latest request wins. The picker can auto-select one domain before the
+    // table-based detection switches to another; the first domain's mapping
+    // response then lands late and must not overwrite the second's state.
+    const token = ++restoreTokenRef.current;
+    const isStale = () => token !== restoreTokenRef.current;
 
     if (mode === "single") {
       if (!selected) {
@@ -450,7 +556,12 @@ export function BulkPublishModal({
       }
       getMappingSingle(table.id, selected.id, profileName)
         .then((m) => {
-          mergeFieldMap(m.field_to_column);
+          if (isStale()) return;
+          const restoredType = restorePageTypeAndOperation(
+            m,
+            selected.cms_type === "films",
+          );
+          mergeFieldMap(m.field_to_column, fixedSlotKeys(restoredType));
           // Back-fill target columns: keep user's current pick if any —
           // column IDs are table-scoped, not domain-scoped, so they
           // remain valid across domain switches.
@@ -471,9 +582,6 @@ export function BulkPublishModal({
           // Only seed these from the server when the user hasn't explicitly
           // touched them in this modal session. Once they pick "Update" by
           // hand, switching domains shouldn't roll it back to "Create".
-          if (m.operation && !userTouchedRef.current.operation) {
-            setOperation(m.operation);
-          }
           // Legacy back-compat: Custom CMS Update used to encode the
           // upstream post-id as field_to_column['id'] — there was no
           // lookup_column_id in the old payload. Migrate transparently
@@ -500,11 +608,9 @@ export function BulkPublishModal({
           if (m.on_slug_conflict && !userTouchedRef.current.onSlugConflict) {
             setOnSlugConflict(m.on_slug_conflict);
           }
-          if (m.custom_page_type && !userTouchedRef.current.customPageType) {
-            setCustomPageType(m.custom_page_type);
-          }
         })
         .catch(() => {
+          if (isStale()) return;
           // Server lookup failed — still drop fields that don't exist in
           // the new schema, but keep everything the user typed for slots
           // that DO exist. Passing `undefined` here is intentional.
@@ -513,7 +619,7 @@ export function BulkPublishModal({
     } else {
       getMappingMulti(table.id)
         .then((m) => {
-          mergeFieldMap(m.field_to_column);
+          if (isStale()) return;
           setPostIdTarget((cur) =>
             cur !== ""
               ? cur
@@ -533,9 +639,19 @@ export function BulkPublishModal({
           // Only seed these from the server when the user hasn't explicitly
           // touched them in this modal session. Once they pick "Update" by
           // hand, switching domains shouldn't roll it back to "Create".
-          if (m.operation && !userTouchedRef.current.operation) {
-            setOperation(m.operation);
+          // A remembered Films run reopens on Films; otherwise the saved values
+          // must fit whatever CMS the modal is on now.
+          const savedFilms = isFilmsPageType(m.custom_page_type);
+          if (savedFilms && !userTouchedRef.current.customPageType) {
+            setCmsTypeFilter("films");
           }
+          const restoredType = restorePageTypeAndOperation(
+            m,
+            savedFilms && !userTouchedRef.current.customPageType
+              ? true
+              : cmsTypeRef.current === "films",
+          );
+          mergeFieldMap(m.field_to_column, fixedSlotKeys(restoredType));
           // Legacy back-compat (same migration as the single-mode branch
           // above): if the saved multi mapping is a Custom-CMS Update
           // that encoded the id via field_to_column['id'], lift it into
@@ -562,9 +678,6 @@ export function BulkPublishModal({
           if (m.on_slug_conflict && !userTouchedRef.current.onSlugConflict) {
             setOnSlugConflict(m.on_slug_conflict);
           }
-          if (m.custom_page_type && !userTouchedRef.current.customPageType) {
-            setCustomPageType(m.custom_page_type);
-          }
         })
         .catch(() => {
           // No saved multi mapping yet — fine.
@@ -580,6 +693,8 @@ export function BulkPublishModal({
       // Leaving single → clear single-mode targets; multi-mode columns load
       // from saved mapping in the effect above.
       setProfileName(null);
+      const detected = detectedDomainColumnRef.current;
+      if (detected != null) setDomainColumnId((cur) => (cur === "" ? detected : cur));
     } else {
       // Leaving multi → clear multi-mode column refs; domain dropdown will
       // reset to the first credentialled option already-loaded in `domains`.
@@ -889,9 +1004,39 @@ export function BulkPublishModal({
     // Per-CMS, per-operation submit-time validation. Keep the messages
     // specific so the user knows exactly what to fix.
     const cmsType = cmsTypeFilter;
-    if (operation === "upsert" && cmsType !== "custom") {
+    if (operation === "upsert" && cmsType === "wordpress") {
       setError(t("bulkPub.upsertCustomOnly"));
       return;
+    }
+    if (cmsType === "films" && isFilmsPageType(customPageType)) {
+      // The site finds records by the identifying columns, so those must be
+      // mapped; everything else is optional. Mirrors build_request in
+      // app/cms/films.py so the user hears it before any row is sent.
+      const mapped = (k: string) => fieldToColumn[k] != null;
+      if (customPageType === "films_news" && !mapped("title")) {
+        setError(t("bulkPub.filmsNeedTitle"));
+        return;
+      }
+      if (customPageType === "films_category") {
+        if (!["id", "slug", "name"].some(mapped)) {
+          setError(t("bulkPub.filmsCategoryNeedId"));
+          return;
+        }
+        if (!["description", "metatitle", "metadescription", "bottom_description"].some(mapped)) {
+          setError(t("bulkPub.filmsCategoryNeedField"));
+          return;
+        }
+      }
+      if (customPageType === "films_comment") {
+        if (!mapped("film_url") && !mapped("film_name")) {
+          setError(t("bulkPub.filmsCommentNeedFilm"));
+          return;
+        }
+        if (!Object.keys(fieldToColumn).some((k) => k.startsWith("comment_"))) {
+          setError(t("bulkPub.filmsCommentNeedText"));
+          return;
+        }
+      }
     }
     if (operation === "update" && cmsType === "wordpress") {
       // WP update path uses find_post → PATCH, needs the lookup column.
@@ -912,6 +1057,7 @@ export function BulkPublishModal({
     }
 
     if (
+      cmsType === "wordpress" &&
       operation === "create" &&
       onSlugConflict !== "create" &&
       !("slug" in fieldToColumn)
@@ -970,10 +1116,14 @@ export function BulkPublishModal({
       operation,
       // Custom-only; WP runs always send 'ordinary'. The server also
       // rejects 'match' against a non-Custom domain as a safety net.
-      custom_page_type: cmsTypeFilter === "custom" ? customPageType : "ordinary",
+      custom_page_type:
+        cmsTypeFilter === "wordpress" ? "ordinary" : customPageType,
     };
 
-    if (operation === "update" && lookupColumnId !== "") {
+    if (cmsType === "films") {
+      // The site resolves existing records itself — no lookup_* and no
+      // slug-conflict pre-check (that's a WordPress REST feature).
+    } else if (operation === "update" && lookupColumnId !== "") {
       // Send lookup_kind + lookup_column_id for both WP and Custom CMS
       // Update — the backend bridges the Custom-CMS case into the
       // legacy field_to_column['id'] format so the worker path is
@@ -1081,7 +1231,14 @@ export function BulkPublishModal({
         {/* CMS-specific operation panel. WP shows operation + conflict +
             lookup; Custom shows a placeholder until the action-injection
             wiring lands in the follow-up PR. */}
-        {cmsTypeFilter === "wordpress" ? (
+        {cmsTypeFilter === "films" ? (
+          <FilmsPanel
+            pageType={isFilmsPageType(customPageType) ? customPageType : "films_news"}
+            onPageTypeChange={onCustomPageTypeChange}
+            operation={operation}
+            onOperationChange={setOperationTouched}
+          />
+        ) : cmsTypeFilter === "wordpress" ? (
           <WordPressOperationPanel
             operation={operation}
             onOperationChange={setOperationTouched}
@@ -1147,6 +1304,7 @@ export function BulkPublishModal({
             languageColumnId={languageColumnId}
             onLanguageColumnIdChange={setLanguageColumnId}
             columns={eligibleColumns}
+            domainOnly={cmsTypeFilter === "films"}
           />
         )}
 
@@ -1177,13 +1335,17 @@ export function BulkPublishModal({
               onClear={onClear}
               emptyMessage={mappingEmptyMessage}
             />
-            <BackFill
-              postIdTarget={postIdTarget}
-              postUrlTarget={postUrlTarget}
-              onPostIdTargetChange={setPostIdTarget}
-              onPostUrlTargetChange={setPostUrlTarget}
-              columns={eligibleColumns}
-            />
+            {/* The Films import API returns counts only — no post id/URL —
+                so there's nothing to write back. */}
+            {cmsTypeFilter !== "films" && (
+              <BackFill
+                postIdTarget={postIdTarget}
+                postUrlTarget={postUrlTarget}
+                onPostIdTargetChange={setPostIdTarget}
+                onPostUrlTargetChange={setPostUrlTarget}
+                columns={eligibleColumns}
+              />
+            )}
           </div>
         )}
 
@@ -1325,4 +1487,54 @@ function collectPlaceholders(node: unknown, out: Set<string> = new Set()): strin
     );
   }
   return Array.from(out);
+}
+
+/** A cell value reduced to a bare lowercase host, or "" if it isn't one.
+ *  Accepts "site.com", "https://site.com/path" and "www.site.com". */
+function asHost(raw: string): string {
+  const v = raw.trim().toLowerCase();
+  if (!v || /\s/.test(v)) return "";
+  const host = v.replace(/^[a-z]+:\/\//, "").split(/[/?#]/)[0].replace(/^www\./, "");
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/.test(host) ? host : "";
+}
+
+/** Find the first known domain named in the table's input columns.
+ *
+ *  Reads only input columns (short cells like "Site"), never generated
+ *  output, and checks a bounded number of distinct hosts so a table full of
+ *  unrelated URLs can't turn into dozens of lookups. */
+async function detectTableTarget(
+  table: BulkTable,
+): Promise<{ domain: DomainPickerItem; columnId: number } | null> {
+  // Columns named like a site/domain column are checked first, so a "Links"
+  // column that happens to hold one of our URLs can't win over "Site".
+  const named = /domain|site|host|url|сайт|домен/i;
+  const inputCols = table.columns
+    .filter((c) => c.kind === "input")
+    .sort((a, b) => Number(named.test(b.name)) - Number(named.test(a.name)))
+    .map((c) => c.id);
+  if (inputCols.length === 0) return null;
+  const cv = await getColumnValues(table.id, inputCols);
+  const checked = new Set<string>();
+  for (const row of cv.rows.slice(0, 50)) {
+    for (const colId of inputCols) {
+      const host = asHost(cv.values?.[row.id]?.[colId] ?? "");
+      if (!host || checked.has(host)) continue;
+      if (checked.size >= 8) return null;
+      checked.add(host);
+      const r = await listDomainsPicker({ q: host, page_size: 5 });
+      const hit = r.items.find((d) => d.name.toLowerCase().replace(/^www\./, "") === host);
+      if (hit) return { domain: hit, columnId: colId };
+    }
+  }
+  return null;
+}
+
+/** Slot keys of page types whose schema is a constant (Films record types,
+ *  Custom "match"), or undefined for schemas derived from a domain. */
+function fixedSlotKeys(pageType: CustomPageType | null): readonly string[] | undefined {
+  if (pageType == null) return undefined;
+  if (isFilmsPageType(pageType)) return FILMS_FIELDS[pageType].map((f) => f.key);
+  if (pageType === "match") return MATCH_PAGE_FIELDS;
+  return undefined;
 }

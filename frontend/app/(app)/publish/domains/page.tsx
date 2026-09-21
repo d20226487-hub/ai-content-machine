@@ -771,6 +771,8 @@ export default function DomainsPage() {
                             "inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ring-1 ring-inset " +
                             (d.cms_type === "wordpress"
                               ? "bg-blue-50 text-blue-700 ring-blue-600/10 dark:bg-blue-950/40 dark:text-blue-400 dark:ring-blue-400/30"
+                              : d.cms_type === "films"
+                              ? "bg-amber-50 text-amber-800 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-400/30"
                               : "bg-violet-50 text-violet-700 ring-violet-600/10 dark:bg-violet-950/40 dark:text-violet-400 dark:ring-violet-400/30")
                           }
                         >

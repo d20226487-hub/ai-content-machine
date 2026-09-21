@@ -24,6 +24,7 @@ from sqlalchemy import delete as sa_delete, func, select, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_role
+from app.cms.films import is_films_page_type
 from app.db.models import (
     BulkPublishRun,
     BulkTable,
@@ -103,7 +104,30 @@ async def create_bulk_publish_run(
         profile = _norm_profile(payload.profile_name)
         # A non-default Custom CMS page type ('match') only makes sense for
         # Custom domains — it pins a Custom-API endpoint + body template.
-        if payload.custom_page_type != "ordinary" and domain.cms_type != "custom":
+        # Films page types (films_*) belong to Films domains, and a Films
+        # domain accepts nothing else — its API has no "ordinary" post.
+        films_type = is_films_page_type(payload.custom_page_type)
+        if films_type and domain.cms_type != "films":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Page type {payload.custom_page_type!r} is only available "
+                    f"for Films domains; {domain.name!r} is {domain.cms_type}."
+                ),
+            )
+        if domain.cms_type == "films" and not films_type:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{domain.name!r} is a Films site — choose a Films page type "
+                    "(film, category or comment)."
+                ),
+            )
+        if (
+            not films_type
+            and payload.custom_page_type != "ordinary"
+            and domain.cms_type != "custom"
+        ):
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -116,11 +140,11 @@ async def create_bulk_publish_run(
         # gets a clear rejection instead of every row failing one by one.
         # Multi mode validates per-row in resolve_row_target since each row
         # may point at a different cms_type.
-        if payload.operation == "upsert" and domain.cms_type != "custom":
+        if payload.operation == "upsert" and domain.cms_type not in ("custom", "films"):
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Upsert is supported only for Custom CMS domains. "
+                    "Upsert is supported only for Custom CMS and Films domains. "
                     f"{domain.name!r} is configured as {domain.cms_type}; "
                     "use Create or Update instead."
                 ),

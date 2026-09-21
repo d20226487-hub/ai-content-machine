@@ -8,7 +8,7 @@ import { ApiError } from "@/lib/api";
 import {
   bulkAddSimpleDomains,
   getCustomCmsDefaults,
-  type CustomCmsDefaults,
+  getFilmsDefaults,
   type SimpleDomainImportResult,
 } from "@/lib/domains";
 import { useT } from "@/lib/i18n-context";
@@ -21,6 +21,9 @@ import { useT } from "@/lib/i18n-context";
  * Settings → Publishing. So the Custom path is a bulk paste of
  * ``domain.com - en, es, ru`` lines (first language = default) rather than a
  * form with a dozen fields repeated per site.
+ *
+ * Films works the same way minus the languages: one bare domain per line, and
+ * the shared Films login/password (Settings → Publishing → Films) is applied.
  *
  * WordPress keeps the full per-domain form: profiles, post types and app
  * passwords genuinely differ per site, so choosing it hands back to the
@@ -42,7 +45,7 @@ export function AddDomainModal({
 }) {
   const { t } = useT();
   const [step, setStep] = useState<"choose" | "paste">("choose");
-  const [cms, setCms] = useState<"custom" | "wordpress">("custom");
+  const [cms, setCms] = useState<"custom" | "films" | "wordpress">("custom");
 
   const [text, setText] = useState("");
   const [updateExisting, setUpdateExisting] = useState(false);
@@ -52,13 +55,26 @@ export function AddDomainModal({
 
   // Shown on the paste step so the operator can see what will be stamped on —
   // and is warned before pasting 50 domains if the shared password is missing.
-  const [defaults, setDefaults] = useState<CustomCmsDefaults | null>(null);
+  // Normalized across both CMSes: what the paste step needs to show.
+  const [defaults, setDefaults] = useState<
+    { configured: boolean; endpoint: string } | null
+  >(null);
   useEffect(() => {
     if (step !== "paste") return;
-    getCustomCmsDefaults()
-      .then(setDefaults)
-      .catch(() => setDefaults(null));
-  }, [step]);
+    setDefaults(null);
+    const load =
+      cms === "films"
+        ? getFilmsDefaults().then((d) => ({
+            configured: d.credentials_configured,
+            endpoint: d.endpoint_path,
+          }))
+        : getCustomCmsDefaults().then((d) => ({
+            configured: d.credentials_configured,
+            endpoint: d.endpoint_path,
+          }));
+    load.then(setDefaults).catch(() => setDefaults(null));
+  }, [step, cms]);
+  const isFilms = cms === "films";
 
   function proceed() {
     if (cms === "wordpress") {
@@ -73,7 +89,12 @@ export function AddDomainModal({
     setBusy(true);
     setError(null);
     try {
-      const r = await bulkAddSimpleDomains(text, updateExisting, folderId);
+      const r = await bulkAddSimpleDomains(
+        text,
+        updateExisting,
+        folderId,
+        isFilms ? "films" : "custom",
+      );
       setResult(r);
       if (r.created > 0 || r.updated > 0) onImported(r);
     } catch (e) {
@@ -98,6 +119,7 @@ export function AddDomainModal({
             {(
               [
                 { key: "custom", label: t("addDomain.custom"), hint: t("addDomain.customHint") },
+                { key: "films", label: t("addDomain.films"), hint: t("addDomain.filmsHint") },
                 { key: "wordpress", label: t("addDomain.wordpress"), hint: t("addDomain.wordpressHint") },
               ] as const
             ).map((opt) => (
@@ -149,13 +171,13 @@ export function AddDomainModal({
       ) : (
         <>
           <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
-            {t("addDomain.pasteHint")}
+            {isFilms ? t("addDomain.filmsPasteHint") : t("addDomain.pasteHint")}
           </p>
 
           {/* No shared password → the API refuses the batch. Say so up front. */}
-          {defaults && !defaults.credentials_configured && (
+          {defaults && !defaults.configured && (
             <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-              {t("addDomain.noPassword")}{" "}
+              {isFilms ? t("addDomain.filmsNoPassword") : t("addDomain.noPassword")}{" "}
               <Link
                 href="/settings?tab=publishing"
                 className="font-medium underline underline-offset-2"
@@ -170,14 +192,18 @@ export function AddDomainModal({
             value={text}
             onChange={(e) => setText(e.target.value)}
             spellCheck={false}
-            placeholder={"example.com - en, es, ru\nexample.org - es, en"}
+            placeholder={
+              isFilms
+                ? "films-site.com\nanother-films-site.net"
+                : "example.com - en, es, ru\nexample.org - es, en"
+            }
             data-testid="add-domain-textarea"
             className="mt-3 block w-full rounded-md border border-neutral-300 px-3 py-2 font-mono text-sm focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
           />
 
           {defaults && (
             <p className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
-              {t("addDomain.appliedConfig", { endpoint: defaults.endpoint_path })}
+              {t("addDomain.appliedConfig", { endpoint: defaults.endpoint })}
             </p>
           )}
 
@@ -192,7 +218,9 @@ export function AddDomainModal({
             <span>
               <span className="font-medium">{t("addDomain.updateExisting")}</span>
               <span className="mt-0.5 block text-xs text-neutral-500 dark:text-neutral-400">
-                {t("addDomain.updateExistingHint")}
+                {isFilms
+                  ? t("addDomain.filmsUpdateExistingHint")
+                  : t("addDomain.updateExistingHint")}
               </span>
             </span>
           </label>

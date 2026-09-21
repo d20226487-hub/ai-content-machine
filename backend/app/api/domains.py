@@ -28,7 +28,7 @@ from app.core.crypto import decrypt, encrypt
 from app.core.ssrf import SafeAsyncTransport, UnsafeUrlError, validate_public_url
 from app.db.models import AppSetting, BulkPublishRun, Domain, DomainFolder, User
 from app.db.session import get_db
-from app.services import custom_cms_defaults
+from app.services import custom_cms_defaults, films_defaults
 from app.services.media_cache import clear_for_domain, count_for_domain
 from app.schemas.domain import (
     CsvImportResult,
@@ -199,10 +199,10 @@ async def list_domains_picker(
 
     if cms_type:
         ct = cms_type.strip().lower()
-        if ct not in ("wordpress", "custom"):
+        if ct not in ("wordpress", "custom", "films"):
             raise HTTPException(
                 status_code=400,
-                detail=f"cms_type must be 'wordpress' or 'custom' (got {ct!r}).",
+                detail=f"cms_type must be 'wordpress', 'custom' or 'films' (got {ct!r}).",
             )
         base = base.where(Domain.cms_type == ct)
         count_base = count_base.where(Domain.cms_type == ct)
@@ -292,10 +292,10 @@ async def list_domains_picker_ids(
 
     if cms_type:
         ct = cms_type.strip().lower()
-        if ct not in ("wordpress", "custom"):
+        if ct not in ("wordpress", "custom", "films"):
             raise HTTPException(
                 status_code=400,
-                detail=f"cms_type must be 'wordpress' or 'custom' (got {ct!r}).",
+                detail=f"cms_type must be 'wordpress', 'custom' or 'films' (got {ct!r}).",
             )
         base = base.where(Domain.cms_type == ct)
 
@@ -1284,7 +1284,11 @@ async def bulk_simple_import(
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> SimpleDomainImportResult:
-    """Add Custom CMS domains from ``domain.com - en, es, ru`` lines.
+    """Add Custom CMS or Films domains from a pasted list.
+
+    Custom CMS: ``domain.com - en, es, ru`` lines. Films: one bare domain per
+    line — the Films import API has no language concept, and its only per-site
+    config is the shared login/password (Settings → Publishing → Films).
 
     The operator supplies only the domain and its languages (first = default);
     endpoint, body template, response paths and the shared basic-auth password
@@ -1297,15 +1301,23 @@ async def bulk_simple_import(
     Without the flag it's reported as skipped, so a re-paste can't silently
     overwrite hand-tuned sites. Per-line failures never abort the batch.
     """
-    cfg, creds = await custom_cms_defaults.effective(db)
+    is_films = payload.cms_type == "films"
+    cfg = None
+    if is_films:
+        creds = await films_defaults.effective_credentials(db)
+        auth_type = films_defaults.AUTH_TYPE
+    else:
+        cfg, creds = await custom_cms_defaults.effective(db)
+        auth_type = custom_cms_defaults.AUTH_TYPE
     if not creds:
         # Every created domain would be unable to authenticate; refuse the whole
         # batch rather than leave a fleet of broken sites behind.
+        where = "Films" if is_films else "Custom CMS"
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "Set the shared Custom CMS password first "
-                "(Settings → Publishing → Custom CMS)."
+                f"Set the shared {where} password first "
+                f"(Settings → Publishing → {where})."
             ),
         )
 
@@ -1320,26 +1332,29 @@ async def bulk_simple_import(
     for idx, line in enumerate(payload.text.splitlines(), start=1):
         if not line.strip():
             continue
-        m = _SIMPLE_LINE_RE.match(line)
-        if not m:
-            result.errors.append(
-                {"line": idx, "detail": "Expected 'domain.com - en, es'"}
-            )
-            result.skipped += 1
-            continue
-
-        host = _simple_host(m.group("domain"))
         langs: list[str] = []
-        for tok in m.group("langs").replace(";", ",").split(","):
-            code = tok.strip().lower()
-            if code and code not in langs:
-                langs.append(code)
+        if is_films:
+            # Bare domain; tolerate a pasted "domain - ru" by ignoring the tail.
+            host = _simple_host(line.split()[0])
+        else:
+            m = _SIMPLE_LINE_RE.match(line)
+            if not m:
+                result.errors.append(
+                    {"line": idx, "detail": "Expected 'domain.com - en, es'"}
+                )
+                result.skipped += 1
+                continue
+            host = _simple_host(m.group("domain"))
+            for tok in m.group("langs").replace(";", ",").split(","):
+                code = tok.strip().lower()
+                if code and code not in langs:
+                    langs.append(code)
 
         if "." not in host:
             result.errors.append({"line": idx, "detail": f"Not a domain: {host}"})
             result.skipped += 1
             continue
-        if not langs:
+        if not langs and not is_films:
             result.errors.append({"line": idx, "detail": "No languages given"})
             result.skipped += 1
             continue
@@ -1354,8 +1369,8 @@ async def bulk_simple_import(
             create = DomainCreate(
                 name=host,
                 base_url=base_url,
-                cms_type="custom",
-                auth_type=custom_cms_defaults.AUTH_TYPE,
+                cms_type=payload.cms_type,
+                auth_type=auth_type,
                 languages=langs,
                 multilingual_plugin="none",
                 credentials=creds,
@@ -1401,9 +1416,17 @@ async def bulk_simple_import(
                 )
                 result.skipped += 1
                 continue
+            if existing.cms_type != payload.cms_type:
+                # Never convert a site between CMS types as a side effect of a
+                # paste — that would wipe its config for the other type.
+                result.errors.append(
+                    {"line": idx, "detail": f"Already exists as {existing.cms_type}: {host}"}
+                )
+                result.skipped += 1
+                continue
             existing.languages = langs
-            existing.custom_config = cfg.model_dump()
-            existing.auth_type = custom_cms_defaults.AUTH_TYPE
+            existing.custom_config = cfg.model_dump() if cfg else None
+            existing.auth_type = auth_type
             existing.credentials_encrypted = encrypt(creds)
             # Re-adding a trashed domain should make it usable again.
             existing.deleted_at = None
@@ -1414,11 +1437,11 @@ async def bulk_simple_import(
         domain = Domain(
             name=host,
             base_url=base_url,
-            cms_type="custom",
-            auth_type=custom_cms_defaults.AUTH_TYPE,
+            cms_type=payload.cms_type,
+            auth_type=auth_type,
             languages=langs,
             multilingual_plugin="none",
-            custom_config=cfg.model_dump(),
+            custom_config=cfg.model_dump() if cfg else None,
             created_by_id=actor.id,
             credentials_encrypted=encrypt(creds),
             folder_id=payload.folder_id,
@@ -1588,6 +1611,11 @@ def _validate_payload(
                 "Custom domains must use auth_type='bearer', 'api_key_header', "
                 "or 'basic_auth'"
             ),
+        )
+    if cms_type == "films" and auth_type != "basic_auth":
+        raise HTTPException(
+            status_code=400,
+            detail="Films domains must use auth_type='basic_auth'",
         )
     if cms_type == "custom" and custom_config is None:
         raise HTTPException(
