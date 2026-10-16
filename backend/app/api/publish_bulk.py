@@ -273,6 +273,16 @@ async def create_bulk_publish_run(
                 _bridge_key: payload.lookup_column_id,
             }
 
+    # The Films import API has no language: no language field in the CSV, no
+    # per-site language list. Drop whatever the caller sent (a saved mapping
+    # from another CMS, or an API client) so the run and its rows don't show a
+    # language that had no effect on anything.
+    if is_films_page_type(payload.custom_page_type):
+        run_language: str | None = None
+        language_column_id = None
+    else:
+        run_language = payload.language
+
     run = BulkPublishRun(
         table_id=table.id,
         mode=payload.mode,
@@ -281,7 +291,7 @@ async def create_bulk_publish_run(
         domain_column_id=domain_column_id,
         profile_column_id=profile_column_id,
         language_column_id=language_column_id,
-        language=payload.language,
+        language=run_language,
         row_filter=payload.row_filter,
         selection=payload.selection,
         cell_filter=payload.cell_filter,
@@ -311,7 +321,7 @@ async def create_bulk_publish_run(
             profile_column_id=profile_column_id,
             field_to_column=run.field_to_column,
             back_fill=run.back_fill,
-            language=payload.language,
+            language=run_language,
             actor_id=actor.id,
             operation=payload.operation,
             lookup_kind=lookup_kind,

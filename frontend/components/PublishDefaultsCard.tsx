@@ -8,6 +8,8 @@ import {
   getPublishDefaults,
   setPublishDefaults,
   type PublishDefaults,
+  type PublishDefaultsByCms,
+  type PublishDefaultsCms,
 } from "@/lib/publish";
 
 const FIELDS: Array<{
@@ -23,16 +25,28 @@ const FIELDS: Array<{
   { key: "backoff_jitter_ms", labelKey: "settings.backoffJitter", step: 50 },
 ];
 
+const CMS_TABS: Array<{ key: PublishDefaultsCms; labelKey: TranslationKey }> = [
+  { key: "wordpress", labelKey: "bulkPub.cmsTypeWordPress" },
+  { key: "custom", labelKey: "bulkPub.cmsTypeCustom" },
+  { key: "films", labelKey: "bulkPub.cmsTypeFilms" },
+];
+
 export function PublishDefaultsCard() {
   const { t } = useT();
-  const [values, setValues] = useState<PublishDefaults | null>(null);
+  // All three sets are held at once so switching tabs keeps unsaved edits;
+  // saving writes only the tab in view.
+  const [all, setAll] = useState<PublishDefaultsByCms | null>(null);
+  const [cms, setCms] = useState<PublishDefaultsCms>("wordpress");
+  const values = all ? all[cms] : null;
+  const setValues = (next: PublishDefaults) =>
+    setAll((cur) => (cur ? { ...cur, [cms]: next } : cur));
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
   useEffect(() => {
     getPublishDefaults()
-      .then(setValues)
+      .then(setAll)
       .catch((err) =>
         setLoadError(err instanceof ApiError ? err.message : t("common.failedToLoad")),
       );
@@ -42,7 +56,7 @@ export function PublishDefaultsCard() {
     if (!values) return;
     setSaving(true);
     try {
-      const next = await setPublishDefaults(values);
+      const next = await setPublishDefaults(cms, values);
       setValues(next);
       setSavedAt(Date.now());
     } catch (err) {
@@ -59,6 +73,34 @@ export function PublishDefaultsCard() {
       </h2>
       <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
         {t("settings.publishDefaultsHint")}
+      </p>
+
+      <div className="mt-3 inline-flex rounded-md border border-neutral-300 p-0.5 dark:border-neutral-700">
+        {CMS_TABS.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setCms(tab.key)}
+            data-testid={`publish-defaults-${tab.key}`}
+            className={
+              "rounded px-3 py-1 text-sm font-medium transition-colors " +
+              (cms === tab.key
+                ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                : "text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100")
+            }
+          >
+            {t(tab.labelKey)}
+          </button>
+        ))}
+      </div>
+      <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+        {t(
+          cms === "films"
+            ? "settings.publishDefaultsFilmsHint"
+            : cms === "custom"
+            ? "settings.publishDefaultsCustomHint"
+            : "settings.publishDefaultsWpHint",
+        )}
       </p>
 
       {loadError && (

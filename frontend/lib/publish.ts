@@ -108,12 +108,21 @@ export interface PublishDefaults {
   respect_retry_after: boolean;
 }
 
+/** Defaults per CMS type — WordPress REST, the in-house Custom CMS and a
+ *  Films CSV import tolerate very different pressure. A domain's own values
+ *  still win over these. */
+export type PublishDefaultsCms = "wordpress" | "custom" | "films";
+export type PublishDefaultsByCms = Record<PublishDefaultsCms, PublishDefaults>;
+
 export function getPublishDefaults() {
-  return api<PublishDefaults>("/publish/defaults");
+  return api<PublishDefaultsByCms>("/publish/defaults");
 }
 
-export function setPublishDefaults(payload: PublishDefaults) {
-  return api<PublishDefaults>("/publish/defaults", {
+export function setPublishDefaults(
+  cmsType: PublishDefaultsCms,
+  payload: PublishDefaults,
+) {
+  return api<PublishDefaults>(`/publish/defaults/${cmsType}`, {
     method: "PUT",
     body: payload,
   });

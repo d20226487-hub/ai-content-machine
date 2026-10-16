@@ -369,7 +369,10 @@ export const en = {
     "0 turns reasoning off so the whole ceiling goes to the answer.",
   "settings.publishDefaults": "Publish defaults",
   "settings.publishDefaultsHint":
-    "Global rate limits applied to every domain unless that domain has its own override (set in Edit domain → Rate limits).",
+    "Rate limits for the selected CMS type. They apply to every domain of that type unless the domain has its own override (set in Edit domain → Rate limits).",
+  "settings.publishDefaultsWpHint": "Applies to every WordPress domain without its own limits.",
+  "settings.publishDefaultsCustomHint": "Applies to every Custom CMS domain without its own limits.",
+  "settings.publishDefaultsFilmsHint": "Applies to every Films site without its own limits. Their import handles one CSV at a time — a single parallel request is usually right.",
   "settings.publishDefaultsRpm": "Requests per minute",
   "settings.respectRetryAfterHint": "Respect Retry-After header on 429s",
   "settings.saveDefaults": "Save defaults",

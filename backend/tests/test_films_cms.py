@@ -53,6 +53,25 @@ def test_news_create_maps_to_import_new_with_api_headers():
     assert _csv(text) == {
         "Kinopoisk ID": "325", "Title": "Крестный отец", "Краткое описание": "Кратко",
     }
+    # The mapped-but-empty cell is called out on the row: it is NOT sent, so
+    # the site keeps its current value — which used to look like a silent
+    # "the update didn't work".
+    assert warnings == [
+        "Empty cells, not sent (the site keeps its current value): Meta Description"
+    ]
+
+
+def test_no_warning_when_every_mapped_cell_has_a_value():
+    _, _, warnings = build_request(NEWS, "update", {"title": "X", "metatitle": "Y"})
+    assert warnings == []
+
+
+def test_empty_comment_pairs_are_not_reported_as_forgotten():
+    # A blank Author/Comment pair is how you say "no more comments".
+    _, _, warnings = build_request(
+        COMMENT, "create",
+        {"film_name": "Фильм", "comment_1": "Отлично", "author_1": "", "comment_2": "", "author_2": ""},
+    )
     assert warnings == []
 
 
@@ -218,6 +237,27 @@ def test_all_skipped_is_a_failure_with_the_reason():
     )
     assert not r.ok
     assert "category not found" in r.error
+
+
+def test_accepted_but_nothing_changed_is_a_failure():
+    # ok:true with no created/updated/skipped — the import took the file and
+    # reported no change. Previously this counted as published.
+    r = _publish(
+        lambda req: httpx.Response(200, json={"ok": True, "data": {"total": 1, "created": 0, "updated": 0, "skipped": 0}}),
+        page_type=CATEGORY, operation="update",
+        fields={"slug": "comedy", "metatitle": "Комедии"},
+    )
+    assert not r.ok
+    assert "reported no change" in r.error
+
+
+def test_updated_counter_makes_the_row_successful():
+    r = _publish(
+        lambda req: httpx.Response(200, json={"ok": True, "data": {"total": 1, "created": 0, "updated": 1, "skipped": 0}}),
+        page_type=CATEGORY, operation="update",
+        fields={"slug": "comedy", "metatitle": "Комедии"},
+    )
+    assert r.ok and r.error is None
 
 
 def test_news_create_skip_means_already_exists():

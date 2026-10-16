@@ -13,6 +13,7 @@ from app.cms.custom_page_types import merged_custom_config
 from app.db.models import BulkPublishRun, Domain, PublishJob, User
 from app.db.session import get_db
 from app.schemas.publish import (
+    PublishDefaultsByCms,
     PublishDefaults,
     PublishJobDetail,
     PublishJobListResponse,
@@ -28,8 +29,9 @@ from app.schemas.domain import (
 from app.services import custom_cms_defaults, films_defaults
 from app.services.publish_rate_limit import (
     DomainRateLimits,
-    load_global_defaults,
-    update_global_defaults,
+    CMS_TYPES,
+    load_defaults,
+    update_defaults,
 )
 from app.tasks.publish_single import publish_one_single
 
@@ -40,22 +42,33 @@ router = APIRouter(
 )
 
 
-@router.get("/defaults", response_model=PublishDefaults)
+@router.get("/defaults", response_model=PublishDefaultsByCms)
 async def get_publish_defaults(
     db: AsyncSession = Depends(get_db),
-) -> PublishDefaults:
-    g = await load_global_defaults(db)
-    return PublishDefaults(**g.__dict__)
+) -> PublishDefaultsByCms:
+    """Publish rate limits per CMS type. WordPress REST, the in-house Custom
+    CMS and a Films CSV import tolerate very different pressure, so each type
+    carries its own set; a domain's own values still win over these."""
+    sets = {cms: PublishDefaults(**(await load_defaults(db, cms)).__dict__) for cms in CMS_TYPES}
+    return PublishDefaultsByCms(**sets)
 
 
-@router.put("/defaults", response_model=PublishDefaults)
+@router.put("/defaults/{cms_type}", response_model=PublishDefaults)
 async def set_publish_defaults(
+    cms_type: str,
     payload: PublishDefaults,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(require_role("admin")),
 ) -> PublishDefaults:
-    saved = await update_global_defaults(
+    """Admin-only: save one CMS type's defaults."""
+    if cms_type not in CMS_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"cms_type must be one of: {', '.join(CMS_TYPES)}.",
+        )
+    saved = await update_defaults(
         db,
+        cms_type,
         DomainRateLimits(**payload.model_dump()),
         updated_by_id=actor.id,
     )

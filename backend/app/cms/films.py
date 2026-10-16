@@ -31,6 +31,7 @@ from __future__ import annotations
 import base64
 import csv
 import io
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -98,6 +99,10 @@ CATEGORY_FIELDS: tuple[FilmField, ...] = (
     FilmField("metadescription", "Category Meta Description"),
     FilmField("bottom_description", "Category Bottom Description"),
 )
+# Author N / Comment N: a blank pair is how you say "no more comments", so it
+# is never reported as a forgotten cell.
+_IS_PAIR = re.compile(r"^(author|comment)_\d+$")
+
 _CATEGORY_IDENTIFIERS = ("id", "slug", "name")
 _CATEGORY_WRITABLE = ("description", "metatitle", "metadescription", "bottom_description")
 
@@ -144,7 +149,22 @@ def build_request(
     values = {
         k: str(v).strip() for k, v in fields.items() if v is not None and str(v).strip()
     }
+    # A mapped cell that is empty is simply not sent, so the site keeps its old
+    # value. That is intended ("empty never overwrites"), but silently looked
+    # like "the update didn't work": the row is green while one field stayed
+    # unchanged. Name those fields on the row instead.
+    header_by_key = {f.key: f.header for f in FIELDS_BY_PAGE_TYPE[page_type]}
+    empty = [
+        header_by_key[k]
+        for k in header_by_key
+        if k in fields and k not in values and not _IS_PAIR.match(k)
+    ]
     warnings: list[str] = []
+    if empty:
+        warnings.append(
+            "Empty cells, not sent (the site keeps its current value): "
+            + ", ".join(empty)
+        )
     form: dict[str, Any] = {"record_type": _RECORD_TYPE[page_type]}
     columns: list[tuple[str, str]] = []  # (header, value)
 
@@ -334,19 +354,32 @@ class FilmsClient(CmsClient):
 
         ok, body, error = _parse_response(resp)
         if ok:
+            # "ok: true" only means the file was accepted. A row counts as
+            # published when the site says it changed something; otherwise the
+            # run would show green for records that never moved — which is how
+            # a fleet-wide "some categories just didn't update" stayed
+            # invisible.
             data = (body or {}).get("data") or {}
             done = sum(int(data.get(k) or 0) for k in ("created", "updated"))
             skipped = int(data.get("skipped") or 0)
-            if skipped and not done:
-                reason = {
-                    NEWS: (
-                        "Skipped: the film already exists (Create only adds new ones)."
-                        if self.operation == "create"
-                        else "Skipped: film not found by Kinopoisk ID or exact title."
-                    ),
-                    CATEGORY: "Skipped: category not found by ID, slug or name.",
-                    COMMENT: "Skipped: film not found by URL or exact title.",
-                }[self.page_type]
+            if not done:
+                if skipped:
+                    reason = {
+                        NEWS: (
+                            "Skipped: the film already exists (Create only adds new ones)."
+                            if self.operation == "create"
+                            else "Skipped: film not found by Kinopoisk ID or exact title."
+                        ),
+                        CATEGORY: "Skipped: category not found by ID, slug or name.",
+                        COMMENT: "Skipped: film not found by URL or exact title.",
+                    }[self.page_type]
+                else:
+                    # No created, no updated, nothing skipped either: the import
+                    # accepted the file and reported no change at all.
+                    reason = (
+                        "The site accepted the request but reported no change "
+                        "(created 0, updated 0)."
+                    )
                 return fail(
                     f"{reason} Details: import/logs/import.log on the site.",
                     resp.status_code, body,

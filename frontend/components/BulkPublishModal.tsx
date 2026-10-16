@@ -1106,7 +1106,9 @@ export function BulkPublishModal({
     const payload: BulkPublishPayload = {
       table_id: table.id,
       mode,
-      language,
+      // Films sites have no language (their import API has no such field),
+      // so a run never carries one — the server drops it too.
+      language: cmsType === "films" ? null : language,
       row_filter: rowFilter,
       selection,
       cell_filter: cellFilter,

@@ -247,6 +247,15 @@ class PublishDefaults(BaseModel):
     respect_retry_after: bool
 
 
+class PublishDefaultsByCms(BaseModel):
+    """Publish defaults per CMS type. Each set is what a domain of that type
+    uses unless the domain itself overrides the value."""
+
+    wordpress: PublishDefaults
+    custom: PublishDefaults
+    films: PublishDefaults
+
+
 class PublishSingleRequest(BaseModel):
     domain_id: int
     fields: dict[str, Any] = Field(default_factory=dict)
