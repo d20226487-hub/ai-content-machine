@@ -1337,17 +1337,15 @@ export function BulkPublishModal({
               onClear={onClear}
               emptyMessage={mappingEmptyMessage}
             />
-            {/* The Films import API returns counts only — no post id/URL —
-                so there's nothing to write back. */}
-            {cmsTypeFilter !== "films" && (
-              <BackFill
-                postIdTarget={postIdTarget}
-                postUrlTarget={postUrlTarget}
-                onPostIdTargetChange={setPostIdTarget}
-                onPostUrlTargetChange={setPostUrlTarget}
-                columns={eligibleColumns}
-              />
-            )}
+            {/* All three CMS types report the touched record's id + link
+                (Films via urls[] in the import response). */}
+            <BackFill
+              postIdTarget={postIdTarget}
+              postUrlTarget={postUrlTarget}
+              onPostIdTargetChange={setPostIdTarget}
+              onPostUrlTargetChange={setPostUrlTarget}
+              columns={eligibleColumns}
+            />
           </div>
         )}
 

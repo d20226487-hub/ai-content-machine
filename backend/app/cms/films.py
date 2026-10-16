@@ -24,7 +24,12 @@ Field keys (what the bulk mapping panel offers) are the API's own
 "leave it alone", same as Custom CMS dropping empty keys, so an Update never
 blanks a field just because the table cell was empty.
 
-The API returns no post id / URL, so there's nothing to write back.
+The response lists the touched record under ``urls`` — ``id``, ``action``,
+``title``, ``url`` — which becomes the row's post id / link (and feeds the
+write-back columns). Its ``action`` per record type: films ``created`` /
+``updated``, categories ``updated``, comments ``comments`` (the url is then the
+film the comments were attached to). Sites that don't return ``urls`` yet fall
+back to the aggregate counters.
 """
 from __future__ import annotations
 
@@ -245,6 +250,25 @@ def _parse_response(
     return True, body, None
 
 
+# ``action`` values meaning the record was written. Comments report
+# "comments" (the url is the film they were attached to).
+_DONE_ACTIONS = {"created", "updated", "comments"}
+
+
+def _first_url_record(body: Any) -> dict[str, Any] | None:
+    """The touched record from the response, or None if the site didn't send
+    one. ``urls`` is accepted at the top level and inside ``data`` — and we
+    send one row per request, so the first entry is that row's record."""
+    if not isinstance(body, dict):
+        return None
+    for container in (body, body.get("data")):
+        if isinstance(container, dict) and isinstance(container.get("urls"), list):
+            first = next((u for u in container["urls"] if isinstance(u, dict)), None)
+            if first is not None:
+                return first
+    return None
+
+
 class FilmsClient(CmsClient):
     cms_type = "films"
 
@@ -359,9 +383,36 @@ class FilmsClient(CmsClient):
             # run would show green for records that never moved — which is how
             # a fleet-wide "some categories just didn't update" stayed
             # invisible.
+            record = _first_url_record(body)
+            action = str((record or {}).get("action") or "").strip().lower()
             data = (body or {}).get("data") or {}
             done = sum(int(data.get(k) or 0) for k in ("created", "updated"))
             skipped = int(data.get("skipped") or 0)
+            if record is not None and action in _DONE_ACTIONS:
+                # The site named the record it wrote — the most direct answer.
+                rec_id = record.get("id")
+                url = record.get("url")
+                if isinstance(url, str):
+                    url = url.strip() or None
+                    # Relative links would resolve against ACM's own host.
+                    if url and url.startswith("/") and not url.startswith("//"):
+                        url = f"{self.base_url}{url}"
+                else:
+                    url = None
+                return PublishResult(
+                    ok=True, status_code=resp.status_code, payload_sent=payload_sent,
+                    response_json=body,
+                    cms_post_id=str(rec_id) if rec_id not in (None, "") else None,
+                    cms_post_url=url,
+                    warnings=warnings,
+                )
+            if record is not None and action:
+                return fail(
+                    f"The site reported action {action!r} for this record (not "
+                    "created/updated). Details: import/logs/import.log on the site.",
+                    resp.status_code, body,
+                )
+            # No per-record answer: fall back to the aggregate counters.
             if not done:
                 if skipped:
                     reason = {

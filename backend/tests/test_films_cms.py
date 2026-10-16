@@ -310,3 +310,73 @@ def test_curl_preview_is_multipart_with_row_csv():
     assert "-F 'record_type=news'" in cp and "-F 'mode=import_new'" in cp
     assert "-F 'fields[]=title'" in cp and "-F 'fields[]=metatitle'" in cp
     assert "Basic <REDACTED>" in cp and "application/json" not in cp
+
+
+# ---- per-record answer: urls[] (id / action / title / url) ---------------------
+
+
+def _ok(urls, *, nested=False, counters=None):
+    body = {"ok": True, "data": dict(counters or {"total": 1, "created": 0, "updated": 0, "skipped": 0})}
+    if nested:
+        body["data"]["urls"] = urls
+    else:
+        body["urls"] = urls
+    return lambda req: httpx.Response(200, json=body)
+
+
+def test_updated_film_gets_its_id_and_link():
+    r = _publish(
+        _ok([{"id": 123, "action": "updated", "title": "Название", "url": "https://site/filmy/123-nazvanie.html"}]),
+        operation="update",
+    )
+    assert r.ok
+    assert r.cms_post_id == "123"
+    assert r.cms_post_url == "https://site/filmy/123-nazvanie.html"
+
+
+def test_urls_inside_data_are_read_too():
+    r = _publish(
+        _ok([{"id": 7, "action": "created", "url": "https://site/filmy/7-x.html"}], nested=True),
+    )
+    assert r.ok and r.cms_post_id == "7" and r.cms_post_url == "https://site/filmy/7-x.html"
+
+
+def test_category_update_link():
+    r = _publish(
+        _ok([{"id": 5, "action": "updated", "url": "https://site/filmy/"}]),
+        page_type=CATEGORY, operation="update",
+        fields={"slug": "filmy", "description": "Текст"},
+    )
+    assert r.ok and r.cms_post_url == "https://site/filmy/"
+
+
+def test_comments_action_is_success_and_links_the_film():
+    # Comments report action "comments"; the url is the film they hang on.
+    r = _publish(
+        _ok([{"id": 123, "action": "comments", "url": "https://site/filmy/123-nazvanie.html"}]),
+        page_type=COMMENT, operation="create",
+        fields={"film_url": "/nazvanie.html", "comment_1": "Отлично"},
+    )
+    assert r.ok and r.cms_post_url == "https://site/filmy/123-nazvanie.html"
+
+
+def test_relative_url_is_made_absolute_against_the_site():
+    r = _publish(_ok([{"id": 1, "action": "updated", "url": "/filmy/1-x.html"}]), operation="update")
+    assert r.cms_post_url == "https://films.example/filmy/1-x.html"
+
+
+def test_per_record_answer_wins_over_zero_counters():
+    # counters all 0 would otherwise read as "no change"
+    r = _publish(_ok([{"id": 1, "action": "updated", "url": "https://site/f/1.html"}]), operation="update")
+    assert r.ok
+
+
+def test_unexpected_action_fails_the_row():
+    r = _publish(_ok([{"id": 1, "action": "skipped", "url": ""}]), operation="update")
+    assert not r.ok and "'skipped'" in r.error
+
+
+def test_without_urls_the_counters_still_decide():
+    # Older sites: no urls[], success from the counters, no link.
+    r = _publish(_ok([], counters={"total": 1, "created": 0, "updated": 1, "skipped": 0}), operation="update")
+    assert r.ok and r.cms_post_url is None and r.cms_post_id is None
