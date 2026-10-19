@@ -18,9 +18,14 @@ Two auth modes, auto-picked based on which credentials are configured:
   1. Service-account JSON (enterprise) — `extra_config` carries
      ``service_account_json``, ``project_id``, ``location``. We mint a
      short-lived OAuth2 access token via google-auth and POST against the
-     regional ``{location}-aiplatform.googleapis.com`` endpoint scoped to
-     a project. This is the only path that gets non-Express quota, and the
-     only one that can reach Claude.
+     ``{location}-aiplatform.googleapis.com`` endpoint scoped to a project
+     (``location="global"`` → ``aiplatform.googleapis.com``). This is the
+     only path that gets non-Express quota, and the only one that can reach
+     Claude.
+
+     Claude can use its own ``claude_location``: a project isn't tied to a
+     region, every request names one, and Claude isn't offered everywhere
+     Gemini is (e.g. europe-west3 has Gemini only). Empty = ``location``.
 
   2. Vertex Express (API key) — ``api_key`` is set. We POST against the
      global ``aiplatform.googleapis.com`` endpoint with ``?key=...``. No
@@ -73,6 +78,14 @@ _SAMPLING_OK_PREFIXES = (
     "claude-haiku-4",
     "claude-3",
 )
+
+
+def vertex_host(location: str) -> str:
+    """API host for a Vertex location. The global endpoint has no region
+    prefix: ``global`` → ``aiplatform.googleapis.com`` (``global-aiplatform…``
+    doesn't exist); any region → ``{region}-aiplatform.googleapis.com``."""
+    loc = location.strip().lower()
+    return "aiplatform.googleapis.com" if loc == "global" else f"{loc}-aiplatform.googleapis.com"
 
 
 def _is_anthropic_model(model: str) -> bool:
@@ -283,7 +296,12 @@ class VertexAIProvider(BaseProvider):
                 "Settings → Google Vertex AI, or pick a Gemini model."
             )
         project_id = (self.extra_config.get("project_id") or "").strip()
-        location = (self.extra_config.get("location") or "").strip()
+        # Claude may live in a different location than Gemini (it isn't
+        # offered in every region); fall back to the shared location.
+        location = (
+            (self.extra_config.get("claude_location") or "").strip()
+            or (self.extra_config.get("location") or "").strip()
+        )
         if not project_id or not location:
             raise ProviderError(
                 "Vertex AI: project_id and location are required for Claude "
@@ -383,7 +401,7 @@ class VertexAIProvider(BaseProvider):
             )
         token = _mint_vertex_access_token(sa_json)
         url = (
-            f"https://{location}-aiplatform.googleapis.com/v1/"
+            f"https://{vertex_host(location)}/v1/"
             f"projects/{project_id}/locations/{location}/"
             f"publishers/google/models/{model}:generateContent"
         )

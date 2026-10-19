@@ -325,6 +325,8 @@ export const en = {
     "For production workloads, paste a Google Cloud service-account JSON and set the project + region. Leave these empty to use Vertex Express via the API key above (trial quotas only).",
   "settings.vertexProjectId": "GCP project ID",
   "settings.vertexLocation": "Location (region)",
+  "settings.vertexClaudeLocation": "Claude location (optional)",
+  "settings.vertexClaudeLocationHint": "Where Claude requests go. Claude isn't offered in every region (europe-west3 has Gemini only) — use global or a region that lists it. Empty = the location above. Gemini always uses the location above.",
   "settings.vertexSaJson": "Service-account JSON",
   "settings.vertexSaJsonPlaceholder": "Paste the full service-account JSON here…",
   "settings.vertexSaJsonStored": "Stored — paste a new JSON to replace it.",

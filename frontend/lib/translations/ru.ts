@@ -336,6 +336,8 @@ export const ru: Record<keyof typeof en, string> = {
     "Для продакшен-нагрузок вставьте JSON сервисного аккаунта Google Cloud и укажите project + регион. Оставьте поля пустыми, чтобы использовать Vertex Express через API-ключ выше (только пробные квоты).",
   "settings.vertexProjectId": "ID проекта GCP",
   "settings.vertexLocation": "Регион",
+  "settings.vertexClaudeLocation": "Регион для Claude (необязательно)",
+  "settings.vertexClaudeLocationHint": "Куда отправлять запросы к моделям Claude. Claude есть не во всех регионах (например, в europe-west3 только Gemini) — укажите global или регион, где он доступен. Пусто — используется регион выше. Gemini всегда идёт в регион выше.",
   "settings.vertexSaJson": "JSON сервисного аккаунта",
   "settings.vertexSaJsonPlaceholder": "Вставьте сюда полный JSON сервисного аккаунта…",
   "settings.vertexSaJsonStored": "Сохранён — вставьте новый JSON, чтобы заменить.",

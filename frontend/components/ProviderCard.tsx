@@ -27,6 +27,8 @@ interface FormState {
 interface VertexFormState {
   project_id: string;
   location: string;
+  /** Optional: where Claude calls go. Empty = same as `location`. */
+  claude_location: string;
   service_account_json: string; // textarea input; never round-trips from server
 }
 
@@ -61,6 +63,7 @@ export function ProviderCard({
   const [vertex, setVertex] = useState<VertexFormState>({
     project_id: provider.extra_config_public?.project_id ?? "",
     location: provider.extra_config_public?.location ?? "",
+    claude_location: provider.extra_config_public?.claude_location ?? "",
     service_account_json: "",
   });
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -110,6 +113,11 @@ export function ProviderCard({
         const pubLocation = provider.extra_config_public?.location ?? "";
         if (vertex.project_id !== pubProject) extraPatch.project_id = vertex.project_id.trim();
         if (vertex.location !== pubLocation) extraPatch.location = vertex.location.trim();
+        const pubClaudeLocation = provider.extra_config_public?.claude_location ?? "";
+        if (vertex.claude_location !== pubClaudeLocation) {
+          // "" clears it server-side → Claude falls back to `location`.
+          extraPatch.claude_location = vertex.claude_location.trim();
+        }
         if (vertex.service_account_json.trim()) {
           extraPatch.service_account_json = vertex.service_account_json.trim();
         }
@@ -124,6 +132,7 @@ export function ProviderCard({
         setVertex({
           project_id: next.extra_config_public?.project_id ?? "",
           location: next.extra_config_public?.location ?? "",
+          claude_location: next.extra_config_public?.claude_location ?? "",
           service_account_json: "",
         });
       }
@@ -142,7 +151,7 @@ export function ProviderCard({
     try {
       const next = await updateProvider(provider.code, { extra_config: {} });
       onUpdated(next);
-      setVertex({ project_id: "", location: "", service_account_json: "" });
+      setVertex({ project_id: "", location: "", claude_location: "", service_account_json: "" });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t("settings.clearKeyFailed"));
     } finally {
@@ -340,6 +349,20 @@ export function ProviderCard({
                 placeholder="us-central1"
                 className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-700 dark:bg-neutral-900"
               />
+            </label>
+            <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 sm:col-span-2">
+              {t("settings.vertexClaudeLocation")}
+              <input
+                type="text"
+                value={vertex.claude_location}
+                onChange={(e) => setVertex((v) => ({ ...v, claude_location: e.target.value }))}
+                placeholder={vertex.location || "global"}
+                data-testid="vertex-claude-location"
+                className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-700 dark:bg-neutral-900 sm:max-w-xs"
+              />
+              <span className="mt-1 block text-xs font-normal text-neutral-500 dark:text-neutral-400">
+                {t("settings.vertexClaudeLocationHint")}
+              </span>
             </label>
           </div>
           <label className="mt-3 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
