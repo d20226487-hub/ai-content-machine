@@ -36,7 +36,7 @@ CustomPageType = Literal[
     "ordinary", "match",
     # Films CMS record types (app/cms/films.py) — same column, since a run
     # targets exactly one kind of page whichever CMS it is.
-    "films_news", "films_category", "films_comment",
+    "films_news", "films_category", "films_homepage", "films_comment",
 ]
 
 

@@ -21,6 +21,7 @@ from app.api.publish import _build_curl_preview
 from app.cms.films import (
     CATEGORY,
     COMMENT,
+    HOMEPAGE,
     NEWS,
     FilmsClient,
     FilmsClientError,
@@ -380,3 +381,80 @@ def test_without_urls_the_counters_still_decide():
     # Older sites: no urls[], success from the counters, no link.
     r = _publish(_ok([], counters={"total": 1, "created": 0, "updated": 1, "skipped": 0}), operation="update")
     assert r.ok and r.cms_post_url is None and r.cms_post_id is None
+
+
+# ---- homepage (record_type=homepage) -------------------------------------------
+
+
+def test_homepage_request_shape():
+    form, text, warnings = build_request(
+        HOMEPAGE, "update",
+        {"metatitle": "Смотреть фильмы онлайн", "bottom_description": "<h1>Фильмы</h1><p>Текст</p>"},
+    )
+    assert form == {"record_type": "homepage", "fields[]": ["metatitle", "bottom_description"]}
+    assert _csv(text) == {
+        "Meta Title": "Смотреть фильмы онлайн",
+        "Bottom Description": "<h1>Фильмы</h1><p>Текст</p>",
+    }
+    assert warnings == []
+
+
+def test_homepage_is_update_only():
+    with pytest.raises(FilmsClientError, match="supports only: update"):
+        build_request(HOMEPAGE, "create", {"metatitle": "x"})
+
+
+def test_homepage_needs_something_to_write():
+    with pytest.raises(FilmsClientError, match="Nothing to update"):
+        build_request(HOMEPAGE, "update", {"metatitle": "  "})
+
+
+def test_homepage_plain_text_bottom_description_is_flagged_but_sent():
+    _, text, warnings = build_request(HOMEPAGE, "update", {"bottom_description": "Title"})
+    assert _csv(text) == {"Bottom Description": "Title"}  # unchanged
+    assert any("no HTML tags" in w for w in warnings)
+
+
+def test_homepage_success_links_to_the_site_root():
+    # The homepage API returns no url — the row links to the domain itself.
+    r = _publish(
+        lambda req: httpx.Response(200, json={"ok": True, "data": {"total": 1, "created": 0, "updated": 1, "skipped": 0}}),
+        page_type=HOMEPAGE, operation="update", fields={"metatitle": "x"},
+    )
+    assert r.ok and r.cms_post_url == "https://films.example/"
+
+
+def test_homepage_url_from_the_site_wins_if_sent():
+    r = _publish(
+        lambda req: httpx.Response(200, json={"ok": True, "urls": [{"id": 1, "action": "updated", "url": "https://films.example/home/"}]}),
+        page_type=HOMEPAGE, operation="update", fields={"metatitle": "x"},
+    )
+    assert r.ok and r.cms_post_url == "https://films.example/home/"
+
+
+def test_homepage_no_change_is_a_failure():
+    r = _publish(
+        lambda req: httpx.Response(200, json={"ok": True, "data": {"total": 1, "created": 0, "updated": 0, "skipped": 0}}),
+        page_type=HOMEPAGE, operation="update", fields={"metatitle": "x"},
+    )
+    assert not r.ok and "reported no change" in r.error
+
+
+def test_other_page_types_get_no_fallback_link():
+    r = _publish(
+        lambda req: httpx.Response(200, json={"ok": True, "data": {"total": 1, "created": 0, "updated": 1, "skipped": 0}}),
+        operation="update",
+    )
+    assert r.ok and r.cms_post_url is None
+
+
+def test_run_request_accepts_homepage_update_only():
+    BulkPublishRequest(
+        table_id=1, mode="single", domain_id=1, operation="update",
+        custom_page_type="films_homepage", row_filter="all",
+    )
+    with pytest.raises(ValidationError, match="supports only"):
+        BulkPublishRequest(
+            table_id=1, mode="single", domain_id=1, operation="create",
+            custom_page_type="films_homepage", row_filter="all",
+        )

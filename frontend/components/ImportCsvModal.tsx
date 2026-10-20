@@ -30,6 +30,7 @@ const SAMPLES: {
     | "csvImport.sampleCustomMulti"
     | "csvImport.sampleFilmsUpdate"
     | "csvImport.sampleFilmsCategories"
+    | "csvImport.sampleFilmsHomepage"
     | "csvImport.sampleFilmsComments";
 }[] = [
   { file: "wordpress-single-site.csv", labelKey: "csvImport.sampleWpSingle" },
@@ -38,6 +39,7 @@ const SAMPLES: {
   { file: "custom-cms-multi-site.csv", labelKey: "csvImport.sampleCustomMulti" },
   { file: "films-update.csv", labelKey: "csvImport.sampleFilmsUpdate" },
   { file: "films-categories.csv", labelKey: "csvImport.sampleFilmsCategories" },
+  { file: "films-homepage.csv", labelKey: "csvImport.sampleFilmsHomepage" },
   { file: "films-comments.csv", labelKey: "csvImport.sampleFilmsComments" },
 ];
 

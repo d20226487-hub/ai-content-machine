@@ -9,6 +9,9 @@ the CSV holds. Basic auth. The contract comes from the site developer's spec:
                    which columns get written.
   * ``category`` — update only (never creates). Matched by ID -> slug -> name.
                    ``fields[]`` limits which of the four texts get written.
+  * ``homepage`` — update only. The site's own homepage: no identifier,
+                   just the texts named in ``fields[]`` (meta title, meta
+                   description, bottom description — the latter as HTML).
   * ``comment``  — attaches Author N / Comment N pairs to an existing film,
                    found by its URL (``alt_name``) or exact title. No ``mode``,
                    no ``fields[]``.
@@ -51,15 +54,19 @@ ENDPOINT_PATH = "/import/api.php"
 NEWS = "films_news"
 CATEGORY = "films_category"
 COMMENT = "films_comment"
-PAGE_TYPES: tuple[str, ...] = (NEWS, CATEGORY, COMMENT)
+HOMEPAGE = "films_homepage"
+PAGE_TYPES: tuple[str, ...] = (NEWS, CATEGORY, HOMEPAGE, COMMENT)
 
-_RECORD_TYPE = {NEWS: "news", CATEGORY: "category", COMMENT: "comment"}
+_RECORD_TYPE = {
+    NEWS: "news", CATEGORY: "category", HOMEPAGE: "homepage", COMMENT: "comment",
+}
 
 # Operations each page type allows. Category is update-only and comments are
 # create-only by the API's design, not ours.
 SUPPORTED_OPERATIONS: dict[str, tuple[str, ...]] = {
     NEWS: ("create", "update", "upsert"),
     CATEGORY: ("update",),
+    HOMEPAGE: ("update",),
     COMMENT: ("create",),
 }
 
@@ -111,6 +118,14 @@ _IS_PAIR = re.compile(r"^(author|comment)_\d+$")
 _CATEGORY_IDENTIFIERS = ("id", "slug", "name")
 _CATEGORY_WRITABLE = ("description", "metatitle", "metadescription", "bottom_description")
 
+# The homepage needs no identifier — there is one per site. Only these three
+# texts can be written (the API's fields[] names).
+HOMEPAGE_FIELDS: tuple[FilmField, ...] = (
+    FilmField("metatitle", "Meta Title"),
+    FilmField("metadescription", "Meta Description"),
+    FilmField("bottom_description", "Bottom Description"),
+)
+
 COMMENT_FIELDS: tuple[FilmField, ...] = (
     FilmField("film_url", "Film URL"),
     FilmField("film_name", "Film Name"),
@@ -124,8 +139,12 @@ COMMENT_FIELDS: tuple[FilmField, ...] = (
 FIELDS_BY_PAGE_TYPE: dict[str, tuple[FilmField, ...]] = {
     NEWS: NEWS_FIELDS,
     CATEGORY: CATEGORY_FIELDS,
+    HOMEPAGE: HOMEPAGE_FIELDS,
     COMMENT: COMMENT_FIELDS,
 }
+
+# Rough "is this HTML?" check for fields the site renders as markup.
+_HAS_TAG = re.compile(r"<[a-zA-Z][^>]*>")
 
 
 def is_films_page_type(value: str | None) -> bool:
@@ -199,6 +218,28 @@ def build_request(
         # Always explicit — without fields[] the API writes EVERY column, which
         # would blank the texts this row didn't map.
         form["fields[]"] = writable
+
+    elif page_type == HOMEPAGE:
+        writable = [f.key for f in HOMEPAGE_FIELDS if f.key in values]
+        if not writable:
+            raise FilmsClientError(
+                "Nothing to update: map at least one of meta title, "
+                "meta description, bottom description."
+            )
+        for f in HOMEPAGE_FIELDS:
+            if f.key in values:
+                columns.append((f.header, values[f.key]))
+        # Explicit, same reason as categories: without fields[] the API would
+        # write every column, blanking the texts this row didn't map.
+        form["fields[]"] = writable
+        # The site inserts Bottom Description as-is, so plain text loses its
+        # markup ("<h1>Title</h1>", not "Title"). Sent unchanged — just said.
+        bottom = values.get("bottom_description")
+        if bottom and not _HAS_TAG.search(bottom):
+            warnings.append(
+                "Bottom Description has no HTML tags — the site expects HTML "
+                "(e.g. <h1>Title</h1><p>…</p>), not plain text."
+            )
 
     else:  # COMMENT
         # Sent exactly as written. The API matches the film's alt_name
@@ -283,6 +324,11 @@ class FilmsClient(CmsClient):
         super().__init__(base_url=base_url, credentials=credentials)
         self.page_type = page_type
         self.operation = operation
+
+    def _default_url(self) -> str | None:
+        """Link for a row when the site doesn't send one. The homepage API
+        returns no url, but the page is simply the site's root."""
+        return f"{self.base_url}/" if self.page_type == HOMEPAGE else None
 
     @property
     def endpoint(self) -> str:
@@ -403,7 +449,7 @@ class FilmsClient(CmsClient):
                     ok=True, status_code=resp.status_code, payload_sent=payload_sent,
                     response_json=body,
                     cms_post_id=str(rec_id) if rec_id not in (None, "") else None,
-                    cms_post_url=url,
+                    cms_post_url=url or self._default_url(),
                     warnings=warnings,
                 )
             if record is not None and action:
@@ -423,6 +469,7 @@ class FilmsClient(CmsClient):
                         ),
                         CATEGORY: "Skipped: category not found by ID, slug or name.",
                         COMMENT: "Skipped: film not found by URL or exact title.",
+                        HOMEPAGE: "Skipped: the site did not update its homepage.",
                     }[self.page_type]
                 else:
                     # No created, no updated, nothing skipped either: the import
@@ -437,7 +484,7 @@ class FilmsClient(CmsClient):
                 )
             return PublishResult(
                 ok=True, status_code=resp.status_code, payload_sent=payload_sent,
-                response_json=body, cms_post_id=None, cms_post_url=None,
+                response_json=body, cms_post_id=None, cms_post_url=self._default_url(),
                 warnings=warnings,
             )
         return fail(error or "Publish failed.", resp.status_code, body)

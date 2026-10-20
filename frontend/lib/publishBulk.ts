@@ -24,14 +24,19 @@ export type CustomPageType = "ordinary" | "match" | FilmsPageType;
 /** Films CMS record types — what a Films run publishes. Stored in the same
  *  ``custom_page_type`` field as Custom CMS page types (a run targets one kind
  *  of page whichever CMS it is). Mirrors app/cms/films.py. */
-export type FilmsPageType = "films_news" | "films_category" | "films_comment";
+export type FilmsPageType =
+  | "films_news"
+  | "films_category"
+  | "films_homepage"
+  | "films_comment";
 export const FILMS_PAGE_TYPES: readonly FilmsPageType[] = [
   "films_news",
   "films_category",
+  "films_homepage",
   "films_comment",
 ];
 export function isFilmsPageType(v: string | null | undefined): v is FilmsPageType {
-  return v === "films_news" || v === "films_category" || v === "films_comment";
+  return (FILMS_PAGE_TYPES as readonly string[]).includes(v ?? "");
 }
 
 /** What each Films record type offers in the UI. Categories are update-only
@@ -41,6 +46,8 @@ export function isFilmsPageType(v: string | null | undefined): v is FilmsPageTyp
 export const FILMS_OPERATIONS: Record<FilmsPageType, readonly PublishOperation[]> = {
   films_news: ["update"],
   films_category: ["update"],
+  // The homepage can only be updated (there is exactly one per site).
+  films_homepage: ["update"],
   films_comment: ["create"],
 };
 
@@ -73,6 +80,12 @@ export const FILMS_FIELDS: Record<
     { key: "metatitle", label: "Category Meta Title" },
     { key: "metadescription", label: "Category Meta Description" },
     { key: "bottom_description", label: "Category Bottom Description" },
+  ],
+  // No identifier: there is one homepage per site.
+  films_homepage: [
+    { key: "metatitle", label: "Meta Title" },
+    { key: "metadescription", label: "Meta Description" },
+    { key: "bottom_description", label: "Bottom Description" },
   ],
   films_comment: [
     { key: "film_url", label: "Film URL" },

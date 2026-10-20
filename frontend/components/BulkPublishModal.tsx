@@ -1027,6 +1027,13 @@ export function BulkPublishModal({
           return;
         }
       }
+      if (
+        customPageType === "films_homepage" &&
+        !["metatitle", "metadescription", "bottom_description"].some(mapped)
+      ) {
+        setError(t("bulkPub.filmsHomepageNeedField"));
+        return;
+      }
       if (customPageType === "films_comment") {
         if (!mapped("film_url") && !mapped("film_name")) {
           setError(t("bulkPub.filmsCommentNeedFilm"));

@@ -39,6 +39,7 @@ export function FilmsPanel({
   const pageLabel: Record<FilmsPageType, string> = {
     films_news: t("bulkPub.filmsNews"),
     films_category: t("bulkPub.filmsCategory"),
+    films_homepage: t("bulkPub.filmsHomepage"),
     films_comment: t("bulkPub.filmsComment"),
   };
   const opLabel: Record<PublishOperation, string> = {
@@ -54,6 +55,7 @@ export function FilmsPanel({
         ? t("bulkPub.filmsNewsUpdateHint")
         : t("bulkPub.filmsNewsUpsertHint"),
     films_category: t("bulkPub.filmsCategoryHint"),
+    films_homepage: t("bulkPub.filmsHomepageHint"),
     films_comment: t("bulkPub.filmsCommentHint"),
   };
 
